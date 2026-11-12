@@ -1,0 +1,44 @@
+# --- Credenciales y secretos (NUNCA subir) ---
+.env
+.env.*
+!.env.example
+.netrc
+_netrc
+*.pem
+*.key
+
+# --- Datos NISAR y resultados (pesados, no van a git) ---
+data/**
+!data/*/
+!data/**/.gitkeep
+*.h5
+*.tif
+*.tiff
+*.nc
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Django ---
+backend/staticfiles/
+backend/media/
+*.log
+
+# --- Node / frontend ---
+node_modules/
+web/dist/
+web/build/
+
+# --- Editores y sistema ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Salidas de herramientas ---
+graphify-out/

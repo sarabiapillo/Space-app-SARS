@@ -1,0 +1,30 @@
+# Configuración del caso de estudio (ver AGENTS.md §4).
+# Los valores en null están PENDIENTES: se llenan solo después de verificarlos
+# en el catálogo de ASF (paso 3 del plan). No inventar valores.
+
+roi:
+  name: chiapas
+  crs: EPSG:4326
+  wkt: "POLYGON((-93.3919 16.6539,-92.8757 16.6539,-92.8757 16.8964,-93.3919 16.8964,-93.3919 16.6539))"
+
+phenomenon: null          # inundación | humedales | vegetación | deformación (por decidir)
+
+search:
+  platform: NISAR
+  product: GCOV           # preferido para retrodispersión (AGENTS.md §5)
+  frequency: A            # banda L
+  start: null             # YYYY-MM-DD
+  end: null               # YYYY-MM-DD
+
+# Criterios de comparabilidad: deben coincidir en ambas escenas.
+comparability:
+  track: null
+  frame: null
+  direction: null         # ASCENDING | DESCENDING
+  polarization: null      # leer de metadatos; no asumir
+  crid: null
+  maturity: null          # BETA | PROVISIONAL (no mezclar)
+
+paths:
+  raw: data/raw
+  processed: data/processed

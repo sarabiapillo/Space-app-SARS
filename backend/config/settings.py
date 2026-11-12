@@ -13,20 +13,30 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import sys, os
 
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Variables de entorno desde terrapulse/.env (no se sube a git; ver .env.example).
+load_dotenv(BASE_DIR.parent / ".env")
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+
+def env(name, default=None):
+    value = os.environ.get(name, default)
+    if value is None:
+        raise ImproperlyConfigured(f"Falta la variable de entorno {name} (ver .env.example)")
+    return value
+
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-x^upo!o(ga__r&)9h6cf)r610ml*z%fkt_y&$bg7=hql%d+s*^'
+SECRET_KEY = env("DJANGO_SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [h.strip() for h in env("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
 
 # Application definition
@@ -81,16 +91,18 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": "terrapulse",
-        "USER": "terrapulse",
-        "PASSWORD": "terrapulse",
-        "HOST": "localhost",
-        "PORT": "5432",
+        "NAME": env("POSTGRES_DB"),
+        "USER": env("POSTGRES_USER"),
+        "PASSWORD": env("POSTGRES_PASSWORD"),
+        "HOST": env("POSTGRES_HOST", "localhost"),
+        "PORT": env("POSTGRES_PORT", "5432"),
     }
 }
 
-GDAL_LIBRARY_PATH = os.path.join(sys.prefix, "Library", "bin", "gdal.dll")
-GEOS_LIBRARY_PATH = os.path.join(sys.prefix, "Library", "bin", "geos_c.dll")
+# En Windows (conda) GeoDjango no encuentra GDAL/GEOS solo; en Linux/macOS sí.
+if os.name == "nt":
+    GDAL_LIBRARY_PATH = os.path.join(sys.prefix, "Library", "bin", "gdal.dll")
+    GEOS_LIBRARY_PATH = os.path.join(sys.prefix, "Library", "bin", "geos_c.dll")
 
 
 # Password validation

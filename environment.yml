@@ -1,0 +1,27 @@
+# Entorno de TerraPulse AI.
+# Crear:      conda env create -f environment.yml
+# Actualizar: conda env update -n nisar -f environment.yml
+# Nota: AGENTS.md pide GDAL >= 3.13 (driver NISAR); el entorno actual tiene 3.12.3.
+name: nisar
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - gdal
+  - rasterio
+  - h5py
+  - xarray
+  - rioxarray
+  - geopandas
+  - python-dotenv
+  - pip
+  - pip:
+      - django==5.2.19
+      - djangorestframework==3.18.3
+      - psycopg[binary]==3.3.8
+      - asf_search==14.1.0
+      - earthaccess==0.17.0
+      - celery==5.7.0
+      - redis==8.1.0
+      - pyyaml==6.0.3
+      - pytest==9.2.0
