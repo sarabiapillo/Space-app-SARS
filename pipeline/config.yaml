@@ -2,6 +2,9 @@
 # Los valores en null están PENDIENTES: se llenan solo después de verificarlos
 # en el catálogo de ASF (paso 3 del plan). No inventar valores.
 
+# Fuente de datos (pipeline/sources/). Hoy: asf. En el hackatón se agregará la del evento.
+source: asf
+
 roi:
   name: chiapas
   crs: EPSG:4326
@@ -26,5 +29,6 @@ comparability:
   maturity: null          # BETA | PROVISIONAL (no mezclar)
 
 paths:
+  catalog: data/catalog
   raw: data/raw
   processed: data/processed

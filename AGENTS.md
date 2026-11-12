@@ -23,10 +23,11 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 
 - Entorno conda `nisar` creado (Python 3.11, GDAL, rasterio, h5py, geopandas, xarray, rioxarray, asf_search, earthaccess, Django, DRF, celery, redis).
 - Proyecto Django creado en `backend/` (`config`, apps `scenes` y `analyses`).
-- PostGIS definido en `docker-compose.yml` (por verificar que corra).
-- Exploración de datos en ASF Vertex en curso. Aún **no** hay un par de escenas comparables confirmado ni un mapa de cambio real.
+- PostGIS en Docker funcionando; migraciones base aplicadas. Configuración sensible en `.env` (ver `.env.example`).
+- `pipeline/sources/` (fuente intercambiable, hoy ASF), `pipeline/compat.py` y `pipeline/catalog.py` implementados y con pruebas.
+- **Catálogo consultado (2026-11-12 UTC):** hay pilas GCOV comparables *a nivel de metadatos* sobre la ROI (ver §4). Aún **no** se ha descargado ningún recorte ni hay mapa de cambio.
 
-**Lo más importante que falta:** confirmar que existen al menos dos escenas NISAR comparables sobre la ROI. Todo lo demás depende de eso.
+**Lo más importante que falta:** elegir un par de la pila candidata, verificar en el archivo que cubre la ROI y que coincide en resolución, y descargar el recorte (pasos 2 y 4 del plan; requiere `.netrc`).
 
 ## 4. Caso de estudio
 
@@ -38,21 +39,32 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 - **Fenómeno:** por decidir entre inundación, humedales, vegetación o deformación, según disponibilidad de datos y posibilidad de validación independiente. Se elige el que permita un resultado medible, no el más espectacular.
 - **Criterios de selección:** disponibilidad NISAR, calidad y consistencia, relevancia local, validación independiente posible y claridad de comunicación.
 
-### Escenas vistas hasta ahora en ASF Vertex (para orientar, no son definitivas)
+### Pilas GCOV sobre la ROI (salida de `python -m pipeline.catalog`, consulta del 2026-11-12 UTC)
 
-| Producto | Trayectoria | Marco | Dirección | Fecha | Nota |
+39 productos GCOV en total. Pilas con al menos dos fechas y mismos producto, trayectoria, marco, dirección, polarización, CRID y madurez:
+
+| Trayectoria / Marco | Dirección | Pol. (Freq A) | CRID | Madurez | Fechas |
 |---|---|---|---|---|---|
-| GSLC (L-band, HH+HV) | 62 | 10 | ASCENDING | 2026-10-28 | CRID P05036, ~22.5 GB, complejo (CFloat32) |
-| GCOV (L-band, HH+HV) | 62 | — | — | 2026-10-28 | Existe; verificar tamaño y marco |
-| GCOV (L-band, HH+HV) | 55 | 80 | DESCENDING | 2026-10-16 y 2026-10-28 | Posible par comparable; verificar CRID de ambas |
-| GUNW | — | — | — | 2026-10-04 | Interferograma, solo si el caso fuera deformación |
+| 55 / 80 | DESCENDING | HH+HV | P05023 | PROVISIONAL | 10 fechas, 2026-06-18 → 2026-10-16, cada 12 días (falta 2026-08-05) |
+| 62 / 10 | ASCENDING | HH+HV | P05023 | PROVISIONAL | 10 fechas, 2026-06-18 → 2026-10-16, mismas fechas que T55 |
+| 156 / 80 | DESCENDING | HH+HV | P05023 | PROVISIONAL | 8 fechas, 2026-06-25 → 2026-10-11 (2026-09-05 tiene dos productos: contador 001 y 002) |
+| 55 / 80 | DESCENDING | HH+HV | X05009 / X05010 | BETA | 2025-11 → 2026-01 (dos pilas separadas por CRID) |
 
-Un agente debe **verificar estos datos en el catálogo** antes de usarlos. Pueden estar incompletos o cambiar.
+Hallazgos que cambian lo que se creía antes:
+
+- **El CRID cambió a P05036 (madurez VALIDATED en el catálogo) a partir del 2026-10-23.** Por eso el par T55 2026-10-16 / 2026-10-28 que se había anotado **no es comparable** (P05023 vs P05036). Por ahora cada pila P05036 tiene una sola fecha.
+- 2026-07-24 T55 tiene un segundo producto con órbita FOE y sin madurez en el catálogo. Usar el MOE.
+- 2025-10-21 T55 es de cobertura parcial y solo HV.
+- La resolución y la cobertura real de la ROI **no** vienen en el catálogo: verificarlas en el `.h5` antes de analizar.
+
+Visto en Vertex sin verificar con `catalog.py`: GSLC T62/F10 2026-10-28 (P05036, ~22.5 GB) y GUNW 2026-10-04 (solo útil si el caso fuera deformación).
 
 ## 5. Reglas de datos NISAR
 
 - Fuente central: productos públicos NISAR vía ASF (https://search.asf.alaska.edu/) y NASA Earthdata. Documentación: https://nisar-docs.asf.alaska.edu/
-- **Preferir GCOV** para retrodispersión (σ⁰/γ⁰) y mapas de cambio. GSLC es complejo y requiere calcular `10*log10(|z|²)`. GUNW solo para deformación (desplazamiento en línea de vista, no vertical).
+- **La fuente cambiará en el hackatón:** los organizadores darán sus propios recursos. Todo acceso a datos pasa por `pipeline/sources/` (interfaz `DataSource`, que devuelve `SceneMeta`). El resto del pipeline no importa `asf_search` ni conoce la fuente. Para la fuente del evento se agrega `sources/event.py` y se cambia `source:` en `config.yaml`.
+- **Preferir GCOV** para retrodispersión (σ⁰/γ⁰) y mapas de cambio. GSLC es complejo y requiere calcular `10*log10(|z|²)`. GUNW solo para deformación (desplazamiento en línea de vista, no vertical). **SME2** (humedad del suelo a escala de parcela) es candidato si el caso fuera humedales o inundación.
+- **Madurez:** leerla del catálogo (filtro `dataMaturity`), no deducirla de la letra del CRID. Si no se conoce, la escena no es comparable.
 - **No procesar datos crudos (L0, RRSD).**
 - **Comparabilidad.** Dos escenas solo se comparan si coinciden en: producto, trayectoria, marco, dirección de vuelo, polarización, resolución, versión de procesamiento (CRID) y nivel de madurez. **No mezclar BETA con PROVISIONAL.**
 - **No asumir polarizaciones.** Leer de los metadatos y del nombre del producto qué polarizaciones tiene cada escena.
@@ -74,6 +86,8 @@ Flujo: consulta → adquisición → inspección → preparación → comparabil
 
 ## 7. Asistente de IA dentro de la app (reglas estrictas)
 
+> **Fuera de alcance por ahora** (decisión del equipo, 2026-11-11). No implementarlo ni dejarle código preparado. Las reglas se conservan por si se retoma después.
+
 El LLM **no** mide, **no** clasifica imágenes por intuición y **no** inventa causas.
 
 1. El usuario hace una pregunta sobre una región o resultado.
@@ -85,6 +99,8 @@ El LLM **no** mide, **no** clasifica imágenes por intuición y **no** inventa c
 Si no hay datos suficientes, el sistema responde que no puede concluir. Cada afirmación cuantitativa debe rastrearse a un resultado reproducible. Esta parte se implementa **al final**.
 
 ## 8. Stack y estructura
+
+> **Decisión:** la propuesta (§8 del PDF) sugería FastAPI. Se usa **Django + GeoDjango + DRF** porque da ORM espacial con PostGIS, migraciones y panel de administración sin código extra. La arquitectura lógica (catálogo, procesamiento, servicio de IA, PostGIS) es la misma.
 
 **Stack:** Python 3.11, Django + GeoDjango, Django REST Framework, PostgreSQL + PostGIS (Docker), Celery + Redis, GDAL (≥ 3.13 para el driver NISAR), rasterio, h5py, xarray, geopandas, React + TypeScript + MapLibre GL, TiTiler para teselas, Docker Compose. Desarrollo en Windows con conda (Miniforge); despliegue previsto en AWS EC2 con Docker.
 
@@ -98,7 +114,9 @@ terrapulse/
 │   ├── raw/                    # recortes descargados
 │   └── processed/              # GeoTIFF/COG de dB y cambio
 ├── pipeline/                   # Python puro, independiente de Django
-│   ├── catalog.py              # consulta con asf_search
+│   ├── sources/                # fuentes intercambiables: base.py (contrato), asf.py; luego event.py
+│   ├── catalog.py              # consulta la fuente, agrupa pilas, guarda JSON en data/catalog/
+│   ├── tests/                  # pytest (pytest.ini en la raíz)
 │   ├── download.py             # recorte GDAL a la ROI
 │   ├── preprocess.py           # complejo -> dB, máscaras
 │   ├── compat.py               # control de comparabilidad
@@ -114,6 +132,8 @@ terrapulse/
 ```
 
 **Regla de arquitectura:** `pipeline/` no depende de Django. Django solo lo llama (idealmente desde tareas Celery). Así el procesamiento SAR se prueba desde la terminal sin levantar el servidor.
+
+Desde la raíz del repo: `python -m pipeline.catalog` (consulta del catálogo) y `pytest` (pruebas).
 
 ### Modelos base
 
@@ -155,7 +175,7 @@ El fragmento completo (con todas las opciones de rendimiento) se genera desde el
 6. `validate.py` con una fuente auxiliar pertinente.
 7. Cargar escenas y resultado en Django; endpoints DRF (`/api/scenes`, `/api/changes`).
 8. Frontend (MapLibre: ROI, deslizador antes/después, capa de diferencias, panel de métricas).
-9. Asistente IA restringido a evidencia.
+9. ~~Asistente IA restringido a evidencia.~~ Fuera de alcance por ahora (ver §7).
 10. Documentación, pruebas y publicación del repositorio.
 
 **Alcance mínimo viable:** región con datos NISAR; al menos dos observaciones comparables; metadatos y visualización de cada una; una métrica de cambio calculada y representada; explicación de qué significa y qué no; contraste con al menos una fuente auxiliar; exportación de una figura o reporte reproducible.

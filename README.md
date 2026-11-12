@@ -8,6 +8,8 @@ Proyecto para NASA Space Apps 2026 (*Be an Earth System Trend Detective*). Caso 
 
 > **Estado:** configuración inicial. Todavía no hay resultados ni un par de escenas comparables confirmado.
 
+Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md).
+
 Antes de contribuir, lee [AGENTS.md](AGENTS.md). Ahí están las reglas científicas y de trabajo del proyecto, que aplican a personas y a agentes de IA por igual.
 
 ---
@@ -143,6 +145,8 @@ Con `nisar` activado, desde la raíz del proyecto:
 python -c "from osgeo import gdal; import rasterio, h5py, xarray, rioxarray, geopandas, asf_search, earthaccess, django, rest_framework; print('OK - GDAL', gdal.__version__)"
 gdalinfo --version
 docker compose ps
+pytest                      # pruebas del pipeline
+python -m pipeline.catalog  # consulta el catálogo NISAR sobre la ROI (no requiere .netrc)
 ```
 
 Checklist:

@@ -1,0 +1,89 @@
+Listado de rutas de carpetas para el volumen OS
+El número de serie del volumen es 885D-70B3
+C:.
+|   .env
+|   .env.example
+|   .gitignore
+|   AGENTS.md
+|   docker-compose.yml
+|   environment.yml
+|   estructura.txt
+|   README.md
+|   
++---.vscode
+|       settings.json
+|       
++---backend
+|   |   manage.py
+|   |   
+|   +---analyses
+|   |   |   admin.py
+|   |   |   apps.py
+|   |   |   models.py
+|   |   |   tests.py
+|   |   |   views.py
+|   |   |   __init__.py
+|   |   |   
+|   |   +---migrations
+|   |   |   |   __init__.py
+|   |   |   |   
+|   |   |   \---__pycache__
+|   |   |           __init__.cpython-311.pyc
+|   |   |           
+|   |   \---__pycache__
+|   |           admin.cpython-311.pyc
+|   |           apps.cpython-311.pyc
+|   |           models.cpython-311.pyc
+|   |           __init__.cpython-311.pyc
+|   |           
+|   +---config
+|   |   |   asgi.py
+|   |   |   settings.py
+|   |   |   urls.py
+|   |   |   wsgi.py
+|   |   |   __init__.py
+|   |   |   
+|   |   \---__pycache__
+|   |           settings.cpython-311.pyc
+|   |           urls.cpython-311.pyc
+|   |           __init__.cpython-311.pyc
+|   |           
+|   \---scenes
+|       |   admin.py
+|       |   apps.py
+|       |   models.py
+|       |   tests.py
+|       |   views.py
+|       |   __init__.py
+|       |   
+|       +---migrations
+|       |   |   __init__.py
+|       |   |   
+|       |   \---__pycache__
+|       |           __init__.cpython-311.pyc
+|       |           
+|       \---__pycache__
+|               admin.cpython-311.pyc
+|               apps.cpython-311.pyc
+|               models.cpython-311.pyc
+|               __init__.cpython-311.pyc
+|               
++---data
+|   +---processed
+|   |       .gitkeep
+|   |       
+|   \---raw
+|           .gitkeep
+|           
++---docs
+|       comparacion.md
+|       metodologia.md
+|       
++---pipeline
+|   |   config.yaml
+|   |   __init__.py
+|   |   
+|   \---tests
+|           __init__.py
+|           
+\---web
