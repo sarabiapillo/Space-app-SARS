@@ -69,3 +69,11 @@ class DataSource(ABC):
     @abstractmethod
     def fetch_subset(self, scene: SceneMeta, roi_wkt: str, layer: str, out_dir: Path) -> Path:
         """Recorta ``layer`` (p. ej. HHHH) de la escena a la ROI y devuelve la ruta del GeoTIFF."""
+
+    def fetch_subsets(
+        self, scene: SceneMeta, roi_wkt: str, layers, out_dir: Path, local_h5: Path | None = None
+    ) -> list[Path]:
+        """Varias capas. Las fuentes pueden sobrescribirlo para abrir el archivo una sola vez."""
+        if local_h5 is not None:
+            raise NotImplementedError(f"La fuente {self.name!r} no admite archivos locales.")
+        return [self.fetch_subset(scene, roi_wkt, layer, out_dir) for layer in layers]
