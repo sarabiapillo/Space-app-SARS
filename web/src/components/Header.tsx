@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   Camera,
+  CloudRain,
   Columns,
   Download,
   Layers,
@@ -76,6 +77,7 @@ export function Header({
   activeTool,
   solar,
   onSolarChange,
+  activeDockTab,
   onDockTabChange,
   floatingToolsOpen,
   onToggleFloatingTools,
@@ -363,6 +365,18 @@ export function Header({
             >
               <Sun size={14} />
               <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : 'Simulador Solar'}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`ws-ribbon__btn ws-ribbon__btn--rain ${activeDockTab === 'rain-dg2' ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange(activeDockTab === 'rain-dg2' ? 'map' : 'rain-dg2')
+              }}
+              title="Abrir módulo de simulación hidráulica de lluvia e inundación DG2 (LISFLOOD-FP 8.0)"
+            >
+              <CloudRain size={14} />
+              <span>Simulador Inundación (DG2)</span>
             </button>
 
           </div>

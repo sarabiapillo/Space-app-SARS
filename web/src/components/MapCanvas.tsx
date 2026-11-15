@@ -2788,6 +2788,11 @@ export function MapCanvas({
             escena={escena}
             selectedSectorId={dg2SectorId}
             onSelectSector={setDg2SectorId}
+            onFlyToSector={handleFlyToZone}
+            onClose={() => {
+              const mapTab = dockWindows.find((w) => w.kind === 'map')
+              if (mapTab) onActivateDockWindow(mapTab.id)
+            }}
           />
         )}
 

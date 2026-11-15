@@ -471,3 +471,87 @@ export async function runSolarSimulation(
   return res.json()
 }
 
+export interface FloodRainfallInput {
+  amount?: number
+  unit?: 'mm'
+  intensity?: number
+  intensity_unit?: 'mm/h' | 'mm/min' | 'mm/s'
+  duration: number
+  duration_unit: 's' | 'min' | 'h'
+}
+
+export interface FloodPrepareRequest {
+  rainfall: FloodRainfallInput
+  roi: {
+    type: 'Polygon'
+    coordinates: number[][][]
+  }
+  rainfall_profile?: {
+    interval_count: number
+    seed: number
+    distribution: 'uniform_balanced'
+  }
+}
+
+export interface FloodProfileSegment {
+  start_s: number
+  end_s: number
+  intensity_m_s: number
+}
+
+export interface FloodPrepareResponse {
+  rainfall: {
+    mode: string
+    input: FloodRainfallInput
+    amount_m: number
+    duration_s: number
+    mean_intensity_m_s: number
+  }
+  roi: {
+    type: 'Polygon'
+    coordinates: number[][][]
+  }
+  can_simulate: boolean
+  layers: unknown[]
+  dem: {
+    status: string
+    provider_available: boolean
+  }
+  blockers: string[]
+  rainfall_profile?: {
+    segments: FloodProfileSegment[]
+    distribution: {
+      name: string
+      interval_count: number
+      seed: number
+    }
+    synthetic: boolean
+    hydraulic_ready: boolean
+  }
+}
+
+export async function prepareFloodScenario(
+  req: FloodPrepareRequest
+): Promise<FloodPrepareResponse> {
+  const res = await fetch('/api/flood-scenarios/prepare/', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ errors: { request: ['Error al procesar la solicitud'] } }))
+    const msg =
+      err.errors?.rainfall?.[0] ||
+      err.errors?.roi?.[0] ||
+      err.errors?.rainfall_profile?.[0] ||
+      err.errors?.request?.[0] ||
+      `Error HTTP ${res.status}`
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+
