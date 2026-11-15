@@ -54,8 +54,15 @@ def test_netcdf_native_layout_roi_uniform_interval_depth_and_dry_tail(tmp_path, 
     assert metadata["profile_sha256"] == expected_profile_hash
     assert metadata["dem"]["sha256"] == hashlib.sha256(dem.read_bytes()).hexdigest()
     with netcdf_file(destination, "r", mmap=False) as nc:
-        assert set(nc.dimensions) == {"time", "y", "x"}
+        assert set(nc.dimensions) == {"native_header_anchor", "time", "y", "x"}
+        assert nc.dimensions["native_header_anchor"] == 1
         assert set(nc.variables) == {"time", "y", "x", "rainfall_depth"}
+        # file_tool.cpp usa IDs de variable como IDs de dimensión: exigir
+        # correspondencia en el orden físico de la cabecera NetCDF.
+        dimension_ids = list(nc.dimensions)
+        variable_ids = list(nc.variables)
+        assert dimension_ids.index("native_header_anchor") == variable_ids.index("rainfall_depth")
+        assert all(dimension_ids.index(axis) == variable_ids.index(axis) for axis in ("time", "x", "y"))
         rain = nc.variables["rainfall_depth"]
         assert rain.units.decode() == "mm"
         assert nc.variables["time"].units.decode() == "hours"
