@@ -1,0 +1,146 @@
+% TerraPulse AI — Ecuaciones del radar usadas o mencionadas en el proyecto
+% Compilar con: pdflatex ecuaciones_radar.tex  (o latexmk -pdf)
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+\setlength{\parskip}{0.3em}
+
+\title{TerraPulse AI\\[2pt]\large Ecuaciones del radar: medición, cambio e interpretación}
+\author{Documentación técnica del proyecto}
+\date{14 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+El radar de apertura sintética (SAR) de NISAR no usa ecuaciones de fluidos. Su física es
+electromagnética (ecuaciones de Maxwell, propagación y dispersión de microondas). Este documento
+reúne las ecuaciones que intervienen en el flujo de TerraPulse AI: la ecuación del radar, la
+normalización de la retrodispersión, la conversión a decibeles y el cambio entre fechas. También
+incluye los modelos de dispersión que sirven para \emph{interpretar} un cambio y la relación
+interferométrica que solo aplicaría si el caso de estudio fuera deformación.
+\end{abstract}
+
+\section{Ecuación del radar}
+
+Para un radar monoestático (la misma antena emite y recibe), la potencia recibida de un blanco es
+\begin{equation}
+  P_r = \frac{P_t\, G^2\, \lambda^2\, \sigma}{(4\pi)^3 R^4},
+  \label{eq:radar}
+\end{equation}
+donde
+\begin{itemize}
+  \item $P_t$: potencia transmitida;
+  \item $G$: ganancia de la antena;
+  \item $\lambda$: longitud de onda (banda L de NISAR, \emph{Frequency A}: $\lambda \approx 24$\,cm);
+  \item $R$: distancia entre el radar y el blanco;
+  \item $\sigma$: sección eficaz radar del blanco (m$^2$).
+\end{itemize}
+
+\section{Coeficientes de retrodispersión}
+
+En superficies extensas (suelo, vegetación, agua) la sección eficaz se normaliza por un área de
+referencia y se obtiene un coeficiente adimensional:
+\begin{equation}
+  \sigma^0 = \frac{\langle \sigma \rangle}{A_{\text{suelo}}} .
+\end{equation}
+Las tres normalizaciones habituales difieren en el área de referencia. Para terreno plano, con
+ángulo de incidencia local $\theta_i$:
+\begin{equation}
+  \beta^0 = \frac{\sigma^0}{\sin\theta_i},
+  \qquad
+  \gamma^0 = \frac{\sigma^0}{\cos\theta_i}.
+\end{equation}
+En los productos GCOV de NISAR, $\gamma^0$ se normaliza con el área iluminada proyectada en el
+plano perpendicular a la línea de vista, calculada con un modelo digital de elevación. Esto
+corrige el efecto del relieve, por lo que en terreno con pendiente la relación sencilla
+$\gamma^0 = \sigma^0/\cos\theta_i$ es solo una aproximación.
+
+La capa \texttt{HHHH} de GCOV es el término diagonal de la matriz de covarianza,
+$\langle |S_{HH}|^2 \rangle$: la potencia retrodispersada con emisión y recepción horizontales.
+
+\section{Conversión a decibeles}
+
+\begin{equation}
+  \sigma^0_{\text{dB}} = 10 \log_{10} \sigma^0 .
+  \label{eq:db}
+\end{equation}
+La misma expresión se aplica a $\gamma^0$. Si los datos fueran complejos (GSLC), primero se
+calcula la potencia, $10\log_{10}|z|^2$.
+
+\section{Cambio entre dos fechas comparables}
+
+Para dos escenas comparables (mismo producto, trayectoria, marco, dirección, polarización,
+resolución, CRID y madurez) en la misma malla:
+\begin{equation}
+  \Delta\sigma^0_{\text{dB}}(x,y) = \sigma^0_{\text{dB},t_2}(x,y) - \sigma^0_{\text{dB},t_1}(x,y)
+  = 10\log_{10}\frac{\sigma^0_{t_2}(x,y)}{\sigma^0_{t_1}(x,y)} .
+  \label{eq:delta}
+\end{equation}
+La diferencia en dB equivale al logaritmo de la razón de potencias.
+
+\paragraph{Anomalía estandarizada (planeada, aún no implementada).}
+Respecto a la estadística de la región o de una línea base:
+\begin{equation}
+  z(x,y) = \frac{\Delta\sigma^0_{\text{dB}}(x,y) - \mu}{s},
+\end{equation}
+donde $\mu$ y $s$ son la media y la desviación estándar de referencia. Los parámetros exactos se
+documentarán en \texttt{pipeline/change.py} cuando exista.
+
+\paragraph{Advertencia.} Un $\Delta\sigma^0$ describe un cambio en la respuesta radar; por sí solo
+no identifica su causa física.
+
+\section{Modelos de dispersión (para interpretar, no para medir)}
+
+\subsection{Rugosidad: criterio de Rayleigh}
+Una superficie se comporta como lisa (reflexión especular, poca señal de vuelta) si la desviación
+estándar de su altura $h$ cumple
+\begin{equation}
+  h < \frac{\lambda}{8\cos\theta_i}.
+\end{equation}
+El agua en calma cumple este criterio y aparece oscura en la imagen. El suelo rugoso o húmedo
+devuelve más señal.
+
+\subsection{Dispersión de volumen: \emph{water cloud model}}
+Pese a su nombre, no es un modelo de fluidos. Representa el dosel vegetal como una nube de
+dispersores (Attema y Ulaby, 1978):
+\begin{align}
+  \sigma^0 &= A\, V_1 \cos\theta_i \left(1 - T^2\right) + T^2\, \sigma^0_{\text{suelo}}, \\
+  T^2 &= \exp\!\left(-\frac{2 B\, V_2}{\cos\theta_i}\right),
+\end{align}
+donde $V_1$ y $V_2$ son descriptores de la vegetación, $A$ y $B$ son parámetros empíricos que se
+ajustan con datos de campo y $T^2$ es la transmisividad de ida y vuelta a través del dosel.
+
+\subsection{Doble rebote}
+El agua bajo vegetación (vegetación inundada) forma un reflector diédrico tronco--agua que
+\emph{aumenta} la señal, sobre todo en HH. Es el comportamiento opuesto al del agua abierta, y es
+relevante si el fenómeno elegido fuera inundación o humedales.
+
+\section{Interferometría (solo si el caso fuera deformación)}
+
+La diferencia de fase entre dos adquisiciones se relaciona con el desplazamiento en la línea de
+vista $\Delta R$:
+\begin{equation}
+  \Delta\phi = \frac{4\pi}{\lambda}\, \Delta R .
+\end{equation}
+El signo depende de la convención del producto (GUNW). El resultado es un desplazamiento en línea
+de vista, no vertical.
+
+\section{¿Dónde entrarían ecuaciones de fluidos?}
+
+Solo fuera del radar, al interpretar el fenómeno: por ejemplo, un modelo hidráulico de inundación o
+uno de advección--dispersión de sedimentos. Ninguno está en el plan actual. La metodología del
+proyecto pide validar con datos independientes (precipitación, Sentinel-2/HLS, OPERA), no con
+modelos.
+
+\section*{Referencias}
+\begin{itemize}
+  \item Documentación NISAR (ASF): \url{https://nisar-docs.asf.alaska.edu/}
+  \item Ulaby, F.~T. y Long, D.~G. (2014). \emph{Microwave Radar and Radiometric Remote Sensing}.
+        University of Michigan Press.
+  \item Attema, E.~P.~W. y Ulaby, F.~T. (1978). Vegetation modeled as a water cloud.
+        \emph{Radio Science}, 13(2), 357--364.
+  \item Small, D. (2011). Flattening gamma: radiometric terrain correction for SAR imagery.
+        \emph{IEEE Transactions on Geoscience and Remote Sensing}, 49(8), 3081--3093.
+\end{itemize}
+
+\end{document}

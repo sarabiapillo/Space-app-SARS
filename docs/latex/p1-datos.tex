@@ -1,0 +1,374 @@
+% Versión LaTeX de docs/p1-datos.md (2026-11-14). La fuente es el .md: si cambia, actualizar aquí.
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+
+\title{P1 --- Datos y adquisición}
+\author{TerraPulse AI}
+\date{Cierre de la Fase 1, 14 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+Documentación del trabajo de P1 al cierre de la Fase 1 (2026-11-14). Reglas del proyecto en
+\texttt{AGENTS.md}; plan y roles en \emph{Plan de trabajo} (\texttt{plan-de-trabajo.tex}); resultados
+científicos y fuentes de validación en \emph{Metodología} (\texttt{metodologia.tex}).
+
+\section{Responsabilidad}
+
+Conseguir recortes NISAR reales de la ROI con sus metadatos, y garantizar que:
+
+\begin{itemize}
+  \item cada recorte se puede rastrear hasta la escena, la URL y la versión del código que lo produjeron;
+  \item el archivo descargado es la escena que dice el catálogo;
+  \item las dos fechas de un par son comparables y comparten la misma malla;
+  \item se conoce qué parte de la ROI cubre cada escena.
+\end{itemize}
+
+P1 \textbf{no} convierte a dB, no aplica máscaras ni calcula cambios: eso es de P2. Los recortes son un espejo fiel del producto.
+
+\section{Estado}
+
+\begin{longtable}{p{0.48\linewidth}p{0.45\linewidth}}
+\toprule
+\textbf{Criterio de la Fase 1} & \textbf{Estado} \\
+\midrule
+\endhead
+\path{fetch_subset} funcionando con \texttt{.netrc}, solo Frequency A & \ok{} Probado en remoto y en local \\
+Dos recortes que cumplen el contrato C1 en \path{data/raw/} & \ok{} Par T62/F10 \\
+Misma malla confirmada & \ok{} \\
+Cobertura de la ROI medida & \ok{} 99.57\,\% y 99.61\,\% \\
+Par anotado en \path{config.yaml} & \ok{} \\
+Pruebas & \ok{} 44 casos pasan con \texttt{pytest} (ver §\ref{sec:pruebas}) \\
+Mínimo de cobertura aceptable & \textit{Pendiente:} lo fija P3 \\
+\bottomrule
+\end{longtable}
+
+\section{Archivos de P1}
+
+\begin{longtable}{p{0.36\linewidth}p{0.57\linewidth}}
+\toprule
+\textbf{Archivo} & \textbf{Qué hace} \\
+\midrule
+\endhead
+\path{pipeline/config.yaml} & ROI, fuente, producto, criterios de comparabilidad y par de trabajo (\texttt{pair}) \\
+\path{pipeline/sources/base.py} & Contrato de una fuente: \texttt{DataSource} (\texttt{search}, \path{fetch_subset}, \path{fetch_subsets}) y \texttt{SceneMeta} \\
+\path{pipeline/sources/asf.py} & Fuente ASF: búsqueda con \path{asf_search}, inicio de sesión en Earthdata y apertura remota o local del \texttt{.h5} \\
+\path{pipeline/sources/subset.py} & Recorte independiente de la fuente: identidad, ventana, GeoTIFF, cobertura y \path{scene.json} \\
+\path{pipeline/sources/__init__.py} & \path{get_source(name)}: elige la fuente según \texttt{source:} en \path{config.yaml} \\
+\path{pipeline/catalog.py} & CLI: consulta la fuente, agrupa en pilas y guarda el catálogo en JSON \\
+\path{pipeline/download.py} & CLI: recorta escenas del catálogo y compara el par \\
+\path{pipeline/nisar_h5.py} & Lectura por ventanas de los \texttt{.h5} NISAR (malla, ventana de la ROI, lectura por franjas, dB, multilook) \\
+\path{pipeline/etapa1.py}, \path{etapa1_figuras.py} & CLI de inspección de una escena local (figuras y valores de control) \\
+\path{pipeline/tests/test_sources.py}, \path{test_nisar_h5.py}, \path{test_subset.py} & Pruebas con datos sintéticos \\
+\bottomrule
+\end{longtable}
+
+\path{pipeline/compat.py} (comparabilidad) lo usa P1, pero es de P3.
+
+\section{Requisitos}
+
+\begin{enumerate}
+  \item Entorno \texttt{nisar} (ver README §3).
+  \item Cuenta NASA Earthdata con sus credenciales en \textbf{una} de estas formas (README §7):
+  \begin{itemize}
+    \item \path{EARTHDATA_USERNAME} y \path{EARTHDATA_PASSWORD} en el \texttt{.env} de la raíz del repo o como variables de
+          entorno. \textbf{Tienen prioridad} y son la opción para el servidor; las variables del sistema no se sobrescriben con el archivo.
+    \item \texttt{\%USERPROFILE\%\textbackslash .netrc} con
+          \texttt{machine urs.earthdata.nasa.gov login TU\_USUARIO password TU\_CONTRASEÑA}.
+          En Windows, \texttt{earthaccess} busca \path{_netrc}; el pipeline usa \texttt{.netrc} si \path{_netrc} no existe.
+  \end{itemize}
+  \item Haber iniciado sesión una vez en ASF Vertex y aceptado sus términos.
+\end{enumerate}
+
+Los comandos se ejecutan \textbf{desde la raíz del repo} y con \texttt{python -m}:
+
+\begin{lstlisting}
+conda activate nisar
+cd C:\terrapulse
+\end{lstlisting}
+
+\subsection*{Obtener los datos después de clonar}
+
+\path{data/} no está en git, así que un repo recién clonado no tiene recortes. Los datos se generan desde el servidor de ASF:
+
+\begin{lstlisting}
+conda activate nisar
+cd C:\terrapulse
+python -m pipeline.catalog
+python -m pipeline.download NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001 NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001
+\end{lstlisting}
+
+\begin{itemize}
+  \item \path{pipeline.catalog} va \textbf{primero}: \texttt{download} busca las escenas en \path{data/catalog/}. Sin catálogo falla con «No hay catálogos».
+  \item \path{pipeline.download} lee el \texttt{.h5} \textbf{directamente del servidor} y baja solo los bloques de la ROI
+        (\textasciitilde 230\,MB por escena). \textbf{No hace falta descargar el \texttt{.h5} completo} (\textasciitilde 7\,GB).
+  \item Resultado: \path{data/raw/<scene_id>/} con 5 \texttt{.tif} y \path{scene.json} por escena. Tarda \textasciitilde 3--4 minutos y debe
+        terminar con \texttt{COMPARABLE}. Los \path{scene_id} del par también están en \path{config.yaml -> pair}.
+  \item Los valores de los píxeles, la malla y la cobertura salen idénticos para todo el equipo. En \path{scene.json} solo cambian la
+        fecha de creación y, si se trabaja en otro commit, el \path{code_version}.
+  \item Para que \path{code_version} no termine en \texttt{-dirty}, ejecutarlo con el árbol de git limpio (\texttt{git status -{}-short} sin salida).
+  \item Si ASF reprocesa una escena, su \path{scene_id} cambia y el comando no la encontrará: revisar el catálogo nuevo y no mezclar versiones (CRID).
+\end{itemize}
+
+El \texttt{.h5} completo solo hace falta para \path{pipeline.etapa1} (inspección opcional, §\ref{sec:inspeccion}) o para trabajar sin
+internet con \texttt{-{}-h5-local}. También se puede compartir la carpeta \path{data/raw/} (\textasciitilde 460\,MB) por fuera de git; cada
+\path{scene.json} conserva su procedencia.
+
+\section{Flujo}
+
+\begin{lstlisting}
+config.yaml --> pipeline.catalog --> data/catalog/*.json
+                                          |
+                                          v
+                  .h5 (ASF, ~7 GB) --> pipeline.download --> data/raw/<scene_id>/  --> P2
+                                          |                    (5 .tif + scene.json)
+                                          +--> comparación del par (COMPARABLE / NO COMPARABLE)
+
+.h5 local --> pipeline.etapa1 --> data/explore/<granuleId>/   (opcional, inspección)
+\end{lstlisting}
+
+Diagrama detallado: artefacto «Flujo de datos P1» (privado, compartido desde la página).
+
+\subsection{Catálogo: \texttt{python -m pipeline.catalog}}
+
+No requiere \texttt{.netrc}. Tarda menos de un minuto.
+
+\begin{enumerate}
+  \item Lee \path{roi.wkt} y \path{search.product} de \path{config.yaml}. \path{search.start}/\texttt{end} quedan en \texttt{null} a propósito para ver todas las pilas.
+  \item Busca escenas NISAR del producto que intersectan la ROI.
+  \item Repite la búsqueda filtrando por cada madurez (BETA, PROVISIONAL, VALIDATED), porque \path{asf_search} no la devuelve como
+        propiedad. Una escena que no aparece en ningún filtro queda con madurez \texttt{None} y \textbf{no será comparable}.
+  \item Convierte cada resultado en \texttt{SceneMeta} sin rellenar campos que falten.
+  \item Agrupa en pilas por (producto, trayectoria, marco, dirección, polarizaciones, CRID, madurez).
+  \item Imprime las pilas (\texttt{CANDIDATA} si tienen 2 o más fechas) y guarda
+        \path{data/catalog/catalog_<fuente>_<producto>_<UTC>.json} con la consulta, la versión del código y todas las escenas.
+\end{enumerate}
+
+\subsection{Recorte: \texttt{python -m pipeline.download}}
+
+\begin{lstlisting}
+python -m pipeline.download <scene_id> [<scene_id> ...] [opciones]
+\end{lstlisting}
+
+\begin{longtable}{p{0.38\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{Opción} & \textbf{Uso} \\
+\midrule
+\endhead
+\path{--capas HHHH HVHV mask ...} & Capas a recortar. Por defecto: \path{HHHH HVHV mask numberOfLooks rtcGammaToSigmaFactor} \\
+\path{--h5-local "ruta.h5"} & Usar un \texttt{.h5} ya descargado (solo una escena) \\
+\path{--catalogo ruta.json} & Usar un catálogo concreto; por defecto, el más reciente de \path{data/catalog/} \\
+\path{--config ruta.yaml} & Otra configuración \\
+\bottomrule
+\end{longtable}
+
+Por cada escena:
+
+\begin{enumerate}
+  \item \textbf{Busca la escena} en el catálogo. Si no está, se detiene: cada recorte queda ligado a una consulta guardada.
+  \item \textbf{Abre el \texttt{.h5}.} En remoto: carga \texttt{.env}, inicia sesión en Earthdata
+        (\path{EARTHDATA_USERNAME}/\path{EARTHDATA_PASSWORD} si están, y si no \texttt{.netrc}) y lo abre con \texttt{h5py} sobre HTTPS
+        (\texttt{fsspec}, bloques de 8\,MiB con caché). En local: lo abre del disco.
+  \item \textbf{Verifica la identidad.} \texttt{granuleId}, \texttt{compositeReleaseId}, \texttt{trackNumber}, \texttt{frameNumber} y
+        \texttt{orbitPassDirection} del archivo deben coincidir con el catálogo. Si no coinciden, se detiene.
+  \item \textbf{Lee la malla} de \path{science/LSAR/GCOV/grids/frequencyA}: EPSG, coordenadas, espaciado, polarizaciones, capas de
+        potencia (términos diagonales de la covarianza) y su magnitud (\texttt{gamma0}, leída del archivo).
+  \item \textbf{Calcula la ventana}: densifica la ROI, la transforma al CRS de la malla y toma el rectángulo de filas y columnas que la contiene.
+  \item \textbf{Lee cada capa} solo en esa ventana, por franjas alineadas a los chunks del HDF5. En remoto, solo se transfieren esos
+        bloques (\textasciitilde 230\,MB por escena en lugar de \textasciitilde 7\,GB).
+  \item \textbf{Escribe un GeoTIFF por capa}: CRS de la escena, la transformación de la ventana, LZW, teselas de 512. Primero escribe
+        \texttt{.tif.part} y luego lo renombra, así un corte no deja archivos a medias.
+  \item \textbf{Mide la cobertura} con la capa \texttt{mask} dentro del \textbf{polígono} de la ROI (no del rectángulo).
+  \item \textbf{Escribe o actualiza \texttt{scene.json}.} Si ya existía con otra malla o ventana (por ejemplo, porque cambió la ROI), se detiene.
+\end{enumerate}
+
+Con dos escenas o más, al final compara cada una contra la primera:
+
+\begin{itemize}
+  \item \path{compat.check_pair} (catálogo): producto, trayectoria, marco, dirección, polarizaciones, CRID y madurez iguales y conocidos.
+  \item \path{subset.compare_grids} (\texttt{.h5}): frecuencia, EPSG, espaciado, forma y transformación del recorte idénticos.
+\end{itemize}
+
+Imprime \texttt{COMPARABLE} (código de salida 0) o \texttt{NO COMPARABLE} con los motivos (código 2).
+
+Volver a ejecutar sobre la misma escena reescribe las capas y actualiza \path{scene.json} sin duplicar nada.
+
+\subsection{Inspección: \texttt{python -m pipeline.etapa1}}
+\label{sec:inspeccion}
+
+\begin{lstlisting}
+python -m pipeline.etapa1 "H5 FILES\archivo.h5" [--sin-vista] [--sin-figuras]
+\end{lstlisting}
+
+Solo con archivos locales. Escribe en \path{data/explore/<granuleId>/}: \path{metadatos.json}, \path{LEEME_validacion.txt}
+(comprobaciones a mano con sus valores), \path{geotiff/} (\gz, \sz, dB con multilook 2\,\por\,2, máscara, factor, looks),
+\path{figuras/} y \path{control/} (píxeles y bloques elegidos con semilla fija). \texttt{-{}-sin-vista} omite la vista general, que
+obliga a leer la escena completa.
+
+\section{Contrato C1 (lo que recibe P2)}
+
+\begin{lstlisting}
+data/raw/<scene_id>/
+|-- HHHH.tif                  gamma0 HH, potencia lineal, float32, nodata NaN
+|-- HVHV.tif                  gamma0 HV, potencia lineal, float32, nodata NaN
+|-- mask.tif                  uint8 sin nodata: 0 = no válido, 255 = fuera de la adquisición, otro = subfranja válida
+|-- numberOfLooks.tif         float32, nodata NaN
+|-- rtcGammaToSigmaFactor.tif float32, nodata NaN   (sigma0 = gamma0 * factor)
+`-- scene.json
+\end{lstlisting}
+
+Todas las capas comparten CRS, transformación y forma. Los valores son los del producto: \textbf{sin dB, sin máscara aplicada y sin
+multilook}, en el rectángulo que contiene la ROI (el polígono se aplica en el procesamiento).
+
+\subsection*{Campos de \texttt{scene.json}}
+
+{\small
+\begin{longtable}{p{0.20\linewidth}p{0.73\linewidth}}
+\toprule
+\textbf{Campo} & \textbf{Contenido} \\
+\midrule
+\endhead
+\texttt{contrato} & \texttt{"C1"} \\
+\texttt{scene} & \texttt{SceneMeta} del catálogo: \path{scene_id}, \texttt{product}, \texttt{track}, \texttt{frame}, \texttt{direction},
+  \texttt{polarizations}, \texttt{crid}, \texttt{maturity}, \path{start_time}, \path{frame_coverage}, \path{orbit_type},
+  \path{product_version}, \texttt{url}, \path{size_bytes}, \texttt{extra} \\
+\path{identificacion_h5} & Lo que dice el propio archivo: \texttt{granuleId}, \texttt{compositeReleaseId}, \texttt{trackNumber},
+  \texttt{frameNumber}, \texttt{orbitPassDirection}, \texttt{absoluteOrbitNumber}, \texttt{zeroDopplerStartTime}/\texttt{EndTime},
+  \texttt{productVersion}, \texttt{isFullFrame}, \texttt{listOfFrequencies} \\
+\texttt{roi} & \texttt{wkt} y \texttt{crs} usados para el recorte \\
+\texttt{malla} & \texttt{frecuencia}, \texttt{epsg}, \path{dx_m}, \path{dy_m}, \path{forma_malla_completa}, \path{magnitud_potencia},
+  \texttt{polarizaciones}, \path{capas_potencia}, \texttt{ventana} (\texttt{fila0}, \texttt{fila1}, \texttt{col0}, \texttt{col1}),
+  \path{forma_recorte}, \path{transform_recorte} (6 coeficientes afines), \path{roi_se_sale_de_la_escena} \\
+\texttt{capas} & Por capa: \texttt{archivo}, \texttt{descripcion}, \texttt{dtype}, \texttt{nodata}, \texttt{unidades} (del atributo
+  del \texttt{.h5}), \path{creado_utc} \\
+\path{cobertura_roi} & \path{pixeles_en_poligono}, \path{pct_valido}, \path{pct_no_valido}, \path{pct_fuera_adquisicion}, \texttt{nota} \\
+\texttt{procedencia} & \texttt{fuente}, \texttt{metodo}, y \texttt{url} + \path{block_size_bytes} (remoto) o \path{ruta_local} +
+  \path{url_catalogo} (local) \\
+\path{code_version} & Commit corto de git (\texttt{-dirty} si había cambios sin commit) \\
+\path{actualizado_utc} & Última escritura \\
+\texttt{advertencias} & Recordatorios para quien consuma el recorte \\
+\bottomrule
+\end{longtable}
+}
+
+\textbf{Cambio respecto al plan original:} C1 pedía «el comando GDAL usado». Se reemplazó por \texttt{procedencia}, porque el recorte
+se hace con \texttt{h5py}: el GDAL del entorno (3.12) no trae los drivers HDF5 ni NISAR.
+
+\section{Resultados}
+
+Catálogo del 2026-11-14 (\path{data/catalog/catalog_asf_GCOV_20261114T231456Z.json}): 39 escenas GCOV sobre la ROI.
+
+\textbf{Par de trabajo:} GCOV T62/F10 ASCENDING, HH+HV, P05023, PROVISIONAL.
+
+\begin{longtable}{p{0.22\linewidth}p{0.35\linewidth}p{0.35\linewidth}}
+\toprule
+ & \textbf{t1} & \textbf{t2} \\
+\midrule
+\endhead
+Fecha & 2026-06-18 & 2026-10-16 \\
+\path{scene_id} & \path{NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001}
+                & \path{NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001} \\
+Píxeles válidos en el polígono ROI & 99.57\,\% & 99.61\,\% \\
+Comparabilidad & \texttt{COMPARABLE} & \\
+\bottomrule
+\end{longtable}
+
+\begin{itemize}
+  \item Malla: EPSG:32615 (UTM 15N), 10\,\por\,10\,m; malla completa de 33480\,\por\,34128\,px; recorte de 2687\,\por\,5504\,px,
+        idéntico en ambas fechas.
+  \item Tamaño en disco: \textasciitilde 230\,MB por escena (5 capas). Tiempo: \textasciitilde 3 minutos por par.
+\end{itemize}
+
+\textbf{Otras escenas recortadas:}
+
+\begin{longtable}{p{0.30\linewidth}p{0.38\linewidth}p{0.24\linewidth}}
+\toprule
+\textbf{Escenas} & \textbf{Cobertura de la ROI} & \textbf{Uso} \\
+\midrule
+\endhead
+T55/F80 DESC, P05023, 2026-06-18 y 2026-10-16 & \textasciitilde 50\,\% (32.6\,\% fuera de la adquisición, 17\,\% no válido; datos solo
+  al este de lon \aprox{} $-93.14$) & Respaldo. Es COMPARABLE, pero cubre la mitad \\
+T62/F10 ASC, P05036, 2026-10-28 & 99.6\,\% & Sin pareja: única fecha P05036 de su pila \\
+\bottomrule
+\end{longtable}
+
+\textbf{Verificación con datos reales.} El recorte de la escena del 2026-10-28 desde su \texttt{.h5} local se comparó contra la salida
+independiente de \path{etapa1.py}: misma transformación, misma forma y valores idénticos en los 14\,699\,442 píxeles válidos.
+
+\section{Decisiones tomadas}
+
+\begin{longtable}{p{0.36\linewidth}p{0.57\linewidth}}
+\toprule
+\textbf{Decisión} & \textbf{Motivo} \\
+\midrule
+\endhead
+Recortar con \texttt{h5py} en lugar de \texttt{gdalwarp} & El GDAL 3.12 de conda-forge no trae los drivers HDF5 ni NISAR.
+  \texttt{h5py} ya estaba en el entorno: no se agregaron dependencias \\
+Leer el \texttt{.h5} remoto por ventanas & Evita descargar \textasciitilde 7\,GB por escena (\texttt{AGENTS.md} §5) \\
+Par T62 en lugar de T55 & T55 solo cubre \textasciitilde 50\,\% de la ROI \\
+No aplicar dB, máscara ni multilook en el recorte & Separar adquisición (P1) de procesamiento (P2); el recorte se puede comparar
+  contra el producto valor por valor \\
+Verificar la identidad del archivo contra el catálogo & Un recorte con la identidad equivocada rompe la trazabilidad (\texttt{AGENTS.md} §2.3) \\
+Medir la cobertura sobre el polígono & El rectángulo incluye zonas fuera de la ROI \\
+No crear \path{sources/event.py} & Los recursos del reto para NISAR son ASF/Earthdata, los mismos que ya usa \texttt{ASFSource} \\
+\path{search.start}/\texttt{end} en \texttt{null} & Que el catálogo siga mostrando todas las pilas (por ejemplo, fechas P05036 nuevas) \\
+\bottomrule
+\end{longtable}
+
+\section{Pruebas}
+\label{sec:pruebas}
+
+\begin{lstlisting}
+pytest
+\end{lstlisting}
+
+Todas usan HDF5 \textbf{sintéticos} y no necesitan red. Las de P1 son 28 casos (de 44 en total):
+
+\begin{longtable}{p{0.20\linewidth}p{0.12\linewidth}p{0.60\linewidth}}
+\toprule
+\textbf{Archivo} & \textbf{Funciones de prueba} & \textbf{Qué cubre} \\
+\midrule
+\endhead
+\path{test_sources.py} & 4 & Normalización de resultados de ASF a \texttt{SceneMeta} \\
+\path{test_nisar_h5.py} & 17 & Malla, ventana de la ROI, lectura por franjas, potencia, dB, multilook, estadísticas \\
+\path{test_subset.py} & 7 & El recorte copia valores exactos y la georreferencia; cobertura sobre el polígono; rechazo por identidad
+  y por capa inexistente; acumulación de capas en \path{scene.json}; detección de mallas desplazadas; ruta local de \texttt{ASFSource} \\
+\bottomrule
+\end{longtable}
+
+\section{Problemas frecuentes}
+
+\begin{longtable}{p{0.40\linewidth}p{0.53\linewidth}}
+\toprule
+\textbf{Error} & \textbf{Solución} \\
+\midrule
+\endhead
+\texttt{No se pudo iniciar sesión en Earthdata} & Revisa \texttt{\%USERPROFILE\%\textbackslash .netrc} y las credenciales; el mensaje
+  incluye el motivo de Earthdata \\
+\texttt{No están en catalog\_...json} & Corre \path{python -m pipeline.catalog} o revisa que el \path{scene_id} esté completo \\
+\texttt{El archivo no coincide con la escena del catálogo} & El \texttt{.h5} no es la escena pedida (revisa el ID o \texttt{-{}-h5-local}) \\
+\texttt{ya tiene otra malla/ventana} & Cambió la ROI: borra \path{data/raw/<scene_id>/} y vuelve a recortar \\
+\texttt{Capas no disponibles en el archivo} & Esa escena no tiene la capa (por ejemplo, una escena solo HV); revisa \texttt{-{}-capas} \\
+\texttt{ModuleNotFoundError: pipeline} & Ejecuta desde \texttt{C:\textbackslash terrapulse} con \path{python -m pipeline.<script>} \\
+\texttt{UnicodeEncodeError} en la consola de Windows & Define \path{set PYTHONIOENCODING=utf-8} antes de ejecutar \\
+\bottomrule
+\end{longtable}
+
+\section{Limitaciones y pendientes}
+
+\begin{itemize}
+  \item \textbf{\texttt{code\_version} de los recortes:} el par T62 se regeneró el 2026-11-15 con el árbol limpio y registra \texttt{19de237}.
+        Los recortes de respaldo (T55) y la escena P05036 conservan versiones anteriores con \texttt{-dirty}; regenerarlos si se van a usar.
+  \item \textbf{Mínimo de cobertura:} lo fija P3.
+  \item \textbf{Línea base para el z-score (Fase 2):} recortar más fechas de la pila T62 P05023 con \path{pipeline.download <scene_id>}
+        (\textasciitilde 1.5\,min por fecha), cuando P2 diga cuántas necesita.
+  \item \textbf{Pila T156/F80:} su cobertura de la ROI no se ha verificado.
+  \item \textbf{Antes del evento:} volver a correr \path{pipeline.catalog} por si aparecen fechas nuevas (por ejemplo, T62 P05036 para
+        emparejar la escena del 2026-10-28).
+  \item \textbf{Advertencias del producto} que P2 debe atender: sin corrección de ruido (\path{noiseCorrectionApplied = False}), sin
+        máscara de sombra/layover (\path{shadowMaskingApplied = False}), potencias con mantisa de 16 bits (\textasciitilde 5 cifras
+        significativas). Productos PROVISIONAL: calibrados y parcialmente validados, no completamente validados.
+  \item \path{etapa1.py} solo trabaja con archivos locales.
+\end{itemize}
+
+\end{document}

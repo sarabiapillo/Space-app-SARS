@@ -1,0 +1,172 @@
+% Versión LaTeX de docs/metodologia.md (2026-11-14). La fuente es el .md: si cambia, actualizar aquí.
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+
+\title{Metodología}
+\author{TerraPulse AI}
+\date{Borrador, 14 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{nota}
+\textbf{Borrador.} Se documenta conforme se ejecuta el pipeline (\texttt{AGENTS.md} §6). Dueño: P3.
+Todo lo que aquí aparece como «verificado» se comprobó con el comando indicado y la fecha anotada;
+lo que aún no se ha comprobado se marca como \textbf{pendiente}.
+\end{nota}
+
+\section{Región de interés (ROI)}
+
+Chiapas, México. Polígono en EPSG:4326 (\path{pipeline/config.yaml -> roi}):
+
+\begin{lstlisting}
+POLYGON((-93.3919 16.6539,-92.8757 16.6539,-92.8757 16.8964,-93.3919 16.8964,-93.3919 16.6539))
+\end{lstlisting}
+
+\section{Escenas utilizadas}
+
+Fuente: catálogo de ASF consultado con \path{python -m pipeline.catalog} el 2026-11-14
+(\path{data/catalog/catalog_asf_GCOV_20261114T231456Z.json}). Recortes obtenidos con
+\path{python -m pipeline.download} (lectura remota por ventanas; solo se transfieren los bloques de la ROI).
+
+\textbf{Par de trabajo (Fase 1):}
+
+\begin{longtable}{p{0.30\linewidth}p{0.31\linewidth}p{0.31\linewidth}}
+\toprule
+ & \textbf{t1} & \textbf{t2} \\
+\midrule
+\endhead
+Producto & NISAR L2 GCOV & NISAR L2 GCOV \\
+Fecha & 2026-06-18 & 2026-10-16 \\
+Trayectoria / marco / dirección & 62 / 10 / ASCENDING & 62 / 10 / ASCENDING \\
+Polarizaciones (Frequency A, leídas del .h5) & HH, HV & HH, HV \\
+CRID / madurez & P05023 / PROVISIONAL & P05023 / PROVISIONAL \\
+Píxeles válidos en el polígono ROI (capa \texttt{mask}) & 99.57\,\% & 99.61\,\% \\
+Escena & \path{NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001}
+       & \path{NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001} \\
+\bottomrule
+\end{longtable}
+
+Cada recorte está en \path{data/raw/<scene_id>/} con su \path{scene.json} (procedencia, URL, ventana, malla, cobertura).
+
+\textbf{Por qué T62 y no T55.} La pila T55/F80 DESCENDING P05023 tiene las mismas fechas, pero su marco
+solo cubre la mitad este de la ROI: 50.3\,\% de píxeles válidos (32.6\,\% fuera de la adquisición,
+17.1\,\% no válidos), con datos solo al este de lon \aprox{} $-93.14$. Se conserva en \path{data/raw/} como respaldo.
+La pila T156/F80 no se ha recortado (cobertura \textbf{pendiente}).
+
+\textbf{Escena sin pareja.} GCOV T62/F10 2026-10-28 (P05036, VALIDATED) se inspeccionó en la Etapa 1
+(\path{data/explore/}), pero es la única fecha de su pila: el CRID cambió de P05023 a P05036 el 2026-10-23
+y no se mezclan versiones de procesamiento.
+
+\section{Comparabilidad}
+
+Verificada para el par de trabajo con \path{compat.check_pair} (catálogo) y \path{sources/subset.compare_grids} (.h5):
+
+\begin{itemize}
+  \item Mismo producto, trayectoria, marco, dirección, polarizaciones, CRID y madurez.
+  \item Misma malla en ambas fechas: EPSG:32615 (UTM 15N), 10\,\por\,10\,m, recorte de 2687\,\por\,5504\,px con
+        idéntica transformación geográfica. No se requiere remuestreo.
+  \item La identidad de cada archivo (granuleId, CRID, trayectoria, marco, dirección) se contrastó con el catálogo al recortar.
+\end{itemize}
+
+\section{Preprocesamiento y máscaras}
+
+\textbf{Pendiente} (\path{preprocess.py}, \path{masks.py}, P2). Datos de partida y advertencias que declara el producto:
+
+\begin{itemize}
+  \item Las capas \texttt{HHHH} y \texttt{HVHV} son potencia lineal \gz{} (convención leída del .h5).
+        $\sigma^0 = \gamma^0 \cdot \texttt{rtcGammaToSigmaFactor}$.
+  \item \path{noiseCorrectionApplied = False}: valores bajos, sobre todo en HV, pueden estar cerca del piso de ruido.
+  \item \path{shadowMaskingApplied = False}: la máscara de sombra/layover se debe aplicar aparte.
+  \item Capas de potencia guardadas con mantisa de 16 bits (\textasciitilde 5 cifras significativas).
+  \item Los recortes se entregan sin dB, sin máscara y sin multilook; es el rectángulo que contiene la ROI.
+\end{itemize}
+
+\section{Métrica de cambio}
+
+\textbf{Pendiente} (\path{change.py}, P2). Prevista:
+\[
+  \Delta\sigma^0_{\text{dB}} = \sigma^0_{\text{dB},t_2} - \sigma^0_{\text{dB},t_1},
+\]
+razón y z-score respecto a la pila.
+Un cambio en la retrodispersión describe un cambio en la respuesta radar; no identifica por sí solo su causa.
+Las ecuaciones completas están en \texttt{ecuaciones\_radar.tex}.
+
+\section{Validación}
+
+\textbf{Pendiente: depende del fenómeno, que aún no se decide.} Fuentes auxiliares candidatas encontradas
+en NASA Earthdata (CMR) para la ROI entre 2026-06-01 y 2026-10-31. Consulta del 2026-11-14,
+\textbf{solo búsqueda en el catálogo}: aún no se ha descargado ni inspeccionado su contenido sobre la ROI.
+
+{\small
+\begin{longtable}{p{0.20\linewidth}p{0.21\linewidth}p{0.12\linewidth}p{0.10\linewidth}p{0.26\linewidth}}
+\toprule
+\textbf{Producto (short name)} & \textbf{Qué es} & \textbf{Resolución} & \textbf{Archivo (DAAC)} & \textbf{Disponibilidad sobre la ROI} \\
+\midrule
+\endhead
+\path{GPM_3IMERGDL} v07 & Precipitación diaria GPM IMERG (Late) & 0.1° (\textasciitilde 11\,km), 1 día & GES DISC & 153 días (01-jun \flecha{} 31-oct) \\
+\path{GPM_3IMERGDF} v07 & Precipitación diaria GPM IMERG (Final) & 0.1°, 1 día & GES DISC & 0: aún no publicada para 2026 \\
+\path{HLSS30} v2.0 & Reflectancia de superficie Sentinel-2 armonizada & 30\,m & LP DAAC & 64 fechas; 9 con nubes $\leq$ 20\,\% en el tile: 06-20, 06-30, 07-20, 08-01, 08-14, 08-17, 08-29, 09-30, 10-01 \\
+\path{HLSL30} v2.0 & Reflectancia de superficie Landsat armonizada & 30\,m & LP DAAC & 18 fechas; 6 con nubes $\leq$ 20\,\% en el tile: 06-21, 07-23, 08-08, 08-16, 09-01, 10-27 \\
+\path{OPERA_L3_DSWX-HLS_V1} & Extensión de agua superficial (óptico) & 30\,m & PO.DAAC & 80 fechas \\
+\path{OPERA_L3_DSWX-S1_V1} & Extensión de agua superficial (Sentinel-1, banda C) & 30\,m & PO.DAAC & 65 fechas \\
+\path{OPERA_L3_DIST-ALERT-HLS_V1} & Alertas de perturbación de la vegetación (óptico) & 30\,m & LP DAAC & 74 fechas \\
+\path{OPERA_L3_DIST-ALERT-S1_V1} & Alertas de perturbación (Sentinel-1) & 30\,m & --- & 0 \\
+\bottomrule
+\end{longtable}
+}
+
+Notas:
+
+\begin{itemize}
+  \item El porcentaje de nubes de HLS es del tile completo, no de la ROI: comprobarlo sobre la ROI antes de usar una fecha.
+  \item Fechas ópticas cercanas al par: 2026-06-20 / 06-21 (t1 = 06-18) y 2026-10-01 / 10-27 (t2 = 10-16).
+  \item IMERG (\textasciitilde 11\,km) sirve como \textbf{contexto} temporal (lluvia entre fechas y antes de cada adquisición),
+        no como validación píxel a píxel.
+\end{itemize}
+
+\textbf{Fuente auxiliar sugerida según el fenómeno} (decisión de P3):
+
+\begin{longtable}{p{0.25\linewidth}p{0.45\linewidth}p{0.20\linewidth}}
+\toprule
+\textbf{Fenómeno} & \textbf{Referencia} & \textbf{Contexto} \\
+\midrule
+\endhead
+Inundación / humedales & OPERA DSWx (HLS y/o S1) & GPM IMERG \\
+Vegetación / perturbación & OPERA DIST-ALERT-HLS, HLS (índices de vegetación) & GPM IMERG \\
+Deformación & Ninguna de las anteriores & --- \\
+\bottomrule
+\end{longtable}
+
+\textbf{Precaución.} OPERA es otro producto derivado de satélite, con su propio error; no son etiquetas de campo.
+Precisión, recall, F1 e IoU calculados contra OPERA miden el \textbf{acuerdo con OPERA}, no la exactitud real,
+y así deben reportarse. Sin una referencia adecuada, el resultado se marca como \textbf{exploratorio}.
+
+\subsection{Sensores evaluados y descartados (por ahora)}
+
+Recursos de agencias socias incluidos en la lista del reto:
+
+\begin{longtable}{p{0.17\linewidth}p{0.07\linewidth}p{0.20\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Sensor} & \textbf{Banda} & \textbf{Decisión} & \textbf{Motivo} \\
+\midrule
+\endhead
+RADARSAT-1 (CSA) & C & Descartado & Operó de 1995 a 2013: sin datos para 2026 \\
+RCM (CSA) & C & Descartado por ahora & Otra banda y otra calibración: no comparable con NISAR; condiciones de acceso por verificar \\
+SAOCOM (CONAE) & L & Posible contraste en la Fase 2 & Misma banda, pero otro sensor: nunca se mezcla en un \dsz{} con NISAR; cobertura de la ROI y fechas \textbf{pendientes} de consultar (requiere registro) \\
+\bottomrule
+\end{longtable}
+
+Un segundo radar no confirma la causa física de un cambio de retrodispersión; la validación requiere datos
+de otra naturaleza (\texttt{AGENTS.md} §6).
+
+\section{Limitaciones}
+
+\begin{itemize}
+  \item Productos L-band PROVISIONAL: calibrados y parcialmente validados, no completamente validados.
+  \item Sin corrección de ruido ni máscara de sombra/layover en el producto (ver Preprocesamiento).
+  \item Un solo par y una sola geometría (ascendente); la pila tiene 10 fechas disponibles para una línea base.
+  \item Fenómeno aún no decidido: hasta entonces, cualquier mapa de cambio es exploratorio.
+\end{itemize}
+
+\end{document}
