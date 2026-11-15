@@ -22,6 +22,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Variables de entorno desde terrapulse/.env (no se sube a git; ver .env.example).
 load_dotenv(BASE_DIR.parent / ".env")
 
+# La importación solo valida sintaxis: no crea directorios, consulta red ni ejecuta DG2.
+from config.flood_service import build_flood_service_settings
+try:
+    FLOOD_ROI_DG2_ENABLED, FLOOD_ROI_DG2_RUN_ROOT, FLOOD_ROI_DG2_CONFIG = build_flood_service_settings(BASE_DIR.parent, os.environ)
+except ValueError as exc:
+    raise ImproperlyConfigured(str(exc)) from None
+
 
 def env(name, default=None):
     value = os.environ.get(name, default)

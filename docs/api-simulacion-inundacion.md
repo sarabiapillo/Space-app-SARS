@@ -1,6 +1,6 @@
 # API de preparación y ejecución DG2 sintética
 
-`prepare/` **solo valida** lluvia y ROI; conserva su respuesta original sin ejecutar ni crear resultados. Separadamente, `start/` ejecuta únicamente casos sintéticos preparados y registrados por el operador. No hay casos registrados por defecto, ni simulación de la ROI real ni precisión hidráulica validada. El frontend nunca debe convertir la respuesta de preparación en autorización para correr DG2.
+`prepare/` **solo valida** lluvia y ROI; conserva su respuesta original sin ejecutar ni crear resultados. Separadamente, `start/` ejecuta únicamente casos sintéticos preparados y registrados por el operador. La [nueva API por ROI](api-simulacion-roi.md) admite ejecución solicitada por ROI con DEM y lluvia explícitos, sin caso registrado, en un worker separado. No hay casos registrados por defecto ni precisión hidráulica validada. El frontend nunca debe convertir la respuesta de preparación en autorización para correr DG2.
 
 ## Solicitud
 
