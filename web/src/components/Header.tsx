@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Camera,
+  Check,
+  ChevronDown,
+  ChevronRight,
   CloudRain,
   Columns,
   Download,
@@ -59,6 +62,72 @@ const TOOL_LABELS: Record<DrawTool, string> = {
   etiqueta: 'Etiqueta',
 }
 
+interface SarLayerSubitem {
+  id: ExploreLayerId
+  shortLabel: string
+  fullLabel: string
+  scale: string
+  title: string
+}
+
+interface SarLayerGroup {
+  id: 'gamma0' | 'sigma0'
+  symbol: string
+  title: string
+  subtitle: string
+  badge: string
+  layers: SarLayerSubitem[]
+}
+
+const SAR_LAYER_GROUPS: SarLayerGroup[] = [
+  {
+    id: 'gamma0',
+    symbol: 'γ⁰',
+    title: 'Retrodispersión RTC (γ⁰)',
+    subtitle: 'Corrección topográfica de terreno',
+    badge: 'Terreno',
+    layers: [
+      {
+        id: 'gamma0_HHHH_ml2_dB',
+        shortLabel: 'γ⁰ HH [dB]',
+        fullLabel: 'Copolarizada HHHH',
+        scale: '-22 a 0 dB · 20 m',
+        title: 'Retrodispersión RTC γ⁰ HHHH en dB (multilook 2×2 · 20 m · EPSG:3857)',
+      },
+      {
+        id: 'gamma0_HVHV_ml2_dB',
+        shortLabel: 'γ⁰ HV [dB]',
+        fullLabel: 'Polarización cruzada HVHV',
+        scale: '-22 a 0 dB · 20 m',
+        title: 'Retrodispersión RTC γ⁰ HVHV en dB (multilook 2×2 · 20 m · EPSG:3857)',
+      },
+    ],
+  },
+  {
+    id: 'sigma0',
+    symbol: 'σ⁰',
+    title: 'Retrodispersión Elipsoidal (σ⁰)',
+    subtitle: 'Corrección elipsoidal convencional',
+    badge: 'Elipsoide',
+    layers: [
+      {
+        id: 'sigma0_HHHH_ml2_dB',
+        shortLabel: 'σ⁰ HH [dB]',
+        fullLabel: 'Copolarizada HHHH',
+        scale: '-22 a 0 dB · 20 m',
+        title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HHHH en dB · 20 m)',
+      },
+      {
+        id: 'sigma0_HVHV_ml2_dB',
+        shortLabel: 'σ⁰ HV [dB]',
+        fullLabel: 'Polarización cruzada HVHV',
+        scale: '-22 a 0 dB · 20 m',
+        title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HVHV en dB · 20 m)',
+      },
+    ],
+  },
+]
+
 export function Header({
   viewMode,
   onViewModeChange,
@@ -87,6 +156,35 @@ export function Header({
 }: HeaderProps) {
   const isEditing = viewMode === 'editado' && canShowEdited
   const [logoFailed, setLogoFailed] = useState(false)
+  const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false)
+  const [hoveredGroup, setHoveredGroup] = useState<'gamma0' | 'sigma0' | null>(null)
+  const layerMenuRef = useRef<HTMLDivElement>(null)
+
+  const activeLayerOption =
+    EXPLORE_LAYER_OPTIONS.find((opt) => opt.id === exploreLayerId) ?? EXPLORE_LAYER_OPTIONS[0]
+
+  // Cerrar al hacer clic fuera o presionar Escape
+  useEffect(() => {
+    if (!isLayerMenuOpen) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (layerMenuRef.current && !layerMenuRef.current.contains(e.target as Node)) {
+        setIsLayerMenuOpen(false)
+        setHoveredGroup(null)
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsLayerMenuOpen(false)
+        setHoveredGroup(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isLayerMenuOpen])
 
   return (
     <header className="ws-header" role="banner">
@@ -243,20 +341,115 @@ export function Header({
         {/* Sección 2: Capas GCOV (Frequency A) + Escala de Color */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
-            {EXPLORE_LAYER_OPTIONS.map((layer) => (
+            {/* Selector único que despliega en submenús jerárquicos (RTC γ⁰ vs Elipsoidal σ⁰) */}
+            <div className="ws-ribbon__inline-field ws-layer-select-field" ref={layerMenuRef}>
+              <span className="ws-layer-select-prefix">Capa SAR:</span>
               <button
-                key={layer.id}
                 type="button"
-                className={`ws-ribbon__btn ws-ribbon__btn--mono ${exploreLayerId === layer.id ? 'is-active' : ''}`}
+                className={`ws-ribbon__select ws-layer-select-btn ${isLayerMenuOpen ? 'is-active' : ''}`}
                 onClick={() => {
-                  onDockTabChange('map')
-                  onExploreLayerChange(layer.id)
+                  const nextState = !isLayerMenuOpen
+                  setIsLayerMenuOpen(nextState)
+                  if (nextState) {
+                    const activeGrp = SAR_LAYER_GROUPS.find((g) =>
+                      g.layers.some((l) => l.id === exploreLayerId)
+                    )
+                    setHoveredGroup(activeGrp?.id ?? 'gamma0')
+                  } else {
+                    setHoveredGroup(null)
+                  }
                 }}
-                title={layer.title}
+                aria-haspopup="true"
+                aria-expanded={isLayerMenuOpen}
+                title="Seleccionar capa SAR GCOV por corrección radiométrica (γ⁰ RTC / σ⁰ Elipsoidal) y polarización"
               >
-                <span>{layer.shortLabel}</span>
+                <Layers size={12} className="ws-layer-select-icon" />
+                <span className="ws-layer-select-val">
+                  {activeLayerOption?.shortLabel ?? 'γ⁰ HH [dB]'}
+                </span>
+                <ChevronDown
+                  size={11}
+                  className={`ws-layer-select-chevron ${isLayerMenuOpen ? 'is-open' : ''}`}
+                />
               </button>
-            ))}
+
+              {isLayerMenuOpen && (
+                <div className="ws-layer-menu" role="menu">
+                  <div className="ws-layer-menu__header">
+                    <span>Capas SAR GCOV (Frequency A)</span>
+                  </div>
+                  {SAR_LAYER_GROUPS.map((group) => {
+                    const isGroupActive = group.layers.some((l) => l.id === exploreLayerId)
+                    const isHovered = hoveredGroup === group.id
+                    return (
+                      <div
+                        key={group.id}
+                        className={`ws-layer-menu__item ${isGroupActive ? 'is-group-active' : ''} ${isHovered ? 'is-hovered' : ''}`}
+                        onMouseEnter={() => setHoveredGroup(group.id)}
+                        onClick={() => setHoveredGroup(hoveredGroup === group.id ? null : group.id)}
+                      >
+                        <div className="ws-layer-menu__item-main">
+                          <span className="ws-layer-menu__sym">{group.symbol}</span>
+                          <div className="ws-layer-menu__text">
+                            <span className="ws-layer-menu__name">{group.title}</span>
+                            <span className="ws-layer-menu__sub">{group.subtitle}</span>
+                          </div>
+                        </div>
+                        <div className="ws-layer-menu__item-end">
+                          <span className="ws-layer-badge">{group.badge}</span>
+                          <ChevronRight size={12} className="ws-layer-menu__arrow" />
+                        </div>
+
+                        {/* Submenú desplegable flotante a la derecha */}
+                        {isHovered && (
+                          <div
+                            className="ws-layer-submenu"
+                            role="menu"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="ws-layer-submenu__header">
+                              {group.title} ({group.symbol})
+                            </div>
+                            {group.layers.map((layer) => {
+                              const isSelected = exploreLayerId === layer.id
+                              return (
+                                <button
+                                  key={layer.id}
+                                  type="button"
+                                  className={`ws-layer-subitem ${isSelected ? 'is-selected' : ''}`}
+                                  onClick={() => {
+                                    onDockTabChange('map')
+                                    onExploreLayerChange(layer.id)
+                                    setIsLayerMenuOpen(false)
+                                    setHoveredGroup(null)
+                                  }}
+                                  title={layer.title}
+                                >
+                                  <div className="ws-layer-subitem__check">
+                                    {isSelected && <Check size={13} strokeWidth={2.8} />}
+                                  </div>
+                                  <div className="ws-layer-subitem__info">
+                                    <div className="ws-layer-subitem__top">
+                                      <strong className="ws-layer-subitem__code">
+                                        {layer.shortLabel}
+                                      </strong>
+                                      <span className="ws-layer-subitem__tag">{layer.scale}</span>
+                                    </div>
+                                    <span className="ws-layer-subitem__desc">
+                                      {layer.fullLabel}
+                                    </span>
+                                  </div>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
 
             <label className="ws-ribbon__inline-field" title="Paleta científica aplicada por LUT sobre el raster en EPSG:3857">
               <span>Rampa:</span>

@@ -287,7 +287,8 @@ button:disabled {
   gap: 2px;
   padding: 4px 8px 3px;
   background: #f3f4f6;
-  overflow-x: auto;
+  position: relative;
+  z-index: 40;
 }
 
 .ws-ribbon__group {
@@ -485,6 +486,268 @@ button:disabled {
   width: 64px;
   accent-color: var(--color-primary);
   cursor: pointer;
+}
+
+/* ---------- Selector Jerárquico de Capas SAR GCOV con Submenús ---------- */
+
+.ws-layer-select-field {
+  position: relative;
+  user-select: none;
+}
+
+.ws-layer-select-prefix {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.ws-layer-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 6px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #0369a1;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.ws-layer-select-btn:hover,
+.ws-layer-select-btn.is-active {
+  background: #f0f9ff;
+  border-color: #0284c7;
+  color: #0284c7;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.2);
+}
+
+.ws-layer-select-icon {
+  color: #0284c7;
+  flex-shrink: 0;
+}
+
+.ws-layer-select-val {
+  white-space: nowrap;
+}
+
+.ws-layer-select-chevron {
+  color: #64748b;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.ws-layer-select-chevron.is-open {
+  transform: rotate(180deg);
+  color: #0284c7;
+}
+
+/* Menú Principal Flotante */
+.ws-layer-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.18), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  z-index: 2000;
+  padding: 4px 0;
+  animation: ws-fade-in 0.1s ease-out;
+}
+
+.ws-layer-menu__header {
+  padding: 5px 10px 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 2px;
+}
+
+.ws-layer-menu__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+  font-size: 11.5px;
+  color: #1e293b;
+}
+
+.ws-layer-menu__item:hover,
+.ws-layer-menu__item.is-hovered {
+  background: #f0f9ff;
+  color: #0284c7;
+}
+
+.ws-layer-menu__item.is-group-active {
+  background: #f8fafc;
+}
+
+.ws-layer-menu__item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-layer-menu__sym {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  background: #e0f2fe;
+  color: #0284c7;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ws-layer-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ws-layer-menu__name {
+  font-weight: 600;
+  font-size: 11.5px;
+  color: #0f172a;
+}
+
+.ws-layer-menu__sub {
+  font-size: 9.5px;
+  color: #64748b;
+  font-weight: normal;
+}
+
+.ws-layer-menu__item-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-layer-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: #f1f5f9;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.ws-layer-menu__arrow {
+  color: #94a3b8;
+  transition: transform 0.1s ease;
+}
+
+.ws-layer-menu__item:hover .ws-layer-menu__arrow,
+.ws-layer-menu__item.is-hovered .ws-layer-menu__arrow {
+  color: #0284c7;
+  transform: translateX(1px);
+}
+
+/* Submenú Desplegable Flotante (Cascading Flyout) */
+.ws-layer-submenu {
+  position: absolute;
+  top: -4px;
+  left: 100%;
+  min-width: 280px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.22), 0 8px 10px -6px rgba(0, 0, 0, 0.12);
+  z-index: 2001;
+  padding: 4px 0;
+  animation: ws-fade-in 0.1s ease-out;
+}
+
+.ws-layer-submenu__header {
+  padding: 5px 10px 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #0369a1;
+  background: #f0f9ff;
+  border-bottom: 1px solid #e0f2fe;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+}
+
+.ws-layer-subitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  font-family: inherit;
+}
+
+.ws-layer-subitem:hover {
+  background: #f0f9ff;
+}
+
+.ws-layer-subitem.is-selected {
+  background: #e0f2fe;
+}
+
+.ws-layer-subitem__check {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0284c7;
+  flex-shrink: 0;
+}
+
+.ws-layer-subitem__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+}
+
+.ws-layer-subitem__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ws-layer-subitem__code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ws-layer-subitem__tag {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  color: #64748b;
+}
+
+.ws-layer-subitem__desc {
+  font-size: 10px;
+  color: #64748b;
 }
 
 /* ---------- Cabeceras de Panel Acoplado (Tabs Estilo COMSOL) ---------- */
