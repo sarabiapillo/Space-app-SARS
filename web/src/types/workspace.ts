@@ -61,6 +61,14 @@ export interface SolarSimulationState {
   sunAngle: number
   /** Intensidad de calor / radiación proyectada (0 a 100%). */
   radiationIntensity: number
+  /** ID de la zona o ROI seleccionada (ej. 'sumidero', 'chicoasen', 'tuxtla', 'sancristobal', 'custom_roi', 'current_view'). */
+  selectedZoneId?: string
+  /** URL de la imagen PNG de previsualización generada por el backend (/api/solar/simulations/.../preview/incident). */
+  rasterPreviewUrl?: string | null
+  /** Límites geográficos de la capa de radiación calculada [west, south, east, north]. */
+  rasterBounds?: [number, number, number, number] | null
+  /** Si se debe superponer la capa ráster calculada sobre el mapa. */
+  showRasterOnMap?: boolean
 }
 
 /** Metadatos de la escena y pila NISAR GCOV asociada al mapa (Contrato C1 real en `data/raw/`). */

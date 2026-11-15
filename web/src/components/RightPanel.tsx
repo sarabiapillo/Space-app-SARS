@@ -1,8 +1,86 @@
 import { useId, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, Sun, X, Zap } from 'lucide-react'
+import {
+  AlertCircle,
+  CheckCircle2,
+  Download,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Layers,
+  Loader2,
+  MapPin,
+  Sun,
+  X,
+  Zap,
+} from 'lucide-react'
 import type { LngLat, SolarSimulationState } from '../types/workspace'
 import { getColormapSpec } from '../utils/colormapLut'
 import { runSolarSimulation, type SolarSimulationResponse } from '../api/client'
+
+export interface SolarZoneOption {
+  id: string
+  name: string
+  shortLabel: string
+  center: LngLat
+  zoom: number
+  description: string
+  bbox?: [number, number, number, number] // [west, south, east, north]
+}
+
+export const SOLAR_PRESET_ZONES: readonly SolarZoneOption[] = [
+  {
+    id: 'sumidero',
+    name: 'ROI Principal: Cañón del Sumidero (Chiapas)',
+    shortLabel: 'Sumidero (ROI Oficial)',
+    center: [-93.0901, 16.7600],
+    zoom: 13,
+    description: 'Relieve escarpado del Cañón del Sumidero (ROI oficial NISAR)',
+    bbox: [-93.1081, 16.7420, -93.0721, 16.7780],
+  },
+  {
+    id: 'chicoasen',
+    name: 'Presa Chicoasén (M. Moreno Torres)',
+    shortLabel: 'Presa Chicoasén',
+    center: [-93.1380, 16.9450],
+    zoom: 13,
+    description: 'Cañón profundo y central hidroeléctrica de gran desnivel',
+    bbox: [-93.1560, 16.9270, -93.1200, 16.9630],
+  },
+  {
+    id: 'tuxtla',
+    name: 'Valle de Tuxtla Gutiérrez',
+    shortLabel: 'Tuxtla Gutiérrez',
+    center: [-93.1180, 16.7530],
+    zoom: 13,
+    description: 'Cuenca urbana y meseta central chiapaneca',
+    bbox: [-93.1360, 16.7350, -93.1000, 16.7710],
+  },
+  {
+    id: 'sancristobal',
+    name: 'Altos de Chiapas (San Cristóbal)',
+    shortLabel: 'Altos de Chiapas',
+    center: [-92.6370, 16.7370],
+    zoom: 13,
+    description: 'Macizo montañoso de alta elevación (~2,200 m)',
+    bbox: [-92.6550, 16.7190, -92.6190, 16.7550],
+  },
+  {
+    id: 'current_view',
+    name: 'Vista actual en el mapa',
+    shortLabel: 'Vista Actual',
+    center: [-93.0901, 16.7600],
+    zoom: 13,
+    description: 'Calcula la simulación centrada en la cámara visible',
+  },
+  {
+    id: 'custom_roi',
+    name: 'Polígono de Recorte ROI (Manual)',
+    shortLabel: 'Recorte Manual',
+    center: [-93.0901, 16.7600],
+    zoom: 13,
+    description: 'Centrado en el polígono trazado con la herramienta de recorte',
+  },
+]
 
 interface SolarPanelProps {
   solar: SolarSimulationState
@@ -10,6 +88,7 @@ interface SolarPanelProps {
   onClose: () => void
   center?: LngLat
   croppedRegion?: LngLat[] | null
+  onFlyToZone?: (center: LngLat, zoom?: number) => void
 }
 
 /** Convierte el ángulo solar [0..180] en hora solar (06:00 a 18:00). */
@@ -32,15 +111,27 @@ function sunArcCoords(angleDeg: number): { x: number; y: number } {
   }
 }
 
-export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegion }: SolarPanelProps) {
+export function RightPanel({
+  solar,
+  onSolarChange,
+  onClose,
+  center,
+  croppedRegion,
+  onFlyToZone,
+}: SolarPanelProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState(false)
   const [isSimulating, setIsSimulating] = useState(false)
   const [simulationResult, setSimulationResult] = useState<SolarSimulationResponse | null>(null)
   const [simulationError, setSimulationError] = useState<string | null>(null)
 
+  const selectedZoneId = solar.selectedZoneId || 'sumidero'
+  const currentZone =
+    SOLAR_PRESET_ZONES.find((z) => z.id === selectedZoneId) || SOLAR_PRESET_ZONES[0]
+
   const angleId = useId()
   const radId = useId()
+  const zoneSelectId = useId()
   const infernoSpec = getColormapSpec('inferno')
 
   const { x: sunX, y: sunY } = sunArcCoords(solar.sunAngle)
@@ -59,8 +150,33 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
       ...solar,
       enabled: true,
       sunAngle: angle,
-      radiationIntensity: solar.radiationIntensity === 0 ? 60 : solar.radiationIntensity,
+      radiationIntensity: solar.radiationIntensity === 0 ? 65 : solar.radiationIntensity,
     })
+  }
+
+  const handleSelectZone = (zoneId: string) => {
+    const targetZone = SOLAR_PRESET_ZONES.find((z) => z.id === zoneId)
+    if (!targetZone) return
+
+    onSolarChange({
+      ...solar,
+      selectedZoneId: zoneId,
+    })
+
+    if (zoneId === 'current_view') {
+      // No vuela, se queda en la vista actual
+      return
+    }
+
+    if (zoneId === 'custom_roi' && croppedRegion && croppedRegion.length >= 3) {
+      const cLon = croppedRegion.reduce((acc, p) => acc + p[0], 0) / croppedRegion.length
+      const cLat = croppedRegion.reduce((acc, p) => acc + p[1], 0) / croppedRegion.length
+      onFlyToZone?.([cLon, cLat], 13.5)
+      return
+    }
+
+    // Vuela a la zona predefinida
+    onFlyToZone?.(targetZone.center, targetZone.zoom)
   }
 
   const handleRunBackendSimulation = async () => {
@@ -68,14 +184,19 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
     setSimulationError(null)
 
     try {
-      // 1. Construir ROI seguro (<10 km diagonal para respetar límites de NASADEM en memoria)
-      let cLon = center ? center[0] : -93.09
-      let cLat = center ? center[1] : 16.76
-      if (croppedRegion && croppedRegion.length >= 3) {
+      // 1. Determinar centro y coordenadas de la zona seleccionada
+      let cLon = currentZone.center[0]
+      let cLat = currentZone.center[1]
+
+      if (selectedZoneId === 'current_view' && center) {
+        cLon = center[0]
+        cLat = center[1]
+      } else if (selectedZoneId === 'custom_roi' && croppedRegion && croppedRegion.length >= 3) {
         cLon = croppedRegion.reduce((acc, p) => acc + p[0], 0) / croppedRegion.length
         cLat = croppedRegion.reduce((acc, p) => acc + p[1], 0) / croppedRegion.length
       }
-      const delta = 0.018 // ~2km radio (4km x 4km box)
+
+      const delta = 0.018 // ~2km radio (4km x 4km box, diagonal ~5.7km, strictly within NASADEM limits)
       const roiPolygon: number[][][] = [[
         [Number((cLon - delta).toFixed(5)), Number((cLat - delta).toFixed(5))],
         [Number((cLon + delta).toFixed(5)), Number((cLat - delta).toFixed(5))],
@@ -90,7 +211,7 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
       const mm = String(totalMinutes % 60).padStart(2, '0')
       const datetimeLocal = `2026-06-21T${hh}:${mm}:00`
 
-      const intensity = Math.max(1, Math.min(100, Math.round(solar.radiationIntensity || 75)))
+      const intensity = Math.max(1, Math.min(100, Math.round(solar.radiationIntensity || 65)))
 
       const res = await runSolarSimulation({
         roi: {
@@ -103,11 +224,36 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
       })
 
       setSimulationResult(res)
+
+      // Actualizar estado solar para renderizar el ráster en el mapa MapLibre
+      onSolarChange({
+        ...solar,
+        rasterPreviewUrl: res.layers.incident.preview_url,
+        rasterBounds: res.preview?.bounds_lonlat ?? [
+          Number((cLon - delta).toFixed(5)),
+          Number((cLat - delta).toFixed(5)),
+          Number((cLon + delta).toFixed(5)),
+          Number((cLat + delta).toFixed(5)),
+        ],
+        showRasterOnMap: true,
+      })
+
+      // Enfocar suavemente el mapa en el ráster generado
+      onFlyToZone?.([cLon, cLat], 13.5)
     } catch (err) {
-      setSimulationError(err instanceof Error ? err.message : 'Error al conectar con la API de simulación')
+      setSimulationError(
+        err instanceof Error ? err.message : 'Error al conectar con la API de simulación'
+      )
     } finally {
       setIsSimulating(false)
     }
+  }
+
+  const handleToggleRasterOnMap = () => {
+    onSolarChange({
+      ...solar,
+      showRasterOnMap: !(solar.showRasterOnMap ?? true),
+    })
   }
 
   return (
@@ -131,6 +277,34 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
         >
           <X size={14} />
         </button>
+      </div>
+
+      {/* Selector de Región de Interés (ROI) */}
+      <div className="solar-zone-group">
+        <label htmlFor={zoneSelectId} className="solar-zone-label">
+          <MapPin size={12} className="solar-zone-label__icon" />
+          <span>Zona / Región de Interés (ROI):</span>
+        </label>
+        <select
+          id={zoneSelectId}
+          value={selectedZoneId}
+          onChange={(e) => handleSelectZone(e.target.value)}
+          className="solar-zone-select"
+        >
+          {SOLAR_PRESET_ZONES.map((zone) => {
+            if (zone.id === 'custom_roi' && (!croppedRegion || croppedRegion.length < 3)) {
+              return null
+            }
+            return (
+              <option key={zone.id} value={zone.id}>
+                {zone.name}
+              </option>
+            )
+          })}
+        </select>
+        <div className="solar-zone-info">
+          <span>{currentZone.description}</span>
+        </div>
       </div>
 
       {/* Recuadro técnico con arco Este a Oeste y esfera solar arrastrable */}
@@ -186,7 +360,7 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
             strokeDasharray="3 3"
           />
 
-          {/* Silueta técnica del relieve (Cañón del Sumidero / Chiapas) */}
+          {/* Silueta técnica del relieve */}
           <polygon
             points="96,96 114,80 128,89 144,74 166,96"
             fill="#CBD5E1"
@@ -295,7 +469,7 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
           className="solar-api-btn"
           disabled={isSimulating}
           onClick={handleRunBackendSimulation}
-          title="Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend"
+          title="Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend para la ROI seleccionada"
         >
           {isSimulating ? (
             <>
@@ -305,7 +479,7 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
           ) : (
             <>
               <Zap size={13} />
-              <span>Calcular con API NASADEM</span>
+              <span>Calcular Simulación en Mapa</span>
             </>
           )}
         </button>
@@ -314,6 +488,39 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
           <div className="solar-api-error">
             <AlertCircle size={13} />
             <span>{simulationError}</span>
+          </div>
+        )}
+
+        {/* Capa superpuesta en el mapa */}
+        {solar.rasterPreviewUrl && (
+          <div className="solar-map-toggle">
+            <button
+              type="button"
+              className={`solar-map-toggle__btn ${solar.showRasterOnMap !== false ? 'is-active' : ''}`}
+              onClick={handleToggleRasterOnMap}
+              title="Mostrar u ocultar la capa ráster de radiación en el mapa"
+            >
+              {solar.showRasterOnMap !== false ? <Eye size={13} /> : <EyeOff size={13} />}
+              <span>
+                {solar.showRasterOnMap !== false
+                  ? 'Capa de Radiación en Mapa: Activa'
+                  : 'Capa en Mapa: Oculta'}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="solar-map-toggle__fly"
+              onClick={() => {
+                if (solar.rasterBounds) {
+                  const [w, s, e, n] = solar.rasterBounds
+                  onFlyToZone?.([(w + e) / 2, (s + n) / 2], 13.5)
+                }
+              }}
+              title="Enfocar mapa en el área calculada"
+            >
+              <Layers size={12} />
+              <span>Enfocar</span>
+            </button>
           </div>
         )}
 
@@ -357,7 +564,7 @@ export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegio
                 href={simulationResult.layers.incident.export_url}
                 download="incident.tif"
                 className="solar-api-link"
-                title="Descargar GeoTIFF de 32-bit Float con la irradiancia incidente calculada"
+                title="Descargar GeoTIFF Float32 con la irradiancia incidente calculada"
               >
                 <Download size={12} />
                 <span>incident.tif</span>

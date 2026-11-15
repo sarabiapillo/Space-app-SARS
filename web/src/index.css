@@ -1748,6 +1748,55 @@ button:disabled {
   font-size: 10.5px;
 }
 
+/* Selector de ROI / Zonas de Estudio en el Simulador Solar */
+.solar-zone-group {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: #f1f5f9;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+}
+
+.solar-zone-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.solar-zone-label__icon {
+  color: #dd513a;
+}
+
+.solar-zone-select {
+  width: 100%;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-text);
+  background: #ffffff;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.solar-zone-select:focus {
+  outline: none;
+  border-color: #dd513a;
+  box-shadow: 0 0 0 1px #dd513a;
+}
+
+.solar-zone-info {
+  margin-top: 3px;
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+  line-height: 1.25;
+}
+
 .solar-arc-box {
   margin-bottom: 9px;
   padding: 4px;
@@ -1863,6 +1912,64 @@ button:disabled {
   border: 1px solid #fecaca;
   color: #b91c1c;
   font-size: 10.5px;
+}
+
+/* Control para alternar visibilidad de la capa ráster en el mapa */
+.solar-map-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 6px;
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+}
+
+.solar-map-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.solar-map-toggle__btn.is-active {
+  color: #047857;
+  font-weight: 700;
+}
+
+.solar-map-toggle__btn:hover {
+  background: #f8fafc;
+}
+
+.solar-map-toggle__fly {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--color-text);
+  background: #f1f5f9;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.solar-map-toggle__fly:hover {
+  background: #e2e8f0;
 }
 
 .solar-api-results {

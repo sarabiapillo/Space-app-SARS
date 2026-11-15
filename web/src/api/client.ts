@@ -443,6 +443,13 @@ export interface SolarSimulationResponse {
       export_url: string
     }
   }
+  preview?: {
+    crs: string
+    bounds_lonlat: [number, number, number, number]
+    width: number
+    height: number
+    palette: string
+  }
   sample_url: string
 }
 

@@ -1080,6 +1080,96 @@ export function MapCanvas({
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#420A68')
   }, [solar, mapReady])
 
+  // Superponer en el mapa el ráster generado por la simulación solar de NASADEM (escala Inferno)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+
+    const SOLAR_CALC_SOURCE = 'solar-calc-raster-source'
+    const SOLAR_CALC_LAYER = 'solar-calc-raster-layer'
+
+    const shouldShow =
+      solar.enabled &&
+      Boolean(solar.rasterPreviewUrl) &&
+      Array.isArray(solar.rasterBounds) &&
+      solar.rasterBounds.length === 4 &&
+      solar.showRasterOnMap !== false
+
+    if (!shouldShow) {
+      if (map.getLayer(SOLAR_CALC_LAYER)) {
+        map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'none')
+      }
+      return
+    }
+
+    const bounds = solar.rasterBounds!
+    const coords: [LngLat, LngLat, LngLat, LngLat] = [
+      [bounds[0], bounds[3]], // NW: [west, north]
+      [bounds[2], bounds[3]], // NE: [east, north]
+      [bounds[2], bounds[1]], // SE: [east, south]
+      [bounds[0], bounds[1]], // SW: [west, south]
+    ]
+
+    const opacity = Math.max(0.2, (solar.radiationIntensity / 100) * 0.95)
+
+    const existingSource = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
+    if (existingSource) {
+      existingSource.updateImage({
+        url: solar.rasterPreviewUrl!,
+        coordinates: coords,
+      })
+      if (map.getLayer(SOLAR_CALC_LAYER)) {
+        map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'visible')
+        map.setPaintProperty(SOLAR_CALC_LAYER, 'raster-opacity', opacity)
+      }
+    } else {
+      try {
+        map.addSource(SOLAR_CALC_SOURCE, {
+          type: 'image',
+          url: solar.rasterPreviewUrl!,
+          coordinates: coords,
+        })
+        map.addLayer(
+          {
+            id: SOLAR_CALC_LAYER,
+            type: 'raster',
+            source: SOLAR_CALC_SOURCE,
+            paint: {
+              'raster-opacity': opacity,
+              'raster-fade-duration': 150,
+            },
+          },
+          map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
+        )
+      } catch (err) {
+        console.warn('No se pudo superponer el ráster solar en el mapa:', err)
+      }
+    }
+  }, [
+    mapReady,
+    solar.enabled,
+    solar.rasterPreviewUrl,
+    solar.rasterBounds,
+    solar.showRasterOnMap,
+    solar.radiationIntensity,
+  ])
+
+  const handleFlyToZone = useCallback(
+    (targetCenter: LngLat, targetZoom: number = 13) => {
+      const map = mapRef.current
+      if (map) {
+        map.flyTo({
+          center: [targetCenter[0], targetCenter[1]],
+          zoom: targetZoom,
+          duration: 900,
+          essential: true,
+        })
+      }
+      onViewChange?.({ centro: targetCenter, zoom: targetZoom }, { userInitiated: true })
+    },
+    [onViewChange],
+  )
+
   // Volar a la vista de la copia seleccionada
   useEffect(() => {
     const map = mapRef.current
@@ -2709,6 +2799,7 @@ export function MapCanvas({
             onClose={() => onSolarChange({ ...solar, enabled: false })}
             center={view.centro}
             croppedRegion={croppedRegion}
+            onFlyToZone={handleFlyToZone}
           />
         )}
       </div>
