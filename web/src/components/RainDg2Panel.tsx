@@ -1,6 +1,7 @@
 import { useId, useState, type CSSProperties } from 'react'
 import {
   AlertCircle,
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -43,6 +44,7 @@ export function RainDg2Panel({
   const [collapsed, setCollapsed] = useState(false)
   const [isSimulating, setIsSimulating] = useState(false)
   const [simulationError, setSimulationError] = useState<string | null>(null)
+  const [showEquations, setShowEquations] = useState(false)
 
   const zoneSelectId = useId()
   const amountSliderId = useId()
@@ -459,7 +461,21 @@ export function RainDg2Panel({
                 </div>
               </div>
 
-              {/* Estadísticas y métricas hidrológicas */}
+              {/* Alerta de riesgo hidráulico */}
+              {flood.stats?.riskLevel && (
+                <div
+                  className={`ws-rain-risk-badge ws-rain-risk-badge--${flood.stats.riskLevel.toLowerCase()}`}
+                  style={{ marginTop: '8px' }}
+                >
+                  <ShieldAlert size={15} />
+                  <div>
+                    <strong>Riesgo Hidráulico: {flood.stats.riskLevel}</strong>
+                    <span>{flood.stats.riskDescription}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Estadísticas y métricas hidrológicas completas */}
               {flood.stats && (
                 <div className="ws-rain-results-grid" style={{ marginTop: '8px' }}>
                   <div className="ws-rain-result-box">
@@ -468,14 +484,14 @@ export function RainDg2Panel({
                       {flood.stats.floodedAreaKm2.toFixed(2)} km²
                     </strong>
                     <span className="ws-rain-result-box__sub">
-                      ({flood.stats.waterSurfaceHa.toFixed(0)} ha · {flood.stats.floodedAreaPct.toFixed(1)}% ROI)
+                      {flood.stats.waterSurfaceHa.toFixed(0)} ha · {flood.stats.floodedAreaPct.toFixed(1)}% de ROI
                     </span>
                   </div>
 
                   <div className="ws-rain-result-box">
-                    <span className="ws-rain-result-box__label">Calado Máximo</span>
+                    <span className="ws-rain-result-box__label">Calado (Profundidad)</span>
                     <strong className="ws-rain-result-box__val">
-                      {flood.stats.maxDepthM.toFixed(2)} m
+                      Máx: {flood.stats.maxDepthM.toFixed(2)} m
                     </strong>
                     <span className="ws-rain-result-box__sub">
                       Media: {flood.stats.meanDepthM.toFixed(2)} m
@@ -483,23 +499,116 @@ export function RainDg2Panel({
                   </div>
 
                   <div className="ws-rain-result-box">
-                    <span className="ws-rain-result-box__label">Volumen Inundación</span>
+                    <span className="ws-rain-result-box__label">Caudal Pico Estimado</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#0369a1' }}>
+                      {flood.stats.peakDischargeM3s !== undefined ? `${flood.stats.peakDischargeM3s} m³/s` : '—'}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">Descarga máxima Q</span>
+                  </div>
+
+                  <div className="ws-rain-result-box">
+                    <span className="ws-rain-result-box__label">Velocidad de Flujo</span>
                     <strong className="ws-rain-result-box__val">
-                      {(flood.stats.totalVolumeM3 / 1_000_000).toFixed(2)} Mm³
+                      {flood.stats.meanVelocityMs !== undefined ? `${flood.stats.meanVelocityMs} m/s` : '—'}
                     </strong>
                     <span className="ws-rain-result-box__sub">
-                      {flood.stats.totalVolumeM3.toLocaleString()} m³
+                      Máx: {flood.stats.maxVelocityMs !== undefined ? `${flood.stats.maxVelocityMs} m/s` : '—'}
                     </span>
                   </div>
 
                   <div className="ws-rain-result-box">
-                    <span className="ws-rain-result-box__label">Relieve / DEM</span>
-                    <strong className="ws-rain-result-box__val" style={{ color: '#0284c7' }}>
-                      {flood.stats.elevMinM !== undefined && flood.stats.elevMaxM !== undefined
-                        ? `${flood.stats.elevMinM} m – ${flood.stats.elevMaxM} m`
-                        : 'NASADEM HGT 30m'}
+                    <span className="ws-rain-result-box__label">Régimen / Froude</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#854d0e' }}>
+                      Fr = {flood.stats.froudeNumber !== undefined ? flood.stats.froudeNumber : '—'}
                     </strong>
-                    <span className="ws-rain-result-box__sub">Topografía Real UTM</span>
+                    <span className="ws-rain-result-box__sub">
+                      {flood.stats.froudeRegime ?? 'Subcrítico'}
+                    </span>
+                  </div>
+
+                  <div className="ws-rain-result-box">
+                    <span className="ws-rain-result-box__label">Tiempo Concentración</span>
+                    <strong className="ws-rain-result-box__val">
+                      {flood.stats.timeOfConcentrationMin !== undefined ? `${flood.stats.timeOfConcentrationMin} min` : '—'}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      Tc: {flood.stats.timeOfConcentrationHours !== undefined ? `${flood.stats.timeOfConcentrationHours} h` : '—'}
+                    </span>
+                  </div>
+
+                  <div className="ws-rain-result-box">
+                    <span className="ws-rain-result-box__label">Balance Precipitación</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#0284c7' }}>
+                      {flood.stats.effectiveRunoffMm !== undefined ? `${flood.stats.effectiveRunoffMm} mm neto` : '—'}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      Infiltrado: {flood.stats.infiltratedMm !== undefined ? `${flood.stats.infiltratedMm} mm` : '—'}
+                    </span>
+                  </div>
+
+                  <div className="ws-rain-result-box">
+                    <span className="ws-rain-result-box__label">Cota Superficie Agua</span>
+                    <strong className="ws-rain-result-box__val">
+                      {flood.stats.waterLevelMinM !== undefined && flood.stats.waterLevelMaxM !== undefined
+                        ? `${flood.stats.waterLevelMinM} – ${flood.stats.waterLevelMaxM} m`
+                        : flood.stats.elevMinM !== undefined
+                        ? `${flood.stats.elevMinM} – ${flood.stats.elevMaxM} m`
+                        : '—'}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">Elevación η (s.n.m.)</span>
+                  </div>
+
+                  <div className="ws-rain-result-box" style={{ gridColumn: 'span 2' }}>
+                    <span className="ws-rain-result-box__label">Volumen Acumulado y Almacenamiento</span>
+                    <strong className="ws-rain-result-box__val">
+                      {(flood.stats.totalVolumeM3 / 1_000_000).toFixed(2)} Mm³ totales
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      {flood.stats.totalVolumeM3.toLocaleString()} m³ caídos · Inundación efectiva: {flood.stats.floodedVolumeM3 ? `${flood.stats.floodedVolumeM3.toLocaleString()} m³` : 'calculada'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Botón interactivo para ver y revisar las ecuaciones físicas */}
+              <button
+                type="button"
+                className="ws-rain-eq-toggle"
+                onClick={() => setShowEquations((prev) => !prev)}
+                aria-expanded={showEquations}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <BookOpen size={12} />
+                  <span>Ecuaciones Hidráulicas del Simulador</span>
+                </span>
+                {showEquations ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+
+              {showEquations && (
+                <div className="ws-rain-eq-content">
+                  <div className="ws-rain-eq-item">
+                    <span>1. Conservación de Masa 2D (Saint-Venant / SWE):</span>
+                    <code>∂t h + ∇·(h u) = r(t) - i(t)</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>2. Dinámica de Resistencia de Manning:</span>
+                    <code>v = (1/n) · R_h^(2/3) · S^(1/2)  [n = 0.035 s/m^(1/3)]</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>3. Calado Normal por Celda en Cauce:</span>
+                    <code>h = [Q · n / (B · √S)]^(3/5)</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>4. Enrutamiento Topográfico D8 (Steepest Descent):</span>
+                    <code>S_max = max_k [(z - z_k) / d_k]</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>5. Tiempo de Concentración de Cuenca (Kirpich):</span>
+                    <code>Tc = 0.0662 · (L^0.77) / (S^0.385)</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>6. Pérdida Hidrológica e Infiltración (SCS-CN):</span>
+                    <code>P_ef = 0.65 · P_total  |  Infiltración I = 0.35 · P_total</code>
                   </div>
                 </div>
               )}

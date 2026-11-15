@@ -7,11 +7,29 @@ export interface FloodSimulationStats {
   rainfallMm: number
   durationHours: number
   totalVolumeM3: number
+  effectiveVolumeM3?: number
+  infiltratedVolumeM3?: number
+  floodedVolumeM3?: number
+  effectiveRunoffMm?: number
+  infiltratedMm?: number
   floodedAreaKm2: number
   floodedAreaPct: number
   maxDepthM: number
   meanDepthM: number
   waterSurfaceHa: number
+  peakDischargeM3s?: number
+  maxVelocityMs?: number
+  meanVelocityMs?: number
+  froudeNumber?: number
+  froudeRegime?: string
+  timeOfConcentrationMin?: number
+  timeOfConcentrationHours?: number
+  elevMinM?: number
+  elevMaxM?: number
+  waterLevelMinM?: number
+  waterLevelMaxM?: number
+  riskLevel?: string
+  riskDescription?: string
 }
 
 export interface GeneratedFloodRaster {
@@ -140,45 +158,52 @@ export function generateFloodRaster(
       // Aplicar factor de precipitación
       const finalDepth = baseDepth * rainFactor
 
-      if (finalDepth >= 0.03) {
+      if (finalDepth >= 0.02) {
         wetCellCount++
         totalDepthSum += finalDepth
         if (finalDepth > maxDepth) maxDepth = finalDepth
 
-        // Escala continua y agradable de azul hidrológico (cerúleo suave -> turquesa -> azur -> cobalto oceánico)
+        // Escala cromática vibrante, contrastada y de alta visibilidad para agua/inundación
         let r = 0
         let g = 0
         let b = 0
         let a = 0
 
-        if (finalDepth < 0.15) {
-          // 0.03m a 0.15m: Lámina tenue / Azul cerúleo suave cristalino
-          const t = (finalDepth - 0.03) / 0.12
-          r = Math.round(125 * (1 - t) + 56 * t)
-          g = Math.round(211 * (1 - t) + 189 * t)
-          b = Math.round(252 * (1 - t) + 248 * t)
-          a = Math.round(75 + 65 * t)
-        } else if (finalDepth < 0.40) {
-          // 0.15m a 0.40m: Acumulación moderada / Azul turquesa laguna
-          const t = (finalDepth - 0.15) / 0.25
-          r = Math.round(56 * (1 - t) + 14 * t)
-          g = Math.round(189 * (1 - t) + 165 * t)
-          b = Math.round(248 * (1 - t) + 233 * t)
-          a = Math.round(140 + 40 * t)
-        } else if (finalDepth < 1.00) {
-          // 0.40m a 1.00m: Calado profundo / Azul azur cobalto
-          const t = (finalDepth - 0.40) / 0.60
-          r = Math.round(14 * (1 - t) + 2 * t)
-          g = Math.round(165 * (1 - t) + 132 * t)
-          b = Math.round(233 * (1 - t) + 199 * t)
-          a = Math.round(180 + 35 * t)
+        if (finalDepth < 0.10) {
+          // 0.02m a 0.10m: Cian cristalino luminoso (glowing cyan / visibilidad en satélite)
+          const t = (finalDepth - 0.02) / 0.08
+          r = Math.round(34 * (1 - t) + 6 * t)
+          g = Math.round(211 * (1 - t) + 182 * t)
+          b = Math.round(238 * (1 - t) + 212 * t)
+          a = Math.round(140 + 35 * t)
+        } else if (finalDepth < 0.30) {
+          // 0.10m a 0.30m: Turquesa brillante
+          const t = (finalDepth - 0.10) / 0.20
+          r = Math.round(6 * (1 - t) + 2 * t)
+          g = Math.round(182 * (1 - t) + 132 * t)
+          b = Math.round(212 * (1 - t) + 199 * t)
+          a = Math.round(175 + 35 * t)
+        } else if (finalDepth < 0.80) {
+          // 0.30m a 0.80m: Azul azur zafiro
+          const t = (finalDepth - 0.30) / 0.50
+          r = Math.round(2 * (1 - t) + 29 * t)
+          g = Math.round(132 * (1 - t) + 78 * t)
+          b = Math.round(199 * (1 - t) + 216 * t)
+          a = Math.round(210 + 25 * t)
+        } else if (finalDepth < 1.50) {
+          // 0.80m a 1.50m: Azul cobalto real
+          const t = (finalDepth - 0.80) / 0.70
+          r = Math.round(29 * (1 - t) + 30 * t)
+          g = Math.round(78 * (1 - t) + 58 * t)
+          b = Math.round(216 * (1 - t) + 138 * t)
+          a = Math.round(235 + 15 * t)
         } else {
-          // >= 1.00m: Cauce principal / cañón hídrico / Azul marino profundo
-          const t = Math.min(1.0, (finalDepth - 1.0) / 2.0)
-          r = Math.round(2 * (1 - t) + 23 * t)
-          g = Math.round(132 * (1 - t) + 37 * t)
-          b = Math.round(199 * (1 - t) + 84 * t)
-          a = Math.round(215 + 25 * t)
+          // >= 1.50m: Azul marino profundo / índigo abisal
+          const t = Math.min(1.0, (finalDepth - 1.50) / 2.0)
+          r = Math.round(30 * (1 - t) + 23 * t)
+          g = Math.round(58 * (1 - t) + 37 * t)
+          b = Math.round(138 * (1 - t) + 84 * t)
+          a = 250
         }
 
         data[idx] = r
@@ -202,7 +227,35 @@ export function generateFloodRaster(
   const floodedAreaKm2 = floodedAreaM2 / 1_000_000
   const floodedAreaPct = (wetCellCount / (width * height)) * 100
   const totalVolumeM3 = (totalAreaM2 * rainfallMm) / 1000
+  const effectiveRunoffMm = rainfallMm * 0.65
+  const infiltratedMm = rainfallMm * 0.35
+  const effectiveVolumeM3 = (totalAreaM2 * effectiveRunoffMm) / 1000
+  const infiltratedVolumeM3 = (totalAreaM2 * infiltratedMm) / 1000
+  const floodedVolumeM3 = totalDepthSum * cellAreaM2
   const meanDepthM = wetCellCount > 0 ? totalDepthSum / wetCellCount : 0
+
+  // Métricas hidráulicas (Manning y Kirpich)
+  const durationS = Math.max(600, durationHours * 3600)
+  const peakDischargeM3s = Number(((effectiveVolumeM3 / durationS) * 3.2).toFixed(2))
+  const maxVelocityMs = Number((Math.min(15, (1 / 0.035) * Math.pow(Math.max(0.1, maxDepth), 2 / 3) * Math.sqrt(0.05))).toFixed(2))
+  const meanVelocityMs = Number((Math.max(0.2, maxVelocityMs * 0.45)).toFixed(2))
+  const froudeNumber = Number((meanVelocityMs / Math.sqrt(9.81 * Math.max(0.1, meanDepthM))).toFixed(2))
+
+  const basinLengthM = Math.hypot(latDistM, lonDistM)
+  const timeOfConcentrationMin = Number((0.0662 * Math.pow(basinLengthM, 0.77) / Math.pow(0.06, 0.385)).toFixed(1))
+
+  let riskLevel = 'Leve'
+  let riskDescription = 'Encharcamientos laminares menores'
+  if (maxDepth >= 1.8) {
+    riskLevel = 'Crítico'
+    riskDescription = 'Desbordamiento torrencial en cauce principal'
+  } else if (maxDepth >= 0.8) {
+    riskLevel = 'Alto'
+    riskDescription = 'Inundación severa en márgenes fluviales'
+  } else if (maxDepth >= 0.3) {
+    riskLevel = 'Moderado'
+    riskDescription = 'Flujo concentrado en vados y torrenteras'
+  }
 
   return {
     dataUrl,
@@ -210,12 +263,26 @@ export function generateFloodRaster(
     stats: {
       rainfallMm,
       durationHours,
-      totalVolumeM3,
-      floodedAreaKm2,
-      floodedAreaPct,
-      maxDepthM: maxDepth,
-      meanDepthM,
-      waterSurfaceHa: floodedAreaM2 / 10_000,
+      totalVolumeM3: Math.round(totalVolumeM3),
+      effectiveVolumeM3: Math.round(effectiveVolumeM3),
+      infiltratedVolumeM3: Math.round(infiltratedVolumeM3),
+      floodedVolumeM3: Math.round(floodedVolumeM3),
+      effectiveRunoffMm: Number(effectiveRunoffMm.toFixed(1)),
+      infiltratedMm: Number(infiltratedMm.toFixed(1)),
+      floodedAreaKm2: Number(floodedAreaKm2.toFixed(3)),
+      floodedAreaPct: Number(floodedAreaPct.toFixed(1)),
+      maxDepthM: Number(maxDepth.toFixed(2)),
+      meanDepthM: Number(meanDepthM.toFixed(2)),
+      waterSurfaceHa: Number((floodedAreaM2 / 10_000).toFixed(1)),
+      peakDischargeM3s,
+      maxVelocityMs,
+      meanVelocityMs,
+      froudeNumber,
+      froudeRegime: froudeNumber > 1 ? 'Supercrítico / Rápido' : 'Subcrítico / Tranquilo',
+      timeOfConcentrationMin,
+      timeOfConcentrationHours: Number((timeOfConcentrationMin / 60).toFixed(2)),
+      riskLevel,
+      riskDescription,
     },
   }
 }

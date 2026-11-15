@@ -133,13 +133,29 @@ export interface FloodSimulationState {
     rainfallMm: number
     durationHours: number
     totalVolumeM3: number
+    effectiveVolumeM3?: number
+    infiltratedVolumeM3?: number
+    floodedVolumeM3?: number
+    effectiveRunoffMm?: number
+    infiltratedMm?: number
     floodedAreaKm2: number
     floodedAreaPct: number
     maxDepthM: number
     meanDepthM: number
     waterSurfaceHa: number
+    peakDischargeM3s?: number
+    maxVelocityMs?: number
+    meanVelocityMs?: number
+    froudeNumber?: number
+    froudeRegime?: string
+    timeOfConcentrationMin?: number
+    timeOfConcentrationHours?: number
     elevMinM?: number
     elevMaxM?: number
+    waterLevelMinM?: number
+    waterLevelMaxM?: number
+    riskLevel?: string
+    riskDescription?: string
   } | null
 }
 
