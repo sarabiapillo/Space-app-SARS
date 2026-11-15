@@ -314,20 +314,167 @@ máscara de sombra/layover (\path{shadowMaskingApplied = False}), así que esas 
 \subsection{\texttt{E\_incidencia.png}: ángulo de incidencia}
 
 \textbf{Qué muestra:} el ángulo de incidencia $\theta_i$ sobre la ROI, leído del cubo \path{metadata/radarGrid/incidenceAngle} del
-producto (malla de 500\,m). Función: \path{incidence()}; lectura: \path{read_incidence()} en \path{nisar_h5.py}.
+producto (malla de 500\,m). Es la capa de 500\,m de altura sobre el elipsoide. Función: \path{incidence()}; lectura:
+\path{read_incidence()} en \path{nisar_h5.py}. El programa \emph{no calcula} el ángulo: lo lee del producto.
 
-\textbf{Cálculo.} El programa no calcula el ángulo: lo lee del producto. El cubo trae una capa por altura sobre el elipsoide; se elige
-la capa más cercana a la altura pedida ($h_0 = 500$\,m, opción \path{--altura-incidencia}):
+\paragraph{Verificación.} Todo lo de esta subsección se comprobó con el \texttt{.h5} local de la escena
+(\path{H5 FILES/NISAR_L2_PR_GCOV_034_..._P05036_N_F_J_001.h5}) el 2026-11-14. Las descripciones entre comillas son los atributos
+\texttt{description} de cada capa. Los números son medias sobre los nodos del cubo dentro del rectángulo de la ROI. La figura añade un
+nodo de margen por lado, por eso su barra de color llega a $42.34^\circ$--$45.41^\circ$.
+
+\subsubsection*{1. El elipsoide de referencia (WGS84)}
+
+La Tierra se aproxima con un elipsoide de revolución, el WGS84:
+\begin{equation}
+  a = 6\,378\,137\ \text{m}, \qquad f = \frac{1}{298.257223563}, \qquad b = a(1-f) \approx 6\,356\,752\ \text{m},
+\end{equation}
+donde $a$ es el radio ecuatorial, $b$ el polar y $f$ el achatamiento. El producto declara sus alturas sobre este elipsoide:
+\path{heightAboveEllipsoid} = «Height values above WGS84 Ellipsoid».
+
+\begin{itemize}
+  \item \textbf{Altura elipsoidal $h$:} distancia sobre el elipsoide, medida a lo largo de su normal. Es la que usa el cubo.
+  \item \textbf{Altura ortométrica $H$} (la «altura sobre el nivel del mar» de los mapas y de muchos DEM): se mide sobre el geoide. Se
+        relacionan con la ondulación del geoide $N$, que depende del lugar:
+        \begin{equation}
+          h = H + N .
+        \end{equation}
+        Para usar la elevación de un DEM con este cubo hay que convertirla a altura elipsoidal.
+  \item \textbf{Normal al elipsoide $\hat{\mathbf n}$:} la dirección «hacia arriba» en cada punto. No pasa exactamente por el centro de
+        la Tierra (latitud geodésica $\neq$ geocéntrica). En la latitud de la ROI ($\approx 16.8^\circ$) la diferencia es de
+        $\approx 0.1^\circ$.
+  \item \textbf{Radio geocéntrico} del elipsoide a la latitud geodésica $\varphi$:
+        \begin{equation}
+          R(\varphi) = \sqrt{\frac{(a^2\cos\varphi)^2 + (b^2\sin\varphi)^2}{(a\cos\varphi)^2 + (b\sin\varphi)^2}}
+          \;\approx\; 6376.4\ \text{km} \quad (\varphi = 16.8^\circ).
+        \end{equation}
+\end{itemize}
+
+\subsubsection*{2. Definición del ángulo de incidencia}
+
+Según el producto, \path{incidenceAngle} es «the angle between the LOS vector and the normal to the ellipsoid at the target height».
+Con $\hat{\mathbf l}$ el vector unitario de la línea de vista (\emph{line of sight}, LOS), del blanco al sensor:
+\begin{equation}
+  \cos\theta_i = \hat{\mathbf l}\cdot\hat{\mathbf n}.
+  \label{eq:incidencia}
+\end{equation}
+El producto da $\hat{\mathbf l}$ en coordenadas locales este--norte--arriba (ENU), pero solo sus componentes horizontales
+(\path{losUnitVectorX} = este, \path{losUnitVectorY} = norte). Como el vector es unitario, la componente vertical (la normal) se obtiene así:
+\begin{equation}
+  l_U = \sqrt{1 - l_E^2 - l_N^2}, \qquad \theta_i = \arccos l_U .
+\end{equation}
+\textbf{Comprobación:} en la ROI, $\arccos l_U$ y \path{incidenceAngle} difieren como máximo en $1.1\times10^{-5}$ grados.
+
+En la ROI, $\overline{l_E} = 0.676$ y $\overline{l_N} = 0.153$: el sensor está al este (y algo al norte) de los blancos. Concuerda con
+el producto: órbita ascendente (\path{orbitPassDirection = Ascending}), que vuela hacia el norte, y radar que mira a la izquierda
+(\path{lookDirection = Left}), es decir, hacia el oeste.
+
+\textbf{Ángulo de incidencia elipsoidal frente a local.} $\theta_i$ usa la normal del \emph{elipsoide}, no la pendiente del terreno. El
+ángulo de incidencia \emph{local} usa la normal del terreno $\hat{\mathbf n}_t$, calculada con un DEM:
+\begin{equation}
+  \cos\theta_{\text{loc}} = \hat{\mathbf l}\cdot\hat{\mathbf n}_t .
+\end{equation}
+En una ladera que mira al radar, $\theta_{\text{loc}} < \theta_i$ (más señal, posible \emph{layover}); en una que le da la espalda,
+$\theta_{\text{loc}} > \theta_i$ (menos señal, posible sombra si $\theta_{\text{loc}} \ge 90^\circ$). La figura E \textbf{no} muestra
+$\theta_{\text{loc}}$.
+
+\subsubsection*{3. Geometría satélite--Tierra: por qué $\theta_i$ vale unos $44^\circ$}
+
+Considera el triángulo formado por el centro de la Tierra $O$, el satélite $S$ y el blanco $T$:
+\begin{itemize}
+  \item $R_s = |OS|$: radio de la órbita. Media de \path{metadata/orbit/position}: $R_s = 7128.6$\,km (unos 750\,km de altura).
+  \item $R_t = |OT| = R(\varphi) + h$: radio del blanco.
+  \item $r = |ST|$: distancia en línea de vista (\path{slantRange}). En la ROI va de 976.8 a 1018.1\,km (media 997.2\,km).
+  \item $\theta_e$: ángulo de elevación en el satélite, entre la LOS y la vertical del sensor (\path{elevationAngle}). Media:
+        $38.31^\circ$.
+  \item $\theta_i$: ángulo de incidencia en el blanco. Media: $43.87^\circ$ (capa de 0\,m).
+  \item $\alpha$: ángulo en el centro de la Tierra entre satélite y blanco.
+\end{itemize}
+
+\textbf{Ley de los senos.} En el triángulo $OST$, el ángulo en $S$ es $\theta_e$ y el ángulo en $T$ es $180^\circ - \theta_i$:
+\begin{equation}
+  \frac{R_t}{\sin\theta_e} = \frac{R_s}{\sin\theta_i}
+  \quad\Longrightarrow\quad
+  \sin\theta_i = \frac{R_s}{R_t}\,\sin\theta_e .
+  \label{eq:senos}
+\end{equation}
+Como $R_s > R_t$, siempre $\theta_i > \theta_e$: la curvatura de la Tierra hace que el blanco «vea» al radar más inclinado de lo que
+el radar lo mira a él.
+
+\textbf{Suma de ángulos.} En el mismo triángulo, $\theta_e + (180^\circ - \theta_i) + \alpha = 180^\circ$:
+\begin{equation}
+  \theta_i = \theta_e + \alpha .
+\end{equation}
+En la ROI, $\theta_i - \theta_e = 5.56^\circ$, que corresponde a una distancia sobre el suelo de $R\,\alpha \approx 619$\,km desde el
+punto bajo el satélite (nadir).
+
+\textbf{Ley de los cosenos} (relaciona la distancia con el ángulo):
+\begin{equation}
+  R_s^2 = R_t^2 + r^2 + 2\,R_t\, r\cos\theta_i .
+  \label{eq:cosenos}
+\end{equation}
+
+\textbf{Comprobación con el producto:} despejando $R_t$ de~\eqref{eq:senos} con los valores de la ROI sale $6376.4$\,km, y
+de~\eqref{eq:cosenos}, $6376.1$\,km. El radio geocéntrico WGS84 a $16.8^\circ$ es $6376.4$\,km. La diferencia (menos de 0.3\,km) se
+debe a que la normal al elipsoide no apunta exactamente al centro de la Tierra.
+
+\subsubsection*{4. ¿Por qué el cubo tiene capas de altura?}
+
+El producto está en una malla de mapa (EPSG:32615): cada nodo es una posición $(x, y)$ fija. Pero la geometría depende de a qué
+altura esté el terreno en ese punto. Por eso \path{radarGrid} es un cubo de $21 \times 682 \times 695$ (altura \por{} $y$ \por{} $x$)
+con 21 capas, de $-1000$ a $9000$\,m cada 500\,m. Así, quien conozca la altura real del terreno puede interpolar la geometría
+correcta.
+
+\textbf{Variación con la altura.} Si el blanco sube $\Delta h$ en la misma posición $(x,y)$, queda más cerca del satélite y la LOS se
+inclina más. Aproximación de Tierra plana, con $D$ la distancia horizontal al nadir y $H_s$ la altura del satélite:
+\begin{equation}
+  \tan\theta_i = \frac{D}{H_s - h}
+  \quad\Longrightarrow\quad
+  \frac{\partial\theta_i}{\partial h} = \frac{D}{(H_s-h)^2 + D^2} = \frac{\sin\theta_i}{r}\quad[\text{rad/m}].
+\end{equation}
+Con $\theta_i = 43.87^\circ$ y $r = 997.2$\,km, de 0 a 500\,m se esperan
+$\frac{\sin 43.87^\circ}{997\,238\ \text{m}}\cdot 500\ \text{m} = 0.01991^\circ$. En el producto, la media sube de $43.874^\circ$ a
+$43.894^\circ$: $0.01990^\circ$. Coinciden.
+
+\textbf{Elección de la capa en la Etapa 1.} Se toma la capa más cercana a la altura pedida ($h_0 = 500$\,m, opción
+\path{--altura-incidencia}), sin interpolar:
 \begin{equation}
   k^\ast = \arg\min_k \lvert h_k - h_0 \rvert .
 \end{equation}
+La altura de 500\,m es un parámetro fijo, no la altura real del terreno de la ROI (que no se ha consultado). Si el terreno estuviera,
+por ejemplo, 1000\,m más arriba o más abajo, el error sería de solo $\approx 0.04^\circ$: para una figura de inspección es despreciable.
+Para un cálculo píxel a píxel habría que usar la altura elipsoidal del DEM, $h_t$, e interpolar entre las dos capas vecinas:
+\begin{equation}
+  \theta_i(h_t) \approx \theta_{i,k} + \frac{h_t - h_k}{h_{k+1} - h_k}\,\bigl(\theta_{i,k+1} - \theta_{i,k}\bigr),
+  \qquad h_k \le h_t < h_{k+1}.
+\end{equation}
+Esto \textbf{no} está implementado.
 
-\textbf{Valores:} $\theta_i$ va de $42.34^\circ$ a $45.41^\circ$ en la ROI y aumenta hacia el oeste (hacia el alcance lejano). La media
-en la ROI cambia muy poco con la altura de la capa: $43.87^\circ$ a 0\,m y $43.89^\circ$ a 500\,m.
+\subsubsection*{5. Por qué el ángulo cambia de este a oeste}
 
-\textbf{Para qué sirve:} $\theta_i$ es la variable de las secciones 2 y 5. Relaciona \gz{} con \sz{} en terreno plano y entra en el
-criterio de Rayleigh. Con $\lambda \approx 24$\,cm y $\theta_i \approx 44^\circ$, una superficie se comporta como lisa si
-$h < 0.24/(8\cos 44^\circ) \approx 4$\,cm.
+Al alejarse del sensor sobre el suelo una distancia $\Delta g$ (en la dirección horizontal de la LOS), $\theta_i$ crece por dos
+motivos: la LOS se inclina más (término de Tierra plana) y la normal local gira por la curvatura (término $1/R$):
+\begin{equation}
+  \frac{\partial\theta_i}{\partial g} \approx \frac{\cos\theta_i}{r} + \frac{1}{R_t}\quad[\text{rad/m}].
+\end{equation}
+Con los valores de la ROI esto da $0.0504^\circ$/km. El eje $x$ (este) no es exactamente la dirección de la LOS: la componente
+horizontal de la LOS apunta a $\arctan(0.153/0.676) \approx 13^\circ$ al norte del este, así que hay que multiplicar por
+$\cos 13^\circ = 0.975$: se esperan $0.049^\circ$/km. Ajustando una recta a $\theta_i$ contra $x$ en la ROI se obtienen
+$-0.0489^\circ$/km. El signo es negativo porque ir al este es acercarse al sensor. En los 55\,km de ancho de la ROI son unos
+$2.7^\circ$. La componente norte de la LOS añade unos $0.3^\circ$ más a lo largo de los \textasciitilde 27\,km de alto
+($0.0504 \cdot \sin 13^\circ \approx 0.011^\circ$/km). Eso explica el rango total en la ROI: $42.35^\circ$ (esquina noreste) a
+$45.36^\circ$ (esquina suroeste), unos $3.0^\circ$.
+
+\subsubsection*{6. Para qué sirve $\theta_i$ en este proyecto}
+
+\begin{itemize}
+  \item \textbf{Normalización:} en terreno plano, $\gamma^0 = \sigma^0/\cos\theta_i$ (sección 2). Con $\theta_i$ entre $42.3^\circ$ y
+        $45.4^\circ$, $10\log_{10}\cos\theta_i$ va de $-1.31$ a $-1.53$\,dB: una variación de unos 0.2\,dB de un lado a otro de la ROI.
+  \item \textbf{Rugosidad:} criterio de Rayleigh (sección 5). Con $\lambda \approx 24$\,cm y $\theta_i \approx 44^\circ$, una
+        superficie se comporta como lisa si su rugosidad $\delta h < 0.24/(8\cos 44^\circ) \approx 4$\,cm.
+  \item \textbf{Comparabilidad:} dos fechas de la misma trayectoria y marco tienen casi la misma geometría, y por eso el mismo
+        $\theta_i$ en cada píxel. Es una de las razones por las que solo se comparan escenas con la misma trayectoria, marco y
+        dirección.
+\end{itemize}
 
 \subsection{Resumen: qué ecuación usa cada figura}
 
@@ -341,7 +488,7 @@ $h < 0.24/(8\cos 44^\circ) \approx 4$\,cm.
 \texttt{B2\_roi\_sigma0\_dB} & $\sigma^0 = \gamma^0 F$~\eqref{eq:gamma-sigma} \flecha{} multilook \flecha{} dB. \\
 \texttt{C\_histogramas\_gamma0\_dB} & dB por píxel; histograma de 0.1\,dB; media, mediana, dB de la media, $p_5$--$p_{95}$; desigualdad de Jensen. \\
 \texttt{D\_mascara} & Clasificación por valor de \texttt{mask}; porcentajes sobre la ventana y cobertura sobre el polígono. \\
-\texttt{E\_incidencia} & Lectura de $\theta_i$ del producto en la capa de altura más cercana a 500\,m. \\
+\texttt{E\_incidencia} & Lectura de $\theta_i$ del producto en la capa de altura más cercana a 500\,m. Geometría: $\cos\theta_i = \hat{\mathbf l}\cdot\hat{\mathbf n}$, ley de los senos~\eqref{eq:senos}, $\partial\theta_i/\partial h = \sin\theta_i/r$. \\
 \bottomrule
 \end{longtable}
 
