@@ -2,8 +2,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   GeoJSONSource,
+  ImageSource,
   Map as MapLibreMap,
   MapMouseEvent,
+  Marker,
   NavigationControl,
   ScaleControl,
   type StyleSpecification,
@@ -67,6 +69,7 @@ interface ViewportMetrics {
 const NISAR_SOURCE = 'nisar-radar'
 const NISAR_LAYER = 'nisar-layer'
 const FOOTPRINT_SOURCE = 'nisar-footprint'
+const FOOTPRINT_FILL_LAYER = 'nisar-footprint-fill'
 const FOOTPRINT_LINE_LAYER = 'nisar-footprint-line'
 
 const DEM_SOURCE = 'terrain-dem'
@@ -82,17 +85,22 @@ const ANN_DANGER_LINE_LAYER = 'annotations-danger-line'
 const ANN_WARN_FILL_LAYER = 'annotations-warn-fill'
 const ANN_WARN_LINE_LAYER = 'annotations-warn-line'
 const ANN_FREEHAND_LINE_LAYER = 'annotations-freehand-line'
-const ANN_LABEL_DOT_LAYER = 'annotations-label-dot'
 
 const DRAFT_POLY_SOURCE = 'draft-polygon-source'
 const DRAFT_POLY_FILL_LAYER = 'draft-polygon-fill'
 const DRAFT_POLY_LINE_LAYER = 'draft-polygon-line'
 const DRAFT_POLY_VERTEX_LAYER = 'draft-polygon-vertex'
 
+/**
+ * 2. Estilo base seguro: únicamente `version: 8`, `glyphs`, la fuente `esri-satellite`
+ * y su capa `raster` base. Todas las demás fuentes/capas se agregan en `map.on('load')`
+ * dentro de bloques `try/catch` independientes.
+ */
 const BASE_STYLE: StyleSpecification = {
   version: 8,
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   sources: {
-    'esri-world-imagery': {
+    'esri-satellite': {
       type: 'raster',
       tiles: [
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
@@ -102,19 +110,14 @@ const BASE_STYLE: StyleSpecification = {
       attribution:
         'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
     },
-    [DEM_SOURCE]: {
-      type: 'raster-dem',
-      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-      encoding: 'terrarium',
-      tileSize: 256,
-      maxzoom: 15,
-    },
   },
   layers: [
     {
-      id: 'esri-world-imagery',
+      id: 'esri-satellite-layer',
       type: 'raster',
-      source: 'esri-world-imagery',
+      source: 'esri-satellite',
+      minzoom: 0,
+      maxzoom: 22,
     },
   ],
 }
@@ -146,12 +149,24 @@ function projectLngLat(coord: LngLat, vp: ViewportMetrics): [number, number] {
 function preloadImage(url: string): Promise<boolean> {
   return new Promise((resolve) => {
     const img = new Image()
-    img.onload = () => resolve(img.naturalWidth > 0)
-    img.onerror = () => resolve(false)
+    const timer = window.setTimeout(() => resolve(false), 1800)
+    img.onload = () => {
+      window.clearTimeout(timer)
+      resolve(img.naturalWidth > 0)
+    }
+    img.onerror = () => {
+      window.clearTimeout(timer)
+      resolve(false)
+    }
     img.src = url
   })
 }
 
+/**
+ * 3. Genera dinámicamente un DataURL en `<canvas>` con el patrón compuesto SAR
+ * verde/magenta semitransparente para que la fuente `image` de MapLibre siempre
+ * cargue al instante aunque no exista `/nisar_chiapas.jpg` en `public/`.
+ */
 function createFallbackSarDataUrl(): string {
   const canvas = document.createElement('canvas')
   canvas.width = 512
@@ -159,25 +174,48 @@ function createFallbackSarDataUrl(): string {
   const ctx = canvas.getContext('2d')
   if (!ctx) return ''
 
+  // Base semitransparente SAR (banda L HH/HV)
   const baseGrad = ctx.createLinearGradient(0, 0, 512, 512)
-  baseGrad.addColorStop(0, 'rgba(6, 78, 59, 0.52)')
-  baseGrad.addColorStop(0.5, 'rgba(16, 185, 129, 0.34)')
-  baseGrad.addColorStop(1, 'rgba(6, 95, 70, 0.52)')
+  baseGrad.addColorStop(0, 'rgba(6, 78, 59, 0.48)')
+  baseGrad.addColorStop(0.45, 'rgba(16, 185, 129, 0.36)')
+  baseGrad.addColorStop(0.75, 'rgba(134, 25, 143, 0.28)')
+  baseGrad.addColorStop(1, 'rgba(6, 95, 70, 0.48)')
   ctx.fillStyle = baseGrad
   ctx.fillRect(0, 0, 512, 512)
 
-  for (let i = 0; i < 24; i++) {
+  // Dispersión volumétrica verde (vegetación / relieve) y magenta (doble rebote HH)
+  for (let i = 0; i < 32; i++) {
     const cx = (i * 79) % 512
     const cy = (i * 131) % 512
-    const r = 42 + (i % 4) * 26
+    const r = 38 + (i % 5) * 24
     const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, r)
-    g.addColorStop(0, 'rgba(16, 185, 129, 0.38)')
-    g.addColorStop(1, 'rgba(6, 78, 59, 0)')
+    if (i % 3 === 0) {
+      g.addColorStop(0, 'rgba(217, 70, 239, 0.36)')
+      g.addColorStop(1, 'rgba(134, 25, 143, 0)')
+    } else {
+      g.addColorStop(0, 'rgba(16, 185, 129, 0.42)')
+      g.addColorStop(1, 'rgba(6, 78, 59, 0)')
+    }
     ctx.fillStyle = g
     ctx.beginPath()
     ctx.arc(cx, cy, r, 0, Math.PI * 2)
     ctx.fill()
   }
+
+  // Cuerpos de agua en calma (baja retrodispersión)
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.68)'
+  ctx.beginPath()
+  ctx.moveTo(95, 130)
+  ctx.bezierCurveTo(150, 120, 195, 175, 255, 210)
+  ctx.bezierCurveTo(300, 235, 345, 225, 395, 275)
+  ctx.bezierCurveTo(355, 295, 275, 260, 215, 238)
+  ctx.bezierCurveTo(155, 215, 110, 175, 85, 150)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.strokeStyle = 'rgba(16, 185, 129, 0.85)'
+  ctx.lineWidth = 4
+  ctx.strokeRect(2, 2, 508, 508)
 
   return canvas.toDataURL('image/png')
 }
@@ -190,15 +228,12 @@ function sameView(a: MapView, b: MapView): boolean {
   )
 }
 
-/** Calcula los parámetros `hillshade` de MapLibre a partir del estado solar. */
 function computeHillshadeParams(solar: SolarSimulationState): {
   direction: number
   exaggeration: number
   highlightColor: string
 } {
-  // Mapea el ángulo en el arco (0° Este mañana -> 180° Oeste tarde) a azimut (90° Este -> 270° Oeste)
   const direction = Math.round(90 + (solar.sunAngle / 180) * 180)
-  // Altura solar: máxima al mediodía (90°), mínima al amanecer/atardecer (pero nunca < 0.35 para que se aprecie)
   const elevationFactor = 0.38 + 0.62 * Math.sin((solar.sunAngle * Math.PI) / 180)
   const exaggeration = solar.enabled
     ? Number(Math.min(0.85, (solar.radiationIntensity / 100) * 0.85 * elevationFactor).toFixed(3))
@@ -223,6 +258,7 @@ export function MapCanvas({
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
+  const markersRef = useRef<Marker[]>([])
   const [mapReady, setMapReady] = useState(false)
   const [viewport, setViewport] = useState<ViewportMetrics>({
     centro: view.centro,
@@ -231,7 +267,6 @@ export function MapCanvas({
     height: 640,
   })
 
-  // Herramienta activa en la barra inferior
   const [activeTool, setActiveTool] = useState<DrawTool>('mover')
   const [draftFreehand, setDraftFreehand] = useState<LngLat[]>([])
   const [draftCircle, setDraftCircle] = useState<{
@@ -241,14 +276,12 @@ export function MapCanvas({
   } | null>(null)
   const [draftPolygon, setDraftPolygon] = useState<LngLat[]>([])
 
-  // Input flotante para crear/editar una etiqueta sobre una coordenada o figura
   const [labelEditor, setLabelEditor] = useState<{
     coord: LngLat
     text: string
     targetAnnotationId: string | null
   } | null>(null)
 
-  // Referencias mutables para que los listeners nativos de MapLibre siempre lean el estado actual
   const viewRef = useRef(view)
   const opacityRef = useRef(opacity)
   const isEditingRef = useRef(isEditing)
@@ -279,7 +312,7 @@ export function MapCanvas({
     onAnnotationsChangeRef.current = onAnnotationsChange
   })
 
-  // Inicialización de MapLibre GL y registro de fuentes/capas e interacciones nativas
+  // Inicialización de MapLibre GL, ResizeObserver y capas protegidas con try/catch
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -303,11 +336,23 @@ export function MapCanvas({
       setViewport({
         centro: [c.lng, c.lat],
         zoom: map.getZoom(),
-        width: canvas.clientWidth || 960,
-        height: canvas.clientHeight || 640,
+        width: canvas.clientWidth || container.clientWidth || 960,
+        height: canvas.clientHeight || container.clientHeight || 640,
       })
     }
-    syncViewport()
+
+    // 1. Garantizar que el canvas de WebGL tome el ancho y alto reales
+    const rafId = window.requestAnimationFrame(() => {
+      map.resize()
+      syncViewport()
+    })
+
+    const resizeObserver = new ResizeObserver(() => {
+      map.resize()
+      syncViewport()
+    })
+    resizeObserver.observe(container)
+
     map.on('move', syncViewport)
     map.on('resize', syncViewport)
 
@@ -321,7 +366,6 @@ export function MapCanvas({
       onViewChangeRef.current?.(current, { userInitiated: !programmatic })
     })
 
-    // Listeners nativos de MapLibre para Lápiz, Círculo Peligro/Advertencia, Polígono y Etiqueta
     const onMouseDown = (e: MapMouseEvent) => {
       if (!isEditingRef.current) return
       const tool = activeToolRef.current
@@ -442,214 +486,250 @@ export function MapCanvas({
     map.on('click', onMapClick)
 
     let cancelled = false
-    const styleLoaded = new Promise<void>((resolve) => map.once('load', () => resolve()))
 
-    Promise.all([preloadImage(NISAR_IMAGE_URL), styleLoaded]).then(([imageOk]) => {
+    map.on('load', () => {
       if (cancelled) return
-      const alpha = opacityRef.current / 100
-      const resolvedUrl = imageOk ? NISAR_IMAGE_URL : createFallbackSarDataUrl()
+      map.resize()
+      syncViewport()
 
-      // 1. Fuente `nisar-radar` tipo `image` y capa `nisar-layer`
-      if (resolvedUrl) {
-        map.addSource(NISAR_SOURCE, {
-          type: 'image',
-          url: resolvedUrl,
-          coordinates: NISAR_FOOTPRINT,
-        })
+      const alpha = opacityRef.current / 100
+
+      // A. Huella GeoJSON de respaldo + Fuente `nisar-radar` con DataURL inmediato
+      try {
+        map.addSource(FOOTPRINT_SOURCE, { type: 'geojson', data: FOOTPRINT_GEOJSON })
         map.addLayer({
-          id: NISAR_LAYER,
-          type: 'raster',
-          source: NISAR_SOURCE,
+          id: FOOTPRINT_FILL_LAYER,
+          type: 'fill',
+          source: FOOTPRINT_SOURCE,
           paint: {
-            'raster-opacity': alpha,
-            'raster-fade-duration': 0,
+            'fill-color': '#10B981',
+            'fill-opacity': alpha * 0.12,
           },
         })
+        map.addLayer({
+          id: FOOTPRINT_LINE_LAYER,
+          type: 'line',
+          source: FOOTPRINT_SOURCE,
+          paint: {
+            'line-color': '#10B981',
+            'line-width': 1.8,
+            'line-opacity': 0.85,
+            'line-dasharray': [3, 2],
+          },
+        })
+
+        const fallbackDataUrl = createFallbackSarDataUrl()
+        if (fallbackDataUrl) {
+          map.addSource(NISAR_SOURCE, {
+            type: 'image',
+            url: fallbackDataUrl,
+            coordinates: NISAR_FOOTPRINT,
+          })
+          map.addLayer({
+            id: NISAR_LAYER,
+            type: 'raster',
+            source: NISAR_SOURCE,
+            paint: {
+              'raster-opacity': alpha,
+              'raster-fade-duration': 0,
+            },
+          })
+
+          // Si `/nisar_chiapas.jpg` existe en `public/`, actualiza la textura sin bloquear el mapa
+          preloadImage(NISAR_IMAGE_URL).then((ok) => {
+            if (cancelled || !ok) return
+            try {
+              const src = map.getSource(NISAR_SOURCE) as ImageSource | undefined
+              src?.updateImage({ url: NISAR_IMAGE_URL, coordinates: NISAR_FOOTPRINT })
+            } catch {
+              // Mantiene el patrón SAR en `<canvas>`
+            }
+          })
+        }
+      } catch (err) {
+        console.warn('No se pudo inicializar la capa NISAR:', err)
       }
 
-      // Borde sutil alrededor de la huella de la escena NISAR
-      map.addSource(FOOTPRINT_SOURCE, { type: 'geojson', data: FOOTPRINT_GEOJSON })
-      map.addLayer({
-        id: FOOTPRINT_LINE_LAYER,
-        type: 'line',
-        source: FOOTPRINT_SOURCE,
-        paint: {
-          'line-color': '#10B981',
-          'line-width': 1.6,
-          'line-opacity': 0.75,
-          'line-dasharray': [3, 2],
-        },
-      })
+      // B. Fuente `terrain-dem` y capa `solar-thermal-layer`
+      try {
+        const hs = computeHillshadeParams(solarRef.current)
+        map.addSource(DEM_SOURCE, {
+          type: 'raster-dem',
+          tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+          encoding: 'terrarium',
+          tileSize: 256,
+          maxzoom: 15,
+        })
+        map.addLayer({
+          id: SOLAR_THERMAL_LAYER,
+          type: 'hillshade',
+          source: DEM_SOURCE,
+          paint: {
+            'hillshade-illumination-anchor': 'map',
+            'hillshade-illumination-direction': hs.direction,
+            'hillshade-exaggeration': hs.exaggeration,
+            'hillshade-highlight-color': hs.highlightColor,
+            'hillshade-accent-color': '#EA580C',
+            'hillshade-shadow-color': '#1E3A8A',
+          },
+        })
+      } catch (err) {
+        console.warn('No se pudo inicializar la capa DEM solar:', err)
+      }
 
-      // 4. Capa `hillshade` (`solar-thermal-layer`) encima del mapa base/radar y debajo de las anotaciones
-      const hs = computeHillshadeParams(solarRef.current)
-      map.addLayer({
-        id: SOLAR_THERMAL_LAYER,
-        type: 'hillshade',
-        source: DEM_SOURCE,
-        paint: {
-          'hillshade-illumination-anchor': 'map',
-          'hillshade-illumination-direction': hs.direction,
-          'hillshade-exaggeration': hs.exaggeration,
-          'hillshade-highlight-color': hs.highlightColor,
-          'hillshade-accent-color': '#EA580C',
-          'hillshade-shadow-color': '#1E3A8A',
-        },
-      })
+      // C. Fuente y capas de MÁSCARA INVERSA (`crop-mask-fill`)
+      try {
+        const initialCrop = croppedRegionRef.current
+        const hasCrop = Array.isArray(initialCrop) && initialCrop.length >= 3
+        map.addSource(CROP_MASK_SOURCE, {
+          type: 'geojson',
+          data: buildInverseCropMaskGeoJSON(hasCrop ? initialCrop : null) as never,
+        })
+        map.addLayer({
+          id: CROP_MASK_FILL_LAYER,
+          type: 'fill',
+          source: CROP_MASK_SOURCE,
+          filter: ['==', ['get', 'role'], 'mask'],
+          paint: {
+            'fill-color': '#0F172A',
+            'fill-opacity': hasCrop ? 0.72 : 0,
+          },
+        })
+        map.addLayer({
+          id: CROP_MASK_LINE_LAYER,
+          type: 'line',
+          source: CROP_MASK_SOURCE,
+          filter: ['==', ['get', 'role'], 'border'],
+          paint: {
+            'line-color': '#10B981',
+            'line-width': 2.2,
+            'line-dasharray': [3, 2],
+          },
+        })
+      } catch (err) {
+        console.warn('No se pudo inicializar la máscara de recorte:', err)
+      }
 
-      // 3. Fuente y capas de MÁSCARA INVERSA para "Recortar región"
-      map.addSource(CROP_MASK_SOURCE, {
-        type: 'geojson',
-        data: buildInverseCropMaskGeoJSON(croppedRegionRef.current) as never,
-      })
-      map.addLayer({
-        id: CROP_MASK_FILL_LAYER,
-        type: 'fill',
-        source: CROP_MASK_SOURCE,
-        filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: {
-          'fill-color': '#0F172A',
-          'fill-opacity': 0.72,
-        },
-      })
-      map.addLayer({
-        id: CROP_MASK_LINE_LAYER,
-        type: 'line',
-        source: CROP_MASK_SOURCE,
-        filter: ['==', ['geometry-type'], 'LineString'],
-        paint: {
-          'line-color': '#10B981',
-          'line-width': 2.2,
-          'line-dasharray': [3, 2],
-        },
-      })
+      // D. Fuente y capas vectoriales de dibujo (`annotations-source`)
+      try {
+        map.addSource(ANNOTATIONS_SOURCE, {
+          type: 'geojson',
+          data: buildAnnotationsGeoJSON(annotationsRef.current, [], null) as never,
+        })
 
-      // 2. Fuente y capas vectoriales GeoJSON para Lápiz, Círculo Peligro y Círculo Advertencia
-      map.addSource(ANNOTATIONS_SOURCE, {
-        type: 'geojson',
-        data: buildAnnotationsGeoJSON(annotationsRef.current, [], null) as never,
-      })
+        map.addLayer({
+          id: ANN_DANGER_FILL_LAYER,
+          type: 'fill',
+          source: ANNOTATIONS_SOURCE,
+          filter: ['==', ['get', 'kind'], 'peligro'],
+          paint: {
+            'fill-color': '#EF4444',
+            'fill-opacity': 0.25,
+          },
+        })
+        map.addLayer({
+          id: ANN_DANGER_LINE_LAYER,
+          type: 'line',
+          source: ANNOTATIONS_SOURCE,
+          filter: ['==', ['get', 'kind'], 'peligro'],
+          paint: {
+            'line-color': '#EF4444',
+            'line-width': 2.5,
+          },
+        })
 
-      // Círculo Peligro (relleno #EF4444 opacidad 0.25 + borde sólido #EF4444 2.5px)
-      map.addLayer({
-        id: ANN_DANGER_FILL_LAYER,
-        type: 'fill',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'peligro'],
-        paint: {
-          'fill-color': '#EF4444',
-          'fill-opacity': 0.25,
-        },
-      })
-      map.addLayer({
-        id: ANN_DANGER_LINE_LAYER,
-        type: 'line',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'peligro'],
-        paint: {
-          'line-color': '#EF4444',
-          'line-width': 2.5,
-        },
-      })
+        map.addLayer({
+          id: ANN_WARN_FILL_LAYER,
+          type: 'fill',
+          source: ANNOTATIONS_SOURCE,
+          filter: ['==', ['get', 'kind'], 'advertencia'],
+          paint: {
+            'fill-color': '#F59E0B',
+            'fill-opacity': 0.18,
+          },
+        })
+        map.addLayer({
+          id: ANN_WARN_LINE_LAYER,
+          type: 'line',
+          source: ANNOTATIONS_SOURCE,
+          filter: ['==', ['get', 'kind'], 'advertencia'],
+          paint: {
+            'line-color': '#F59E0B',
+            'line-width': 2.5,
+            'line-dasharray': [3, 2],
+          },
+        })
 
-      // Círculo Advertencia (relleno #F59E0B opacidad 0.18 + borde punteado #F59E0B [3, 2] 2.5px)
-      map.addLayer({
-        id: ANN_WARN_FILL_LAYER,
-        type: 'fill',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'advertencia'],
-        paint: {
-          'fill-color': '#F59E0B',
-          'fill-opacity': 0.18,
-        },
-      })
-      map.addLayer({
-        id: ANN_WARN_LINE_LAYER,
-        type: 'line',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'advertencia'],
-        paint: {
-          'line-color': '#F59E0B',
-          'line-width': 2.5,
-          'line-dasharray': [3, 2],
-        },
-      })
+        map.addLayer({
+          id: ANN_FREEHAND_LINE_LAYER,
+          type: 'line',
+          source: ANNOTATIONS_SOURCE,
+          filter: ['==', ['get', 'kind'], 'lapiz'],
+          layout: {
+            'line-cap': 'round',
+            'line-join': 'round',
+          },
+          paint: {
+            'line-color': '#10B981',
+            'line-width': 3.2,
+          },
+        })
+      } catch (err) {
+        console.warn('No se pudieron inicializar las capas de anotación:', err)
+      }
 
-      // Lápiz (LineString en tiempo real)
-      map.addLayer({
-        id: ANN_FREEHAND_LINE_LAYER,
-        type: 'line',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'lapiz'],
-        layout: {
-          'line-cap': 'round',
-          'line-join': 'round',
-        },
-        paint: {
-          'line-color': '#10B981',
-          'line-width': 3.2,
-        },
-      })
+      // E. Fuente y capas para polígono en construcción ("Seleccionar Región")
+      try {
+        map.addSource(DRAFT_POLY_SOURCE, {
+          type: 'geojson',
+          data: buildDraftPolygonGeoJSON([]) as never,
+        })
+        map.addLayer({
+          id: DRAFT_POLY_FILL_LAYER,
+          type: 'fill',
+          source: DRAFT_POLY_SOURCE,
+          filter: ['==', ['get', 'featureType'], 'fill'],
+          paint: {
+            'fill-color': '#10B981',
+            'fill-opacity': 0.16,
+          },
+        })
+        map.addLayer({
+          id: DRAFT_POLY_LINE_LAYER,
+          type: 'line',
+          source: DRAFT_POLY_SOURCE,
+          filter: ['==', ['get', 'featureType'], 'line'],
+          paint: {
+            'line-color': '#10B981',
+            'line-width': 2.2,
+            'line-dasharray': [3, 2],
+          },
+        })
+        map.addLayer({
+          id: DRAFT_POLY_VERTEX_LAYER,
+          type: 'circle',
+          source: DRAFT_POLY_SOURCE,
+          filter: ['==', ['get', 'featureType'], 'vertex'],
+          paint: {
+            'circle-radius': 5.5,
+            'circle-color': '#FFFFFF',
+            'circle-stroke-color': '#10B981',
+            'circle-stroke-width': 2.2,
+          },
+        })
+      } catch (err) {
+        console.warn('No se pudo inicializar el borrador de polígono:', err)
+      }
 
-      // Marcador base para Etiquetas
-      map.addLayer({
-        id: ANN_LABEL_DOT_LAYER,
-        type: 'circle',
-        source: ANNOTATIONS_SOURCE,
-        filter: ['==', ['get', 'kind'], 'etiqueta'],
-        paint: {
-          'circle-radius': 4.5,
-          'circle-color': '#10B981',
-          'circle-stroke-color': '#FFFFFF',
-          'circle-stroke-width': 1.8,
-        },
-      })
-
-      // 3b. Fuente y capas para polígono en construcción ("Seleccionar Región")
-      map.addSource(DRAFT_POLY_SOURCE, {
-        type: 'geojson',
-        data: buildDraftPolygonGeoJSON([]) as never,
-      })
-      map.addLayer({
-        id: DRAFT_POLY_FILL_LAYER,
-        type: 'fill',
-        source: DRAFT_POLY_SOURCE,
-        filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: {
-          'fill-color': '#10B981',
-          'fill-opacity': 0.16,
-        },
-      })
-      map.addLayer({
-        id: DRAFT_POLY_LINE_LAYER,
-        type: 'line',
-        source: DRAFT_POLY_SOURCE,
-        filter: ['==', ['geometry-type'], 'LineString'],
-        paint: {
-          'line-color': '#10B981',
-          'line-width': 2.2,
-          'line-dasharray': [3, 2],
-        },
-      })
-      map.addLayer({
-        id: DRAFT_POLY_VERTEX_LAYER,
-        type: 'circle',
-        source: DRAFT_POLY_SOURCE,
-        filter: ['==', ['geometry-type'], 'Point'],
-        paint: {
-          'circle-radius': 5.5,
-          'circle-color': '#FFFFFF',
-          'circle-stroke-color': '#10B981',
-          'circle-stroke-width': 2.2,
-        },
-      })
-
-      syncViewport()
       setMapReady(true)
     })
 
     return () => {
       cancelled = true
+      window.cancelAnimationFrame(rafId)
+      resizeObserver.disconnect()
+      for (const m of markersRef.current) m.remove()
+      markersRef.current = []
       map.remove()
       mapRef.current = null
     }
@@ -659,12 +739,16 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
+    const alpha = opacity / 100
     if (map.getLayer(NISAR_LAYER)) {
-      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', opacity / 100)
+      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', alpha)
+    }
+    if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.12)
     }
   }, [opacity, mapReady])
 
-  // 2. Actualizar cursor del mapa y `map.dragPan.disable()` / `enable()` según la herramienta activa
+  // 2. Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -691,7 +775,7 @@ export function MapCanvas({
     }
   }, [activeTool, isEditing])
 
-  // Sincronizar fuente GeoJSON `annotations-source` cuando cambian las anotaciones o el trazo en curso
+  // Sincronizar fuente GeoJSON `annotations-source`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
@@ -701,7 +785,39 @@ export function MapCanvas({
     }
   }, [annotations, draftFreehand, draftCircle, mapReady])
 
-  // Sincronizar fuente GeoJSON `draft-polygon-source` para "Seleccionar Región"
+  // 2. Renderizar las etiquetas de texto usando `maplibregl.Marker` con elementos HTML limpios
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+
+    for (const m of markersRef.current) m.remove()
+    markersRef.current = []
+
+    for (const ann of annotations) {
+      if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+        const el = document.createElement('div')
+        el.className = `map-marker-tag ${
+          ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
+        }`
+        el.textContent = ann.label
+        const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
+        const marker = new Marker({ element: el, anchor: 'bottom', offset: [0, -6] })
+          .setLngLat(topEdgeCoord)
+          .addTo(map)
+        markersRef.current.push(marker)
+      } else if (ann.kind === 'etiqueta') {
+        const el = document.createElement('div')
+        el.className = 'map-marker-tag map-marker-tag--custom'
+        el.textContent = ann.text
+        const marker = new Marker({ element: el, anchor: 'left', offset: [8, 0] })
+          .setLngLat(ann.position)
+          .addTo(map)
+        markersRef.current.push(marker)
+      }
+    }
+  }, [annotations, mapReady])
+
+  // Sincronizar fuente GeoJSON `draft-polygon-source`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
@@ -711,17 +827,21 @@ export function MapCanvas({
     }
   }, [draftPolygon, mapReady])
 
-  // Sincronizar fuente GeoJSON `crop-mask-source` (Máscara Inversa) cuando cambia `croppedRegion`
+  // 4. Sincronizar fuente GeoJSON `crop-mask-source` (vacío y opacidad 0 cuando `croppedRegion` es `null`)
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
+    const hasCrop = Array.isArray(croppedRegion) && croppedRegion.length >= 3
     const source = map.getSource(CROP_MASK_SOURCE) as GeoJSONSource | undefined
     if (source) {
-      source.setData(buildInverseCropMaskGeoJSON(croppedRegion) as never)
+      source.setData(buildInverseCropMaskGeoJSON(hasCrop ? croppedRegion : null) as never)
+    }
+    if (map.getLayer(CROP_MASK_FILL_LAYER)) {
+      map.setPaintProperty(CROP_MASK_FILL_LAYER, 'fill-opacity', hasCrop ? 0.72 : 0)
     }
   }, [croppedRegion, mapReady])
 
-  // 4. Actualizar `solar-thermal-layer` en tiempo real con `setPaintProperty`
+  // Actualizar `solar-thermal-layer` en tiempo real con `setPaintProperty`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || !map.getLayer(SOLAR_THERMAL_LAYER)) return
@@ -733,7 +853,7 @@ export function MapCanvas({
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#1E3A8A')
   }, [solar, mapReady])
 
-  // Volar a la vista de la copia seleccionada y limpiar borradores temporales al cambiar de mapa
+  // Volar a la vista de la copia seleccionada
   useEffect(() => {
     const map = mapRef.current
     if (!map || lastKeyRef.current === viewKey) return
@@ -753,7 +873,6 @@ export function MapCanvas({
     setDraftFreehand([])
   }
 
-  // 3. Ejecutar "Recortar región" (fitBounds + máscara inversa)
   const handleApplyCropRegion = () => {
     if (draftPolygon.length < 3) return
     const poly = [...draftPolygon]
@@ -775,7 +894,6 @@ export function MapCanvas({
     }
   }
 
-  // Restablecer vista completa al quitar la región recortada
   const handleResetCroppedRegion = () => {
     onCropRegionChange(null)
     setDraftPolygon([])
@@ -831,7 +949,6 @@ export function MapCanvas({
     }
   }
 
-  // Posición en pantalla del botón flotante "✂️ Recortar región" sobre el centroide del polígono
   const draftPolyCentroidScreen =
     draftPolygon.length >= 3
       ? projectLngLat(getPolygonBoundsAndCentroid(draftPolygon).centroid, viewport)
@@ -840,8 +957,23 @@ export function MapCanvas({
   const labelEditorScreen = labelEditor ? projectLngLat(labelEditor.coord, viewport) : null
 
   return (
-    <main className="map-canvas">
-      <div ref={containerRef} className="map-canvas__map" />
+    <main
+      className="map-canvas"
+      style={{ position: 'relative', flex: 1, width: '100%', height: '100%' }}
+    >
+      <div
+        ref={containerRef}
+        className="map-canvas__map"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: '100%',
+          height: '100%',
+        }}
+      />
 
       {/* Etiqueta de ubicación y copia activa */}
       <div className="map-badge">
@@ -851,7 +983,7 @@ export function MapCanvas({
         )}
       </div>
 
-      {/* 3c. Chip flotante arriba del mapa cuando hay una región recortada activa */}
+      {/* Chip flotante arriba del mapa cuando hay una región recortada activa */}
       {croppedRegion && croppedRegion.length >= 3 && (
         <div className="crop-active-chip" role="status">
           <span className="crop-active-chip__dot" aria-hidden="true" />
@@ -866,7 +998,7 @@ export function MapCanvas({
         </div>
       )}
 
-      {/* 3. Botón flotante verde "✂️ Recortar región" y "Limpiar puntos" en el centroide del polígono */}
+      {/* Botón flotante verde "✂️ Recortar región" y "Limpiar puntos" en el centroide del polígono */}
       {isEditing && draftPolygon.length >= 3 && draftPolyCentroidScreen && (
         <div
           className="poly-centroid-actions"
@@ -891,42 +1023,6 @@ export function MapCanvas({
           </button>
         </div>
       )}
-
-      {/* Marcadores limpios georreferenciados para las etiquetas de Círculo Peligro/Advertencia y Etiqueta */}
-      <div className="map-markers-layer" aria-hidden="true">
-        {annotations.map((ann) => {
-          if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
-            const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
-            const [x, y] = projectLngLat(topEdgeCoord, viewport)
-            return (
-              <div
-                key={ann.id}
-                className={`map-marker-tag ${
-                  ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
-                }`}
-                style={{ left: `${x.toFixed(1)}px`, top: `${(y - 14).toFixed(1)}px` }}
-              >
-                {ann.label}
-              </div>
-            )
-          }
-
-          if (ann.kind === 'etiqueta') {
-            const [x, y] = projectLngLat(ann.position, viewport)
-            return (
-              <div
-                key={ann.id}
-                className="map-marker-tag map-marker-tag--custom"
-                style={{ left: `${(x + 10).toFixed(1)}px`, top: `${y.toFixed(1)}px` }}
-              >
-                {ann.text}
-              </div>
-            )
-          }
-
-          return null
-        })}
-      </div>
 
       {/* Input flotante limpio para crear o editar una etiqueta */}
       {labelEditor && labelEditorScreen && (
