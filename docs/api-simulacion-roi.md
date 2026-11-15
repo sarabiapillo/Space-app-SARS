@@ -4,24 +4,7 @@
 
 ## Operación del servidor (antes de llamar)
 
-Configurar en Django, exclusivamente por el operador, los ajustes siguientes. Ejemplo copiable desde la raíz del proyecto, sujeto a verificar que ambos archivos existentes coinciden con estos hashes antes de activar el servicio (no instalar ni construir desde la API):
-
-```python
-from pathlib import Path
-BASE = Path(__file__).resolve().parents[2]  # en backend/config/settings.py
-FLOOD_ROI_DG2_RUN_ROOT = str(BASE / 'data/roi-dg2-jobs')
-FLOOD_ROI_DG2_CONFIG = {
-    'executable': str(BASE / 'data/tools/lisflood-fp-8.0/runtime/build/lisflood'),
-    'binary_sha256': '777d50f8d6a926260baa31b4c8ca3ecc0b3ae710494bebb2d4699ccf8c39775c',
-    'dem_executable': str(BASE / 'data/tools/lisflood-fp-8.0/runtime/build/generateDG2DEM'),
-    'dem_sha256': 'ada476fc141d536d09abd4aa1238d192bbddfd627574886ada12784ba0e964a8',
-    'timeout_s': 15, 'preparation_timeout_s': 25,
-    'max_cells': 1000, 'max_rain_values': 5000, 'max_frames': 5, 'max_tiles': 2,
-    'code_version': 'roi-dg2-operator-reviewed',
-}
-```
-
-Los límites son **ejemplo pequeño de prueba**, no recomendación de explotación. Ejecutables y directorio de trabajos deben permanecer dentro de `data/` del proyecto; root de trabajos privado (sin permisos de grupo/otros), hashes correctos y binarios ejecutables. El operador debe fijar presupuestos para su capacidad y revisar el dominio físico. La cuenta de servicio necesita acceso Earthdata NASADEM y red, configurados en el servidor; nunca enviar credenciales en JSON. **No activar acceso a red incondicionalmente por importar la vista:** solo el worker de un POST autenticado intenta adquirir datos. Una ROI fuera de latitudes NASADEM −56…60, una tesela inaccesible o una malla con huecos fallará sin rellenar elevación inventada. No se ha probado aquí adquisición Earthdata real.
+El servicio se configura por entorno, con rutas y hashes fijados en el servidor, y está habilitado por defecto para este despliegue; `FLOOD_ROI_DG2_ENABLED=false` lo deshabilita. **Antes de usarlo**, ejecutar la comprobación local sin red y, si se dispone de credenciales privadas, la comprobación Earthdata explícita siguiendo [Configuración y comprobación del servicio](configuracion-servicio-inundacion.md). Los presupuestos iniciales son pequeños y deben revisarse para la capacidad y el dominio físico; no se instalan binarios desde HTTP. La cuenta del servidor necesita acceso Earthdata NASADEM; nunca enviar credenciales en JSON. Solo el worker de un POST autenticado intenta adquirir datos: importar settings no inicia red. Una ROI fuera de latitudes NASADEM −56…60, una tesela inaccesible o una malla con huecos fallará sin rellenar elevación inventada. Una comprobación Earthdata exitosa no valida fidelidad hidráulica.
 
 ## Solicitud completa
 
