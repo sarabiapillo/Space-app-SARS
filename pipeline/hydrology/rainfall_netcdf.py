@@ -154,8 +154,19 @@ def export_rainfall_netcdf(profile, dem_path, output_path, *, simulation_duratio
     except ImportError as exc:
         raise RuntimeError("SciPy is required for optional NetCDF rainfall export") from exc
     with netcdf_file(output_path, "w", version=2) as nc:
-        nc.createDimension("time", len(hours)); nc.createDimension("y", height); nc.createDimension("x", width)
-        time_var = nc.createVariable("time", "d", ("time",)); y_var = nc.createVariable("y", "d", ("y",)); x_var = nc.createVariable("x", "d", ("x",))
+        # file_tool.cpp pasa IDs de variable a nc_inq_dimlen/nc_get_vara.
+        # SciPy ordena variables por _shape (tupla lexicográfica), estable
+        # en empates: rain 3D puede aparecer entre los ejes 1D. Declarar
+        # dimensiones en el orden físico resultante, con un eje sin uso en
+        # la posición de rain, conserva los IDs de time/x/y exactamente.
+        specs = [("time", (len(hours),)), ("y", (height,)), ("x", (width,)),
+                 ("rainfall_depth", (len(hours), height, width))]
+        for name, dimensions in sorted(specs, key=lambda entry: entry[1], reverse=True):
+            nc.createDimension("native_header_anchor" if name == "rainfall_depth" else name,
+                               1 if name == "rainfall_depth" else dimensions[0])
+        time_var = nc.createVariable("time", "d", ("time",))
+        y_var = nc.createVariable("y", "d", ("y",))
+        x_var = nc.createVariable("x", "d", ("x",))
         rain_var = nc.createVariable("rainfall_depth", "d", ("time", "y", "x"))
         time_var[:] = hours; y_var[:] = ys; x_var[:] = xs; rain_var[:] = cube
         time_var.units = "hours"; x_var.units = "m"; y_var.units = "m"
