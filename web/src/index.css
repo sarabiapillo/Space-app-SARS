@@ -3367,16 +3367,18 @@ button:disabled {
 }
 
 .ws-flood-legend__bar {
-  height: 10px;
-  border-radius: 2px;
-  border: 1px solid #0369a1;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid #0284c7;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.4) 0%,
-    rgba(56, 189, 248, 0.7) 25%,
-    rgba(2, 132, 199, 0.85) 60%,
-    rgba(30, 58, 138, 0.95) 100%
+    rgba(125, 211, 252, 0.40) 0%,
+    rgba(56, 189, 248, 0.65) 20%,
+    rgba(14, 165, 233, 0.80) 45%,
+    rgba(2, 132, 199, 0.88) 75%,
+    rgba(23, 37, 84, 0.95) 100%
   );
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .ws-flood-legend__labels {

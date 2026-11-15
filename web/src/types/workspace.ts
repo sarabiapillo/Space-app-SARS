@@ -138,6 +138,8 @@ export interface FloodSimulationState {
     maxDepthM: number
     meanDepthM: number
     waterSurfaceHa: number
+    elevMinM?: number
+    elevMaxM?: number
   } | null
 }
 

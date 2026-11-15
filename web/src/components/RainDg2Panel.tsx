@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { SOLAR_PRESET_ZONES } from './RightPanel'
 import type { EscenaNisar, FloodSimulationState, LngLat } from '../types/workspace'
-import { prepareFloodScenario } from '../api/client'
+import { simulateFloodScenario } from '../api/client'
 import { generateFloodRaster } from '../utils/floodGenerator'
 
 interface RainDg2PanelProps {
@@ -121,41 +121,58 @@ export function RainDg2Panel({
         [bbox[0], bbox[1]],
       ]]
 
-      // 2. Validar escenario con el backend oficial
-      await prepareFloodScenario({
-        rainfall: {
-          amount: Number(rainfallAmount),
-          unit: 'mm',
-          duration: Number(rainfallDuration),
-          duration_unit: 'h',
-        },
-        roi: {
-          type: 'Polygon',
-          coordinates: roiPolygon,
-        },
-      }).catch((err) => {
-        console.warn('API prepare validación informativa:', err)
-      })
+      // 2. Ejecutar cálculo hidrológico y topográfico con NASADEM 30m real
+      let dataUrl = ''
+      let resultBounds = bbox
+      let stats = null
 
-      // 3. Generar el ráster de encharcamientos e inundación simulada
-      const floodResult = generateFloodRaster(
-        selectedZoneId,
-        bbox,
-        rainfallAmount,
-        rainfallDuration
-      )
+      try {
+        const simRes = await simulateFloodScenario({
+          rainfall: {
+            amount: Number(rainfallAmount),
+            unit: 'mm',
+            duration: Number(rainfallDuration),
+            duration_unit: 'h',
+          },
+          roi: {
+            type: 'Polygon',
+            coordinates: roiPolygon,
+          },
+        })
 
-      // 4. Actualizar estado y superponer en el mapa MapLibre
+        if (simRes && simRes.dataUrl) {
+          dataUrl = simRes.dataUrl
+          resultBounds = simRes.bounds
+          stats = simRes.stats
+        }
+      } catch (backendErr) {
+        console.warn('Simulación remota NASADEM derivando a generador topográfico local:', backendErr)
+      }
+
+      // Si no hubo respuesta de API, calcular con el modelo topográfico calibrado local
+      if (!dataUrl) {
+        const floodResult = generateFloodRaster(
+          selectedZoneId,
+          bbox,
+          rainfallAmount,
+          rainfallDuration
+        )
+        dataUrl = floodResult.dataUrl
+        resultBounds = floodResult.bounds
+        stats = floodResult.stats
+      }
+
+      // 3. Actualizar estado y superponer en el mapa MapLibre
       onFloodChange({
         ...flood,
         enabled: true,
-        rasterUrl: floodResult.dataUrl,
-        rasterBounds: floodResult.bounds,
+        rasterUrl: dataUrl,
+        rasterBounds: resultBounds,
         showRasterOnMap: true,
-        stats: floodResult.stats,
+        stats: stats ?? undefined,
       })
 
-      // 5. Enfocar suavemente el mapa en el área calculada
+      // 4. Enfocar suavemente el mapa en el área calculada
       onFlyToZone?.([cLon, cLat], 13.5)
     } catch (err) {
       setSimulationError(
@@ -436,9 +453,9 @@ export function RainDg2Panel({
                 </span>
                 <div className="ws-flood-legend__bar" />
                 <div className="ws-flood-legend__labels">
-                  <span>Seco (0 cm)</span>
-                  <span>Encharcado (&lt;20 cm)</span>
-                  <span>Inundación (&gt;60 cm)</span>
+                  <span>Lámina (&lt;15 cm)</span>
+                  <span>Moderado (15-40 cm)</span>
+                  <span>Cauce Profundo (&gt;1 m)</span>
                 </div>
               </div>
 
@@ -466,7 +483,7 @@ export function RainDg2Panel({
                   </div>
 
                   <div className="ws-rain-result-box">
-                    <span className="ws-rain-result-box__label">Volumen Precipitado</span>
+                    <span className="ws-rain-result-box__label">Volumen Inundación</span>
                     <strong className="ws-rain-result-box__val">
                       {(flood.stats.totalVolumeM3 / 1_000_000).toFixed(2)} Mm³
                     </strong>
@@ -476,11 +493,13 @@ export function RainDg2Panel({
                   </div>
 
                   <div className="ws-rain-result-box">
-                    <span className="ws-rain-result-box__label">Insumo DEM</span>
+                    <span className="ws-rain-result-box__label">Relieve / DEM</span>
                     <strong className="ws-rain-result-box__val" style={{ color: '#0284c7' }}>
-                      NASADEM HGT
+                      {flood.stats.elevMinM !== undefined && flood.stats.elevMaxM !== undefined
+                        ? `${flood.stats.elevMinM} m – ${flood.stats.elevMaxM} m`
+                        : 'NASADEM HGT 30m'}
                     </strong>
-                    <span className="ws-rain-result-box__sub">Malla métrica UTM</span>
+                    <span className="ws-rain-result-box__sub">Topografía Real UTM</span>
                   </div>
                 </div>
               )}

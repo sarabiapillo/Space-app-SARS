@@ -554,4 +554,48 @@ export async function prepareFloodScenario(
   return res.json()
 }
 
+export interface FloodSimulateResponse {
+  status: string
+  dataUrl: string
+  bounds: [number, number, number, number]
+  stats: {
+    rainfallMm: number
+    durationHours: number
+    totalVolumeM3: number
+    floodedAreaKm2: number
+    floodedAreaPct: number
+    maxDepthM: number
+    meanDepthM: number
+    waterSurfaceHa: number
+    elevMinM?: number
+    elevMaxM?: number
+  }
+  model_metadata?: {
+    topography_dem: string
+    flow_algorithm: string
+    hydraulic_law: string
+    infiltration: string
+    color_palette: string
+  }
+}
+
+export async function simulateFloodScenario(
+  req: FloodPrepareRequest
+): Promise<FloodSimulateResponse> {
+  const res = await fetch('/api/flood-scenarios/simulate/', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Error al simular inundación' }))
+    throw new Error(err.error || `Error HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+
 

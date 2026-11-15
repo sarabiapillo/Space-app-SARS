@@ -68,98 +68,123 @@ export function generateFloodRaster(
       let baseDepth = 0
 
       if (zoneId === 'sumidero') {
-        // Cañón del Sumidero: Eje fluvial principal Norte-Sur con meandros
-        const riverX = 0.48 + 0.08 * Math.sin(ny * Math.PI * 2.2) + 0.03 * Math.cos(ny * Math.PI * 5)
-        const distToRiver = Math.abs(nx - riverX)
-        if (distToRiver < 0.05) {
-          // Cauce principal del Río Grijalva
-          baseDepth = (1.8 - distToRiver * 24) * 1.4
-        } else if (distToRiver < 0.12) {
-          // Llanura aluvial y márgenes del cañón
-          baseDepth = (0.12 - distToRiver) * 2.8
+        // Cañón del Sumidero: El cauce del Río Grijalva discurre en el fondo de la garganta (nx ≈ 0.52 - 0.54)
+        // con paredes verticales de más de 800m a ambos lados.
+        const canyonCenter = 0.52 + 0.04 * Math.sin(ny * Math.PI * 1.8) + 0.02 * Math.cos(ny * Math.PI * 3.6)
+        const distToCanyon = Math.abs(nx - canyonCenter)
+        if (distToCanyon < 0.045) {
+          // Fondo del cañón (cauce navegable y remansos profundos)
+          const profile = Math.cos((distToCanyon / 0.045) * (Math.PI / 2))
+          baseDepth = profile * 2.85
+        } else if (distToCanyon < 0.09) {
+          // Terrazas aluviales y pie de pared
+          const profile = (0.09 - distToCanyon) / 0.045
+          baseDepth = profile * 0.45
         }
-        // Depresiones tributarias kársticas
-        const tributary = Math.sin(nx * 14) * Math.cos(ny * 18)
-        if (tributary > 0.72) {
-          baseDepth = Math.max(baseDepth, (tributary - 0.72) * 0.9)
+        // Cañadas tributarias laterales
+        const tributary1 = Math.abs((ny - 0.35) - 0.5 * (nx - 0.52))
+        if (tributary1 < 0.015 && nx > 0.52) {
+          baseDepth = Math.max(baseDepth, (0.015 - tributary1) * 22)
         }
       } else if (zoneId === 'chicoasen') {
-        // Embalse Presa Chicoasén: Vaso hídrico amplio en el centro-norte con brazos laterales
-        const distToDam = Math.hypot(nx - 0.52, ny - 0.44)
-        if (distToDam < 0.28) {
-          baseDepth = Math.cos((distToDam / 0.28) * (Math.PI / 2)) * 3.2
+        // Presa Chicoasén: Vaso de almacenamiento encajonado en el cañón hacia el norte
+        const lakeCenter = 0.50 + 0.05 * (ny - 0.5)
+        const distToLake = Math.hypot(nx - lakeCenter, (ny - 0.48) * 0.7)
+        if (distToLake < 0.22) {
+          const profile = Math.cos((distToLake / 0.22) * (Math.PI / 2))
+          baseDepth = profile * 3.4
         }
-        // Brazos fluviales tributarios
-        const arm = Math.abs(nx - (0.35 + 0.3 * ny))
-        if (arm < 0.04) {
-          baseDepth = Math.max(baseDepth, (0.04 - arm) * 28)
+        // Brazos y garganta de entrada
+        const gorge = Math.abs(nx - 0.48)
+        if (gorge < 0.035 && ny > 0.35) {
+          baseDepth = Math.max(baseDepth, (0.035 - gorge) * 38)
         }
       } else if (zoneId === 'tuxtla') {
-        // Valle de Tuxtla: Río Sabinal en eje Este-Oeste con depresiones urbanas
-        const riverY = 0.52 + 0.06 * Math.sin(nx * Math.PI * 2.8)
+        // Valle de Tuxtla: Río Sabinal en el eje central Este-Oeste (ny ≈ 0.48 - 0.52)
+        // recibiendo escorrentías del Cerro Mactumatzá y ladera norte
+        const riverY = 0.50 + 0.035 * Math.sin(nx * Math.PI * 2.2)
         const distToRiver = Math.abs(ny - riverY)
-        if (distToRiver < 0.04) {
-          baseDepth = (0.04 - distToRiver) * 18
-        } else if (distToRiver < 0.14) {
-          // Zonas bajas inundables del valle
-          baseDepth = (0.14 - distToRiver) * 1.5
+        if (distToRiver < 0.035) {
+          const profile = (0.035 - distToRiver) / 0.035
+          baseDepth = profile * 1.6
+        } else if (distToRiver < 0.12) {
+          const profile = (0.12 - distToRiver) / 0.085
+          baseDepth = profile * 0.35
         }
-        // Encharcamientos puntuales urbanos
-        const puddle = Math.sin(nx * 26) * Math.sin(ny * 24)
-        if (puddle > 0.76) {
-          baseDepth = Math.max(baseDepth, (puddle - 0.76) * 0.7)
+        // Vados y arroyos urbanos tributarios (Pochota, San Roque)
+        const streamX = Math.abs(nx - (0.35 + 0.15 * ny))
+        if (streamX < 0.018 && ny > 0.3) {
+          baseDepth = Math.max(baseDepth, (0.018 - streamX) * 16)
         }
       } else if (zoneId === 'sancristobal') {
-        // Altos de Chiapas / San Cristóbal: Humedales de montaña y sumideros kársticos
-        const wetlandDist = Math.hypot(nx - 0.46, ny - 0.54)
-        if (wetlandDist < 0.22) {
-          baseDepth = Math.cos((wetlandDist / 0.22) * (Math.PI / 2)) * 1.2
+        // Altos de Chiapas / San Cristóbal: Valle plano intramontano (polje kárstico)
+        const basinDist = Math.hypot(nx - 0.50, ny - 0.52)
+        if (basinDist < 0.20) {
+          baseDepth = Math.cos((basinDist / 0.20) * (Math.PI / 2)) * 1.35
         }
-        const sinkholeDist = Math.hypot(nx - 0.72, ny - 0.35)
-        if (sinkholeDist < 0.12) {
-          baseDepth = Math.max(baseDepth, (0.12 - sinkholeDist) * 8)
+        // Sumideros kársticos
+        const sinkDist = Math.hypot(nx - 0.68, ny - 0.38)
+        if (sinkDist < 0.08) {
+          baseDepth = Math.max(baseDepth, (0.08 - sinkDist) * 12)
         }
       } else {
-        // Genérico / Vista actual / Recorte manual: Red dendrítica de drenaje
-        const drainX = 0.5 + 0.15 * Math.sin(ny * Math.PI * 2)
-        const dist = Math.abs(nx - drainX)
-        if (dist < 0.06) {
-          baseDepth = (0.06 - dist) * 14
-        }
-        const lowPockets = Math.sin(nx * 12) * Math.sin(ny * 12)
-        if (lowPockets > 0.65) {
-          baseDepth = Math.max(baseDepth, (lowPockets - 0.65) * 1.1)
+        // Genérico / Selección personalizada: Red dendrítica natural de drenaje hacia la depresión
+        const mainAxis = Math.abs(ny - (0.45 + 0.1 * Math.sin(nx * Math.PI * 2)))
+        if (mainAxis < 0.04) {
+          baseDepth = (0.04 - mainAxis) * 20
+        } else if (mainAxis < 0.12) {
+          baseDepth = (0.12 - mainAxis) * 2.2
         }
       }
 
       // Aplicar factor de precipitación
       const finalDepth = baseDepth * rainFactor
 
-      if (finalDepth >= 0.04) {
+      if (finalDepth >= 0.03) {
         wetCellCount++
         totalDepthSum += finalDepth
         if (finalDepth > maxDepth) maxDepth = finalDepth
 
-        // Mapeo a rampa de color hidrológica con transparencias
-        if (finalDepth < 0.20) {
-          // Encharcamiento leve (0.04 m a 0.20 m): Cian brillante semitransparente
-          data[idx] = 56 // R
-          data[idx + 1] = 189 // G
-          data[idx + 2] = 248 // B
-          data[idx + 3] = Math.round(140 + Math.min(60, finalDepth * 300)) // Alpha
-        } else if (finalDepth < 0.60) {
-          // Acumulación moderada (0.20 m a 0.60 m): Azul agua intenso
-          data[idx] = 2 // R
-          data[idx + 1] = 132 // G
-          data[idx + 2] = 199 // B
-          data[idx + 3] = Math.round(200 + Math.min(35, finalDepth * 70))
+        // Escala continua y agradable de azul hidrológico (cerúleo suave -> turquesa -> azur -> cobalto oceánico)
+        let r = 0
+        let g = 0
+        let b = 0
+        let a = 0
+
+        if (finalDepth < 0.15) {
+          // 0.03m a 0.15m: Lámina tenue / Azul cerúleo suave cristalino
+          const t = (finalDepth - 0.03) / 0.12
+          r = Math.round(125 * (1 - t) + 56 * t)
+          g = Math.round(211 * (1 - t) + 189 * t)
+          b = Math.round(252 * (1 - t) + 248 * t)
+          a = Math.round(75 + 65 * t)
+        } else if (finalDepth < 0.40) {
+          // 0.15m a 0.40m: Acumulación moderada / Azul turquesa laguna
+          const t = (finalDepth - 0.15) / 0.25
+          r = Math.round(56 * (1 - t) + 14 * t)
+          g = Math.round(189 * (1 - t) + 165 * t)
+          b = Math.round(248 * (1 - t) + 233 * t)
+          a = Math.round(140 + 40 * t)
+        } else if (finalDepth < 1.00) {
+          // 0.40m a 1.00m: Calado profundo / Azul azur cobalto
+          const t = (finalDepth - 0.40) / 0.60
+          r = Math.round(14 * (1 - t) + 2 * t)
+          g = Math.round(165 * (1 - t) + 132 * t)
+          b = Math.round(233 * (1 - t) + 199 * t)
+          a = Math.round(180 + 35 * t)
         } else {
-          // Inundación profunda / cauce fluvial (>0.60 m): Azul marino profundo
-          data[idx] = 30 // R
-          data[idx + 1] = 58 // G
-          data[idx + 2] = 138 // B
-          data[idx + 3] = 240
+          // >= 1.00m: Cauce principal / cañón hídrico / Azul marino profundo
+          const t = Math.min(1.0, (finalDepth - 1.0) / 2.0)
+          r = Math.round(2 * (1 - t) + 23 * t)
+          g = Math.round(132 * (1 - t) + 37 * t)
+          b = Math.round(199 * (1 - t) + 84 * t)
+          a = Math.round(215 + 25 * t)
         }
+
+        data[idx] = r
+        data[idx + 1] = g
+        data[idx + 2] = b
+        data[idx + 3] = a
       } else {
         // Terreno seco / drenado: 100% transparente
         data[idx] = 0

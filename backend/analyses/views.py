@@ -64,3 +64,31 @@ class FloodScenarioPrepareView(APIView):
         if profile is not None:
             response["rainfall_profile"] = profile
         return Response(response)
+
+
+class FloodScenarioSimulateView(APIView):
+    parser_classes = [UniqueFieldsJSONParser]
+
+    def post(self, request):
+        try:
+            normalized = normalize_request(request.data)
+        except InputValidationError as exc:
+            return Response({"errors": exc.errors}, status=400)
+
+        rainfall = normalized.get("rainfall", {})
+        amount_m = rainfall.get("amount_m", 0.025)
+        duration_s = rainfall.get("duration_s", 7200.0)
+        rainfall_mm = amount_m * 1000.0
+        duration_hours = max(0.1, duration_s / 3600.0)
+        roi = normalized.get("roi")
+
+        try:
+            from .simulate import compute_topographic_flood
+            result = compute_topographic_flood(roi, rainfall_mm, duration_hours)
+            return Response(result, status=200)
+        except Exception as exc:
+            return Response(
+                {"error": f"Error en cálculo topográfico hidrodinámico: {exc}", "details": str(exc)},
+                status=500,
+            )
+
