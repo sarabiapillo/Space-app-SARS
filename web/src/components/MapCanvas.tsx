@@ -1152,7 +1152,9 @@ export function MapCanvas({
       [bounds[0], bounds[1]], // SW: [west, south]
     ]
 
-    const opacity = Math.max(0.2, (solar.radiationIntensity / 100) * 0.95)
+    // Opacidad fija: la intensidad ya está en los valores calculados; atarla a la opacidad
+    // hacía que una radiación baja se viera casi transparente y no se distinguiera.
+    const opacity = 0.88
 
     const existingSource = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
     if (existingSource) {
@@ -1179,6 +1181,7 @@ export function MapCanvas({
             paint: {
               'raster-opacity': opacity,
               'raster-fade-duration': 150,
+              'raster-resampling': 'linear',
             },
           },
           map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
@@ -1193,7 +1196,6 @@ export function MapCanvas({
     solar.rasterPreviewUrl,
     solar.rasterBounds,
     solar.showRasterOnMap,
-    solar.radiationIntensity,
   ])
 
   // Superponer en el mapa el ráster generado por la simulación de inundación / encharcamientos

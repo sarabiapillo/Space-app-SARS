@@ -121,7 +121,18 @@ Esta documentación no modifica el frontend. Conservar juntos PNG, bounds, escal
 ## Límites y seguridad del MVP
 
 - ROI válida Polygon/MultiPolygon, en la cobertura NASADEM, con máximo de 1.000 vértices y dos teselas fuente.
-- Caja envolvente de hasta 0,2° por eje, diámetro diagonal geodésico máximo de 10 km y estimación de hasta 150.000 píxeles. Estos son **presupuestos operativos conservadores**, no una garantía de uniformidad solar o validación física.
+- Caja envolvente de hasta 0,25° por eje, diámetro diagonal geodésico máximo de 30 km y estimación de hasta 500.000 píxeles (antes 0,2°, 10 km y 150.000). Se ampliaron el 2026-11-15 para permitir radios de hasta 10 km desde el panel, con medidas reales en Windows (NASADEM 30 m, centro −93.115, 16.76, 2026-06-21 10:00): radio 2 km → 131×132 px, 3 s; 5 km → 324×326 px, 13 s; 10 km → 646×650 px, 61 s y pico de ~92 MB. Estos son **presupuestos operativos**, no una garantía de uniformidad solar o validación física.
+- **Windows:** el candado entre procesos usa `fcntl.flock` en Linux y `msvcrt.locking` en Windows (`backend/solar/services.py`), así que la API también corre en desarrollo local con Windows.
+
+### Mapa de calor en la interfaz (2026-11-15)
+
+El panel **Simulador Solar & Radiación** (`web/src/components/RightPanel.tsx`, `web/src/utils/solarHeatmap.ts`):
+
+- **Radio de cálculo:** 1, 2, 3, 5, 7,5 o 10 km alrededor del centro de la zona (caja cuadrada con conversión grados↔km según la latitud).
+- **Escala:** el PNG del backend se normaliza entre 0 y el DNI ajustado. En zonas pequeñas los valores quedan en una franja estrecha (p. ej. 398–450 de 0–500 W/m² con radio 2 km) y casi no se distinguen. El navegador invierte la LUT Inferno de 256 colores (idéntica a la de matplotlib) para recuperar W/m² de cada píxel (±DNI/512, ~1 W/m²) y vuelve a colorear con dos modos: **Contraste** (p2–p98 de esa simulación) y **Absoluta** (0–DNI, comparable entre horas). La leyenda muestra marcas en W/m² y la imagen se amplía con interpolación suave.
+- **Tablero:** radiación elegida, DNI de cielo despejado y ajustado, zona (radio y km²) e irradiancia incidente mínima, máxima, mediana y media. Si se cambia la radiación después de calcular, avisa que hay que recalcular.
+- **Mapa:** opacidad fija (0,88) y remuestreo lineal; antes la opacidad dependía del deslizador de radiación y una radiación baja casi no se veía.
+- **Verificado:** con radio 5 km, los valores recuperados del PNG (p2 294, mediana 423, p98 479 W/m²) coinciden con los de `incident.tif` (293, 423, 480). Pruebas: `web/tests/solarHeatmap.test.mjs`.
 - No se permiten rutas, nombres de archivo, capas adicionales ni identificadores elegidos por el cliente. Los UUID opacos se resuelven solo bajo la raíz de almacenamiento de la API; los symlinks se rechazan.
 - Publicación íntegra de TIFF + PNG + manifiesto antes de responder `ready`; sin corridas parciales visibles.
 - **API pública de hackatón, sin autenticación ni permisos por usuario.** Conocer un ID permite consultar la corrida. Los IDs no son un sistema de autorización para información privada. Para Internet se necesitan autenticación, HTTPS, cuotas, limitación de peticiones, proxy con límites/timeout y política de retención.

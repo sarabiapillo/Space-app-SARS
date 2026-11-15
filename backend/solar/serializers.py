@@ -73,13 +73,14 @@ def validate_request(data):
     if west >= east or south >= north:
         _invalid('ROI has no area')
     # Reject huge bboxes before expensive geometry construction, including disconnected multipolygons.
-    if east - west > 0.2 or north - south > 0.2:
+    # Límites medidos en Windows (2026-11-15, NASADEM 30 m): radio 10 km = 646x650 px, 61 s, pico 92 MB.
+    if east - west > 0.25 or north - south > 0.25:
         raise TooLarge()
     geod = Geod(ellps='WGS84')
     width = max(geod.inv(west, lat, east, lat)[2] for lat in (south, north))
     height = max(geod.inv(lon, south, lon, north)[2] for lon in (west, east))
     diagonal = max(geod.inv(west, south, east, north)[2], geod.inv(west, north, east, south)[2])
-    if diagonal > 10000 or ((width + 100) / 30) * ((height + 100) / 30) > 150000:
+    if diagonal > 30000 or ((width + 100) / 30) * ((height + 100) / 30) > 500000:
         raise TooLarge()
     try:
         geom = shape(roi)

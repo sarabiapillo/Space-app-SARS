@@ -69,6 +69,10 @@ export interface SolarSimulationState {
   rasterBounds?: [number, number, number, number] | null
   /** Si se debe superponer la capa ráster calculada sobre el mapa. */
   showRasterOnMap?: boolean
+  /** Radio de la zona de cálculo alrededor del centro elegido, en km (1 a 10). */
+  radiusKm?: number
+  /** Escala de color del mapa de calor: estirada a esta simulación o absoluta (0 a DNI). */
+  heatmapMode?: 'estirado' | 'absoluto'
 }
 
 /** Metadatos de la escena y pila NISAR GCOV asociada al mapa (Contrato C1 real en `data/raw/`). */

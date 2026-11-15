@@ -1,9 +1,9 @@
 """Local synchronous simulation runs. IDs are public capabilities, not access control.
 
-One shared filesystem and POSIX flock are required across all worker processes. No
-background job, durable queue, authentication or distributed lock is provided.
+One shared filesystem and a file lock are required across all worker processes: POSIX flock
+on Linux (servidor) and msvcrt.locking on Windows (desarrollo local). No background job,
+durable queue, authentication or distributed lock is provided.
 """
-import fcntl
 import hashlib
 import json
 import os
@@ -19,6 +19,30 @@ from rest_framework.exceptions import APIException, NotFound
 
 _RUN = re.compile(r'[0-9a-f]{32}\Z')
 _GUARD = threading.Lock()
+
+try:                                    # Linux / macOS (servidor)
+    import fcntl
+
+    def _try_lock(fd):
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # BlockingIOError si otro proceso lo tiene
+
+    def _unlock(fd):
+        pass                                             # se libera al cerrar el descriptor
+except ImportError:                     # Windows (desarrollo local): fcntl no existe
+    import msvcrt
+
+    def _try_lock(fd):
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            raise BlockingIOError() from None
+
+    def _unlock(fd):
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
 
 
 class Busy(APIException):
@@ -99,10 +123,13 @@ def simulate(data):
         lock_path = target / '.provider.lock'
         if lock_path.is_symlink():
             raise Unavailable()
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        # O_NOFOLLOW no existe en Windows; ahí el is_symlink() de arriba es la protección.
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        locked = False
         try:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _try_lock(fd)
+                locked = True
             except BlockingIOError:
                 raise Busy() from None
             run_id = uuid4().hex
@@ -146,6 +173,8 @@ def simulate(data):
                     shutil.rmtree(staging)
                 raise
         finally:
+            if locked:
+                _unlock(fd)
             os.close(fd)  # flock released on crash or normal exit
     except (Busy, Unavailable):
         raise

@@ -4949,3 +4949,22 @@ button:disabled {
 .flood-charts__fig small { font-size: 10.5px; color: #64748b; }
 .flood-charts__canvas { position: relative; height: 170px; }
 .flood-charts__canvas--short { height: 110px; }
+
+/* ---- Simulador solar: radio, leyenda numérica y tablero ---- */
+.solar-radius { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.solar-radius__options,
+.solar-legend__modes { display: flex; flex-wrap: wrap; gap: 3px; }
+.solar-radius__btn {
+  border: 1px solid var(--color-border); background: transparent; color: var(--color-text);
+  border-radius: 3px; padding: 2px 7px; font-size: 10.5px; font-family: var(--font-mono); cursor: pointer;
+}
+.solar-radius__btn.is-active { background: #DD513A; border-color: #DD513A; color: #fff; }
+.solar-radius__hint,
+.solar-legend__note { font-size: 10px; color: var(--color-text-muted); line-height: 1.4; }
+.solar-legend__head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.solar-legend__head .solar-legend__title { margin-bottom: 0; }
+.solar-legend__ticks { position: relative; height: 14px; margin-top: 2px; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; color: var(--color-text); }
+.solar-legend__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.solar-legend__ticks span:first-child { transform: none; }
+.solar-legend__ticks span:last-child { transform: translateX(-100%); }
+.solar-api-stale { margin: 4px 0; padding: 4px 6px; border-radius: 3px; background: rgba(252, 165, 10, 0.15); color: var(--color-text); font-size: 10.5px; }
