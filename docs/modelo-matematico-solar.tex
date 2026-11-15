@@ -1,0 +1,289 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,mexico]{babel}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,longtable}
+\usepackage{siunitx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usepackage{hyperref}
+\usepackage{cite}
+\title{Memoria académica: modelo físico para estimar irradiancia solar sobre terreno}
+\author{TerraPulse AI}
+\date{Fases A, B y C implementadas offline; decisiones restantes y validación física pendientes}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Se propone un modelo reproducible, de cielo despejado, para estimar la irradiancia solar directa que incide sobre la superficie topográfica representada por NASADEM. La cadena transforma elevaciones referidas al geoide EGM96 en normales locales, calcula posición solar a partir de una fecha-hora local inequívoca y estima DNI mediante Ineichen/Perez. La proyección coseno convierte la irradiancia normal al haz en irradiancia por área real de terreno; los flujos de onda corta reflejado, transmitido y absorbido solo se estiman bajo fracciones ópticas explícitas, aún no medidas ni implementadas. El resultado es una estimación instantánea en W m$^{-2}$, no irradiación acumulada, temperatura, medición meteorológica ni predicción validada para un lugar. Las fases A y B ya cuentan con implementación offline en pvlib 0.16.1 y pruebas deterministas; la fase C aplica la proyección coseno sobre normales NASADEM. Esto no valida su precisión radiométrica local. Las decisiones físicas sobre representatividad espacial, sombras y materiales siguen pendientes de aprobación.
+\end{abstract}
+
+\section{Introducción, alcance y magnitudes}
+La palabra \emph{radiación} suele usarse informalmente para magnitudes distintas. Este modelo calcula \textbf{irradiancia}, potencia radiante incidente por unidad de área, en W m$^{-2}$. La \textbf{irradiación} es la integral temporal de irradiancia, en J m$^{-2}$ (o kWh m$^{-2}$), y no se obtiene de una sola evaluación instantánea. El flujo radiante es potencia en W; la temperatura es una variable de estado térmico y no se deduce de irradiancia sin balance energético, propiedades térmicas y condiciones de contorno. El flujo aquí descrito no estima temperatura.
+
+El dominio espacial es una grilla de terreno métrica derivada de NASADEM. La elevación NASADEM_HGT está referida verticalmente a EGM96; sus muestras son enteros de 16 bits en el formato documentado por NASADEM \cite{nasadem}. EGM96 es referencia vertical, no una declaración de exactitud vertical universal: no se asigna aquí una incertidumbre numérica única al DEM. La grilla de cálculo debe estar en una proyección métrica local apropiada a la ROI. No se calculan distancias ni gradientes sobre grados geográficos. La reproyección, el remuestreo, la máscara de cobertura y la procedencia de las teselas deben quedar documentados para cualquier corrida.
+
+El modelo propuesto entrega irradiancia directa geométrica y un balance condicional de flujos espectrales, no una medición de absorción. No incorpora horizonte topográfico, sombras, cielo difuso, radiación reflejada desde terreno vecino, nubosidad observada, variación atmosférica local, balance térmico ni validación de campo. Los modelos topográficos pueden ser sensibles al DEM, a la resolución y a los supuestos de cielo y horizonte; esto debe considerarse al interpretar mapas \cite{dubayah1995}.
+
+\section{Elevación, coordenadas y geometría del terreno}
+Sea $z(x,y)$ la elevación en metros sobre el datum vertical EGM96, con $x$ positivo hacia el este y $y$ positivo hacia el norte. La grilla se orienta norte-arriba. Si $\Delta x>0$ y $\Delta y>0$ son tamaños métricos de celda, las diferencias centrales interiores se definen por
+\begin{align}
+ z_x(x,y)&\simeq\frac{z(x+\Delta x,y)-z(x-\Delta x,y)}{2\Delta x},\label{eq:zx}\\
+ z_y(x,y)&\simeq\frac{z(x,y+\Delta y)-z(x,y-\Delta y)}{2\Delta y}.\label{eq:zy}
+\end{align}
+En el almacenamiento GDAL norte-arriba, el coeficiente afín vertical es $d_y<0$; definimos la separación positiva $\Delta y=-d_y>0$, mientras que $y(r)=y_0+r\,d_y$. La regla de la cadena da $\partial z/\partial y=(\partial z/\partial r)/(\partial y/\partial r)$ y por diferencias centrales resulta
+\begin{equation}
+ z_y[r,c]\simeq\frac{z[r+1,c]-z[r-1,c]}{2d_y}
+ =\frac{z[r-1,c]-z[r+1,c]}{2\Delta y}.\label{eq:zy-raster}
+\end{equation}
+Es exactamente la convención \texttt{north} de \texttt{terrain.py}; no hay error de signo que corregir en el motor. Prueba conceptual: para el plano $z(x,y)=ay$, $a>0$, resulta $z_y=a$, $n_N=-a/\sqrt{1+a^2}$ y el aspecto de máxima bajada es sur ($180^\circ$). Las derivadas son razones m/m (adimensionales); requieren centro y vecinos válidos. Bordes sin soporte y NoData se enmascaran, no se sustituyen por cero.
+
+La pendiente respecto de la horizontal y el aspecto de máxima bajada son
+\begin{align}
+ q&=\sqrt{z_x^2+z_y^2}, & \theta&=\arctan(q),\label{eq:slope}\\
+ \phi&=\left[\frac{180^\circ}{\pi}\operatorname{atan2}(-z_x,-z_y)\right]\bmod 360^\circ.\label{eq:aspect}
+\end{align}
+Aquí $\theta$ está en radianes y $\phi$ en grados desde norte, sentido horario: norte $0^\circ$, este $90^\circ$, sur $180^\circ$, oeste $270^\circ$. $\phi$ señala máxima bajada y es indefinido en terreno plano; no se le atribuye orientación física cuando $q=0$.
+
+La normal unitaria exterior (este, norte, arriba) derivada de la superficie es
+\begin{equation}
+ \mathbf n=\frac{(-z_x,-z_y,1)}{\sqrt{1+z_x^2+z_y^2}}=(n_E,n_N,n_U),\qquad\|\mathbf n\|=1.\label{eq:normal}
+\end{equation}
+La estimación de gradientes depende del remuestreo, tamaño de píxel, rugosidad no resuelta, errores verticales y máscara. Horn discute estimación de gradiente y normal en modelos de sombreado; esa referencia no demuestra por sí misma una ley de absorción \cite{horn1981}.
+
+\section{Tiempo y posición solar}
+La entrada temporal conceptual es una fecha-hora local acompañada por zona horaria IANA. Se debe resolver una única correspondencia a instante UTC. Horas inexistentes o ambiguas por cambios de horario de verano se rechazan mientras no exista una elección explícita; nunca se presupone UTC ni se escoge silenciosamente una ocurrencia. El registro conserva cadena local, zona, offset y UTC. La posición debe calcularse para ese instante, no para una hora local sin zona.
+
+El SPA de Reda y Andreas calcula posición solar a partir de instante, longitud y latitud, y explicita la convención de cenit/azimut \cite{reda2004}. Se propone la implementación NREL SPA de \texttt{pvlib.solarposition.spa\_python}, no una rutina astronómica propia \cite{holmgren2018,pvlibspa}. El azimut solar $A_\odot$ aquí se mide desde norte en sentido horario, en grados; la elevación $e$ se mide sobre el horizonte. El cenit geométrico $z_g$ usa la dirección sin refracción; el aparente $z_a$ incorpora el desplazamiento angular debido a refracción atmosférica, parametrizado con presión $P$ y temperatura del aire $T_{\rm air}$. Para ser coherentes con el modelo de cielo despejado se \emph{propone} usar $e=e_a$ aparente y
+\begin{equation}
+ e_a=90^\circ-z_a,\qquad e_g=90^\circ-z_g.\label{eq:zenith}
+\end{equation}
+La relación celeste elemental, útil para auditar la dependencia de tiempo y lugar pero \emph{no} sustituto de SPA, es
+\begin{equation}
+ \cos z_g\simeq\sin\varphi_g\sin\delta+\cos\varphi_g\cos\delta\cos H.\label{eq:hourangle}
+\end{equation}
+Aquí $\varphi_g$ es latitud geográfica, $\delta$ declinación solar y $H$ ángulo horario que depende de la hora solar local y longitud; los tres son ángulos (evaluados consistentemente en radianes en funciones trigonométricas). El instante UTC determina efemérides y ángulo horario; SPA agrega correcciones astronómicas/topocéntricas para la posición y refracción aproximada para la apariencia. La distinción angular y la regla de horizonte aparente ($e_a\leq0$) requieren aprobación. A igual dirección geométrica, un cambio en el modelo de refracción afecta el instante de amanecer/atardecer aparente; la precisión numérica informada para SPA no garantiza precisión radiométrica ni exactitud local con atmósfera desconocida.
+
+Con $A_r=A_\odot\pi/180$ y $e_r=e_a\pi/180$ (ángulos trigonométricos en radianes), el vector unitario desde la superficie hacia el Sol es
+\begin{equation}
+ \mathbf s=(\cos e_r\sin A_r,\;\cos e_r\cos A_r,\;\sin e_r).\label{eq:sunvector}
+\end{equation}
+Es una dirección en ejes este-norte-arriba, no una posición espacial del Sol. Su uso exige la misma convención angular que la normal.
+
+\subsection{Aproximación de un punto representativo por ROI}
+Para limitar el coste astronómico se propone evaluar SPA y el cielo despejado una sola vez en un punto \emph{interior y documentado} del polígono ROI (con altura DEM válida), y reutilizar $\mathbf s$ y DNI en sus píxeles. Esto evita recomputar efemérides por celda, pero también supone que posición solar y condiciones atmosféricas no varían significativamente dentro del ROI; no elimina la variación de $\mathbf n(x,y)$. La aproximación necesita ROI con una zona horaria inequívoca, diámetro geodésico/relieve acotados y contraste en extremos y cotas altimétricas: $\Delta_s=\max_{q\in\mathrm{ROI}}\arccos[\mathbf s(q)\cdot\mathbf s(q_0)]$ es el desvío direccional máximo respecto de punto $q_0$ (radianes o grados tras convertir). La cota de primer orden del factor iluminado es $|\Delta(\mathbf n\cdot\mathbf s)|\leq\|\Delta\mathbf s\|$, para normal fija; no captura cambios de DNI por altitud o turbidez. Los límites de 10~km de diámetro y 0,5$^\circ$ de variación solar del plan son \emph{hipótesis de diseño sin validación científica}: aceptar o rechazar según análisis de sensibilidad, en especial cerca del horizonte, y no promediar silenciosamente zonas horarias distintas. Un cálculo solar único es una decisión de ingeniería, no un resultado de SPA \cite{reda2004}.
+
+\section{Cielo despejado: irradiancia horizontal y directa normal}
+El modelo de cielo despejado Ineichen/Perez parametriza irradiancias global horizontal (GHI), directa normal (DNI) y difusa horizontal (DHI) con altitud, posición solar, masa de aire e índice de turbidez Linke \cite{ineichen2002}. La fase B usa pvlib 0.16.1, fijado en \texttt{pipeline/solar/requirements.txt}, con la presión efectiva calculada en fase A;  pvlib respalda la disponibilidad de algoritmos y software, no la precisión del resultado local de TerraPulse \cite{holmgren2018,pvlibineichen,pvliblocation,pvlibspa}.
+
+Sea $z_a$ el cenit aparente en grados y $\mu_0=\max[\cos(z_a),0]$ (conversión previa a radianes para la función coseno). La aproximación Kasten--Young de masa óptica relativa, elegida como método de referencia en pvlib, puede expresarse para $z_a<90^\circ$ como \cite{kastenyoung1989,pvlibairmass}
+\begin{equation}
+ m_r\simeq\left[\cos z_a+0.50572(96.07995-z_a)^{-1.6364}\right]^{-1},\qquad
+ m_a=m_r\frac{P}{P_0},\quad P_0=101325\,\mathrm{Pa}.\label{eq:airmass}
+\end{equation}
+Los números $96.07995$ y $z_a$ de la potencia se evalúan \emph{numéricamente en grados} dentro de esta parametrización empírica (no son magnitudes que deban elevarse con unidades). $m_r$ y $m_a$ son adimensionales; $P$ es presión local y $P_0$ la referencia. Como cierre constitutivo \emph{propuesto}, no una observación, se toma la atmósfera estándar seca y una capa troposférica de tasa térmica constante \cite{pvlibalt2pres}:
+\begin{equation}
+ T_{\rm std}(h)=T_0-Lh,\qquad
+ P_{\rm std}(h)=P_0\left(1-\frac{Lh}{T_0}\right)^{g/(R_{\rm air}L)},\quad
+ \frac{Lh}{T_0}<1.\label{eq:pressure}
+\end{equation}
+En la Ec.~(\ref{eq:pressure}), $h$ es altitud respecto del nivel de referencia [m], $T_0=288.15$ K, $L=0.0065$ K m$^{-1}$ (descenso térmico positivo), $g=9.80665$ m s$^{-2}$, $R_{\rm air}=287.053$ J kg$^{-1}$ K$^{-1}$ y $P_0=101325$ Pa: son valores usados/documentados por \texttt{pvlib.atmosphere.alt2pres}, no medidas en la ROI. Su exponente y el cociente $Lh/T_0$ son adimensionales. La hipótesis excluye humedad real e inversiones térmicas y no modela perfiles verticales de aerosoles; alturas NASADEM referidas al geoide EGM96 son una aproximación operativa de altitud sobre nivel del mar, no mediciones barométricas. El parámetro de temperatura \emph{para refracción} $T_{\rm air}$ (por defecto de pvlib, 12~$^\circ$C) es distinto de $T_{\rm std}(h)$, no debe confundirse con él ni presentarse como observado \cite{pvlibspa}. \texttt{Location.get\_clearsky} usa \texttt{lookup\_linke\_turbidity} y \texttt{get\_airmass}; su implementación puede recalcular la masa absoluta desde \texttt{alt2pres} incluso si se proporciona presión a otra llamada. Por eso, si algún día se incorpora presión observada, se debe verificar la propagación a refracción \emph{y} $m_a$ en la versión fijada de pvlib, en vez de afirmar que un argumento cambia ambos cálculos \cite{pvliblocationsource}. No se ha justificado sustituir valores meteorológicos faltantes por mediciones ficticias. Por debajo del horizonte no se extrapola esta fórmula. La irradiancia extraterrestre normal al haz $I_0(t)$ varía con distancia Tierra--Sol ($I_0\propto r^{-2}$ para distancia orbital $r$) y se calcula con el método/versionado de pvlib, no es medición local. El índice Linke $T_L$ resume atenuación atmosférica respecto de una atmósfera limpia y seca de referencia: de manera constitutiva y esquemática, para la banda corta directa \cite{ineichen2002},
+\begin{equation}
+ \mathrm{DNI}_{\rm cs}\sim I_0\exp[-m_a\,T_L\,\delta_{\rm cda}],\label{eq:linke}
+\end{equation}
+con $\delta_{\rm cda}$ profundidad óptica efectiva adimensional de la atmósfera limpia y seca. Esta relación define el papel físico de $T_L$; la predicción propuesta se calcula con las \emph{expresiones empíricas completas} de Ineichen/Perez en Ecs.~(\ref{eq:ghi})--(\ref{eq:dni}), no evaluando la Ec.~(\ref{eq:linke}) con una $\delta_{\rm cda}$ inventada. Para $m_a>0$ el signo de la sensibilidad esperada es $\partial\mathrm{DNI}/\partial T_L<0$ en el término de atenuación, aunque límites/empalmes de la implementación y el horizonte requieren análisis particular. La tabla histórica empaquetada que ofrece pvlib contiene promedios mensuales climatológicos interpolados, no observaciones para la fecha ni mediciones de la ROI \cite{pvliblinke}. Su elección se justifica \emph{solo} como escenario reproducible de referencia sin datos meteorológicos de la fecha: los promedios históricos pueden representar condiciones climatológicas típicas de cielo despejado, pero no nubes, aerosoles/agua contemporáneos ni dispersión espacial a resolución DEM. Un mapa de un día dado no debe llamarse estimación observacional de ese día. La fuente, versión de datos, interpolación espacial/temporal y valor usado deben registrarse; repetir el cálculo con turbidez/altitud/temperatura supuestas distintas y, cuando existan, comparar contra radiometría independiente antes de afirmar precisión. No se sustituye $T_L$ por una observación no disponible.
+
+La formulación empírica Ineichen/Perez combina atenuación del haz y una corrección para mantener la partición horizontal no negativa \cite{ineichen2002,pvlibineichen,pvlibsource}. Para documentar \emph{exactamente la variante propuesta de pvlib con \texttt{perez\_enhancement=False}} (no una ley fundamental), se definen los coeficientes adimensionales de altitud $h$ expresada numéricamente en metros:
+\begin{align}
+ f_1&=\exp[-h/(8000\,\mathrm m)],& f_2&=\exp[-h/(1250\,\mathrm m)],\\
+ c_1&=0.868+(5.09\times10^{-5}\,\mathrm m^{-1})h,&c_2&=0.0387+(3.92\times10^{-5}\,\mathrm m^{-1})h.\label{eq:ineichen-coeff}
+\end{align}
+Con $T_L$ turbidez Linke y $I_0$ en W m$^{-2}$, la implementación de referencia evalúa para $\mu_0>0$:
+\begin{align}
+ \mathrm{GHI}&=c_1 I_0\mu_0\exp\{-c_2m_a[f_1+f_2(T_L-1)]\},\label{eq:ghi}\\
+ b&=0.664+0.163/f_1,\qquad B_1=I_0 b\exp[-0.09m_a(T_L-1)],\label{eq:beam1}\\
+ k&=1-\frac{0.1-0.2\exp(-T_L)}{0.1+0.882/f_1},\qquad
+ B_2=\mathrm{GHI}\,\min\!\left(\max\!\left(\frac{k}{\mu_0},0\right),10^{20}\right),\label{eq:beam2}\\
+ \mathrm{DNI}_{\rm cs}&=\min(B_1,B_2),\qquad
+ \mathrm{DHI}=\mathrm{GHI}-\mathrm{DNI}_{\rm cs}\mu_0.\label{eq:dni}
+\end{align}
+$B_1,B_2$ son candidatos de DNI en W m$^{-2}$; $b,k,c_1,c_2,f_1,f_2$ son factores empíricos adimensionales. El límite $10^{20}$ es una guarda numérica de la implementación, no un parámetro físico. Cerca de $\mu_0=0$ la división exige tratamiento explícito: al anularse la elevación aparente o bajar el Sol del horizonte, el producto final fija GHI/DNI/DHI directas en cero sin evaluar cocientes singulares. Esta transcripción debe contrastarse contra la versión \emph{fijada} de pvlib antes de usar sus cifras en producción; la fase B ya ejecuta esa comparación de software con la versión 0.16.1 y un ejemplo offline de una sub-ROI con NASADEM local, sin que eso constituya una medición atmosférica de la ROI. La relación DHI es cierre del plano horizontal, no un término que el MVP proyecte sobre el terreno. La interfaz devuelve las tres magnitudes en W m$^{-2}$; el modelo de superficie utiliza DNI, no GHI ni DHI. Si $e\leq0$ (o el criterio de horizonte aparente elegido indica Sol bajo horizonte), se define DNI=GHI=DHI=0 para el producto instantáneo y se conservan los ángulos astronómicos reales como metadatos. El manejo de valores próximos al horizonte requiere aprobación y pruebas de consistencia.
+
+Un porcentaje experimental $p\in[0,100]$ escala DNI:
+\begin{equation}
+ B=\mathrm{DNI}_{p}=\mathrm{DNI}_{\rm cs}\frac{p}{100}.\label{eq:intensity}
+\end{equation}
+No representa nubosidad medida, pronóstico, calibración ni probabilidad; es un control paramétrico experimental y debe etiquetarse así. Con noche o $p=0$ se fija $B=0$ y se distinguen celdas físicas con irradiancia cero de NoData.
+
+\section{Proyección sobre área real y absorción}
+Para un haz paralelo con DNI $B$ (W m$^{-2}$ de área perpendicular al haz), un elemento de superficie $dA$ con normal $\mathbf n$ presenta al haz un área proyectada $dA_{\perp}=dA\max(0,\mathbf n\cdot\mathbf s)$. La potencia interceptada es $dP=B\,dA_{\perp}$; al dividir por el área real $dA$ resulta la irradiancia directa sobre la superficie inclinada:
+\begin{equation}
+ G_i=B\max(0,\mathbf n\cdot\mathbf s).\label{eq:incidence}
+\end{equation}
+Es una consecuencia geométrica de proyección, no requiere suponer una superficie reflectora Lambertiana. Evítese llamar a esta operación una ley de absorción de Lambert: la reflectancia Lambertiana es un supuesto BRDF distinto. En la literatura de sombreado, el término coseno puede aparecer junto con modelos de reflectancia, que no se adoptan aquí \cite{horn1981}.
+
+Casos de control: para terreno horizontal $\mathbf n=(0,0,1)$, el factor es $\max(0,\sin e)$. Una ladera orientada hacia el Sol aumenta su producto escalar y puede recibir hasta $B$; una ladera inclinada en sentido contrario recibe menos o cero si el Sol queda tras el plano local. Ninguno de estos casos determina visibilidad: una cresta distante puede ocultar el Sol. No se calcula horizonte ni sombra topográfica en esta propuesta. De noche el factor efectivo se anula por la condición solar anterior, aunque una ladera matemática pudiera tener producto positivo si se evaluara una dirección bajo el horizonte.
+
+\subsection{Balance pasivo: reflexión, transmisión y absorción}
+Una muestra óptica pasiva que recibe un flujo directo $d\Phi_i$ en una banda solar definida reparte esa potencia entre reflexión total $d\Phi_r$, transmisión total por el lado de salida $d\Phi_t$ y absorción interna $d\Phi_a$, bajo la hipótesis de que no hay emisión solar propia, conversión espectral, almacenamiento óptico ni fuentes internas. Para la \emph{misma} banda, ángulo y volumen de control, el balance de energía es \cite{nisttrans}
+\begin{equation}
+ d\Phi_i=d\Phi_r+d\Phi_t+d\Phi_a,\qquad
+ 1=R+T+\mathcal A,\quad R,T,\mathcal A\in[0,1].\label{eq:balance}
+\end{equation}
+$R=d\Phi_r/d\Phi_i$ es reflectancia hemisférica efectiva; $T=d\Phi_t/d\Phi_i$ es transmitancia hemisférica efectiva y $\mathcal A=d\Phi_a/d\Phi_i$ es \emph{absortancia} efectiva. Las tres son fracciones adimensionales, no irradiancias ni temperaturas. Para superficie opaca $T=0$; una muestra transmisiva puede ser transparente (predomina transmisión direccional no dispersa) o translúcida (transmisión dispersa): la etiqueta \emph{no} se deduce solo del porcentaje $T$. Espesor, caras, espectro y ángulo de incidencia importan. Una celda DEM aporta geometría de cara exterior, no espesor, trayectorias internas ni las caras posteriores del material.
+
+Para irradiancia directa $G_i$ de Ec.~(\ref{eq:incidence}) por área real de la cara de entrada, los flujos \emph{equivalentes por esa área} son
+\begin{equation}
+ G_{\rm ref}=R G_i,\qquad G_{\rm trans}=T G_i,\qquad
+ G_{\rm abs}=\mathcal A G_i=(1-R-T)G_i,\qquad
+ G_i=G_{\rm ref}+G_{\rm trans}+G_{\rm abs}.\label{eq:absorbed}
+\end{equation}
+Esta Ec.~(\ref{eq:absorbed}) sustituye la fórmula opaca de absorción del borrador (citada como «ecuación 27» en la devolución del físico); su número impreso puede variar al incorporar ecuaciones. \emph{Reflejado} no es \emph{absorbido} y lo transmitido no se deposita necesariamente como calor en el material de entrada: puede alcanzar otro cuerpo. Para material opaco $T=0$, $R\simeq\alpha_{\rm dh}$ y $G_{\rm abs}=(1-R)G_i$ como \emph{caso particular}. El albedo de haz (black-sky) es una reflectancia direccional-hemisférica; el albedo de cielo difuso (white-sky) es bihemisférico, y una reflectancia en una sola dirección de observación no equivale a ninguno \cite{modis43}. Su uso como $R$ exige coincidencia de banda y geometría.
+
+El balance también es espectral. Para banda corta $[\lambda_1,\lambda_2]$ y una dirección de incidencia local $\theta_i=\arccos(\mathbf n\cdot\mathbf s)$ iluminada, sea $E_{\lambda}(\lambda)$ la irradiancia espectral incidente por área real y unidad de longitud de onda, y $\rho_{dh}(\lambda,\theta_i)$, $\tau_{dh}(\lambda,\theta_i)$ y $a_{\lambda}(\lambda,\theta_i)$ las fracciones totales reflejada, transmitida y absorbida por el volumen de control (integradas sobre sus hemisferios de salida). Entonces \cite{nisttrans,modis43}
+\begin{align}
+ \rho_{dh}(\lambda,\theta_i)+\tau_{dh}(\lambda,\theta_i)+a_{\lambda}(\lambda,\theta_i)&=1,\label{eq:spectral-balance}\\
+ R=\frac{\int_{\lambda_1}^{\lambda_2}E_{\lambda}\rho_{dh}\,d\lambda}{\int_{\lambda_1}^{\lambda_2}E_{\lambda}\,d\lambda},\quad
+ T=\frac{\int_{\lambda_1}^{\lambda_2}E_{\lambda}\tau_{dh}\,d\lambda}{\int_{\lambda_1}^{\lambda_2}E_{\lambda}\,d\lambda},\quad
+ \mathcal A=\frac{\int_{\lambda_1}^{\lambda_2}E_{\lambda}a_{\lambda}\,d\lambda}{\int_{\lambda_1}^{\lambda_2}E_{\lambda}\,d\lambda}=1-R-T.\label{eq:spectral-albedo}
+\end{align}
+Cada integral tiene W m$^{-2}$; el cociente no tiene unidades. El espectro, el material y sus propiedades \emph{no} se obtienen de NASADEM ni de GCOV. Los controles propuestos permitirían configurar porcentajes $100R$, $100T$ y $100\mathcal A$ en $[0,100]$, con suma exactamente 100\% salvo tolerancia declarada de redondeo; nunca normalizar silenciosamente datos incompatibles. Un ejemplo puramente hipotético $20\%$ reflejado, $30\%$ transmitido y $50\%$ absorbido satisface el balance, pero \textbf{no prueba} que un material real tenga esas propiedades. Para un caso opaco hipotético $R=0.20$, $T=0$, $\mathcal A=0.80$. Superficies translúcidas y transparentes podrían incluso compartir los mismos tres porcentajes y diferir en distribución angular/espectral de transmisión. Estos controles y las capas reflejada/transmitida son una \emph{propuesta científica a aprobar}, no resultados ni funcionalidades existentes: el motor actual solo calcula dos capas con albedo uniforme y requiere una decisión de alcance antes de modificarlo.
+
+En ausencia de coeficientes medidos o trazables, la etiqueta honesta es «irradiancia absorbida \emph{en un escenario con fracciones supuestas}», no porcentaje físico constatado. No se predice irradiancia detrás de una ventana ni balance térmico, absorción volumétrica, multirreflexiones, luminiscencia o radiación difusa. Si se pretende modelar una placa transparente multicapa o un sustrato, harán falta espesor, condiciones de interfaz y radiometría de transmisión, que quedan fuera de este modelo plano.
+
+\section{Flujo integrado y orden de operaciones}
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[scale=0.87,transform shape,node distance=5mm and 19mm, every node/.style={draw,rounded corners,align=center,font=\small,inner sep=4pt},arr/.style={-{Latex},thick}]
+\node (dem) {NASADEM HGT: EGM96 + máscara};
+\node[below=of dem] (proj) {Reproyección a grilla métrica};
+\node[below=of proj] (norm) {$z_x,z_y,\theta,\phi,\mathbf n$};
+\node[right=of dem] (time) {Fecha-hora local + zona IANA};
+\node[below=of time] (spa) {SPA: azimut, elevación, cénit};
+\node[below=of spa] (sky) {Ineichen/Perez: DNI cielo despejado};
+\node[below=of sky] (scale) {$p/100$: DNI ajustada};
+\node[below=of scale] (inc) {Proyección $G_i=B\max(0,\mathbf n\cdot\mathbf s)$};
+\node[below=of inc] (alb) {Balance espectral $R+T+\mathcal A=1$; reflejado/transmitido/absorbido};
+\node[below=of alb] (record) {Raster, máscara y metadatos};
+\draw[arr] (dem)--(proj); \draw[arr] (proj)--(norm);
+\draw[arr] (time)--(spa); \draw[arr] (spa)--(sky); \draw[arr] (sky)--(scale); \draw[arr] (scale)--(inc);
+\draw[arr] (norm) |- (inc.west); \draw[arr] (inc)--(alb); \draw[arr] (alb)--(record);
+\end{tikzpicture}
+\caption{Cadena conceptual propuesta. Las etapas solares, atmosféricas y de superficie aún requieren aprobación e implementación.}\label{fig:workflow}
+\end{figure}
+
+El orden previsto, ilustrado en la Figura~\ref{fig:workflow}, es: (1) validar cobertura/NoData y conservar procedencia; (2) reproyectar elevación a grilla métrica y documentar remuestreo; (3) calcular diferencias, pendiente, aspecto y normal; (4) convertir el instante local a UTC y calcular posición solar; (5) estimar GHI/DNI/DHI de cielo despejado con parámetros atmosféricos explícitos; (6) aplicar el porcentaje experimental a DNI; (7) aplicar máscara de noche/horizonte; (8) calcular producto escalar y $G_i$ por unidad de área real; (9) aplicar balance espectral hipotético, con interfaz aún pendiente de aprobación; (10) reportar raster, unidades, datos ausentes, supuestos y procedencia. No se interpolan muestras faltantes para fabricar derivadas.
+
+\section{Símbolos, unidades y análisis dimensional}
+\begin{longtable}{>{$}l<{$} p{0.53\textwidth} >{$}l<{$}}
+\toprule
+\text{Símbolo} & Significado & \text{Unidad}\\\midrule
+\endhead
+z & Elevación sobre EGM96 & \mathrm{m}\\
+x,y & Coordenadas proyectadas este/norte & \mathrm{m}\\
+\Delta x,\Delta y & Separación positiva entre muestras & \mathrm{m}\\
+z_x,z_y,q & Derivadas y magnitud del gradiente & 1\\
+\theta,\phi & Pendiente; aspecto de máxima bajada & \mathrm{rad};\ ^\circ\\
+\mathbf n,\mathbf s & Normal y dirección solar unitarias & 1\\
+A_\odot,e_a,e_g,z_a,z_g & Azimut solar, elevaciones y cenits aparente/geométrico & ^\circ\\
+\varphi_g,\delta,H & Latitud, declinación y ángulo horario de Ec.~(\ref{eq:hourangle}) & ^\circ\ \mathrm{o\ rad}\\
+I_0 & Irradiancia extraterrestre normal al haz & \mathrm{W\,m^{-2}}\\
+h & Altitud usada por el modelo de cielo despejado & \mathrm{m}\\
+f_1,f_2,c_1,c_2,b,k & Factores empíricos de Ineichen (Ec.~\ref{eq:ineichen-coeff} y siguientes) & 1\\
+P,P_0 & Presión local/modelada y de referencia & \mathrm{Pa}\\
+T_{\rm std},T_0,T_{\rm air} & Temperatura del perfil estándar, base y aire supuesto para refracción & \mathrm{K}\\
+L,g,R_{\rm air} & Tasa térmica vertical, gravedad y constante específica del aire seco & \mathrm{K\,m^{-1}};\ \mathrm{m\,s^{-2}};\ \mathrm{J\,kg^{-1}\,K^{-1}}\\
+m_r,m_a & Masa de aire relativa y absoluta & 1\\
+T_L & Turbidez Linke & 1\\
+\mathrm{GHI,DNI,DHI} & Irradiancia global horizontal, directa normal, difusa horizontal & \mathrm{W\,m^{-2}}\\
+p & Intensidad porcentual experimental & \%\\
+B=\mathrm{DNI}_p & DNI escalada que alimenta superficie & \mathrm{W\,m^{-2}}\\
+G_i & Irradiancia directa incidente por área real de terreno & \mathrm{W\,m^{-2}}\\
+R,T,\mathcal A & Fracciones reflejada, transmitida y absorbida, $R+T+\mathcal A=1$ & 1\\
+\rho_{dh},\tau_{dh},a_{\lambda} & Fracciones espectrales integradas sobre hemisferios de salida & 1\\
+G_{\rm ref},G_{\rm trans},G_{\mathrm{abs}} & Irradiancias equivalentes por área de entrada, condicionales & \mathrm{W\,m^{-2}}\\
+E_\lambda & Irradiancia espectral directa por unidad de longitud de onda & \mathrm{W\,m^{-2}}/\lambda\\
+\theta_i & Ángulo local entre $\mathbf n$ y $\mathbf s$ & {}^\circ\ \mathrm{o\ rad}\\
+\bottomrule
+\end{longtable}
+
+En Ecs.~(\ref{eq:zx})--(\ref{eq:zy}), m/m es adimensional. En Ecs.~(\ref{eq:airmass}) y (\ref{eq:ghi})--(\ref{eq:dni}), presiones solo entran como cociente $P/P_0$, $m_a,T_L,f_1,f_2,c_1,c_2,b,k,\mu_0$ son adimensionales y las exponenciales reciben argumentos adimensionales: GHI, DNI y DHI conservan W m$^{-2}$. En Ec.~(\ref{eq:incidence}), $\mathbf n\cdot\mathbf s$ es adimensional, por lo que $G_i$ conserva W m$^{-2}$. Ec.~(\ref{eq:absorbed}) multiplica irradiancia por fracción adimensional y conserva unidades. Para obtener irradiación se requeriría integrar temporalmente, por ejemplo $H=\int_{t_1}^{t_2}G(t)\,dt$; esta propuesta no lo hace. Temperatura no aparece en ninguna ecuación de salida.
+
+\section{Incertidumbre, validación e interpretación}
+La incertidumbre no se reduce a la precisión numérica del cálculo. Debe analizarse al menos: (i) elevación, datum, resolución, remuestreo y errores locales del DEM; estos afectan pendientes y normales; (ii) ubicación y zona horaria de la ROI, elección de punto representativo y ángulo solar, con sensibilidad alta en laderas y cerca del horizonte; (iii) turbidez Linke histórica y presión estándar seca no observada, que afectan irradiancia; (iv) fracciones espectrales hipotéticas, cuya sensibilidad se propaga linealmente pero no equivale a evidencia de absorción; (v) sombras, difusa y heterogeneidad omitidas, sesgos estructurales no representados por un error aleatorio. Como \emph{ejercicio de sensibilidad}, si cada elevación vecina tuviera error independiente de desviación $\sigma_z$ en metros, la diferencia central tendría $\sigma_{z_x}\simeq\sigma_z/(\sqrt{2}\,\Delta x)$ y análogamente para $z_y$; esto muestra que reducir $\Delta x$ amplifica el error angular potencial. La independencia raramente se cumple para DEM remuestreado o sesgo sistemático, de modo que la expresión no es una incertidumbre NASADEM medida. La variación de incidencia en una celda iluminada puede acotarse a primer orden por $|\delta G_i|\lesssim|\delta B|+B(\|\delta\mathbf n\|+\|\delta\mathbf s\|)$, siempre que no se cruce el umbral de iluminación. El procedimiento para un único punto solar y sus límites pendientes de calibración se describen en la sección de aproximación espacial; cerca del horizonte los errores pueden dominar. Deben reportarse rangos/sensibilidades solo si se calculan con entradas justificadas; no se inventan intervalos ni precisión del lugar.
+
+La validación de \emph{software} comprueba convenciones, casos límite, unidades, máscaras y reproducción de ecuaciones con entradas sintéticas: plano horizontal $G_i=B\max(0,\sin e_a)$, ladera con normal paralela al haz $G_i=B$, normal opuesta $G_i=0$, noche y $p=0$ con cero válido, opaco con $R=0/1$, $T=0$ y absorción $G_i/0$, y ejemplo hipotético transmisivo $R=0.20,T=0.30,\mathcal A=0.50$, máscara NoData no cero y cotas $0\leq G_{\rm abs}\leq G_i\leq B$. Comparar posición SPA en distintos instantes con efemérides independientes y tolerancia justificada; verificar hora local/UTC/DST y cenit/elevación; contrastar las salidas Ineichen con la implementación fijada de pvlib y, si es factible, un modelo de cielo despejado alternativo en coordenadas documentadas. El análisis de sensibilidad debe variar por separado $h$ y resolución del DEM, punto ROI, $T_L$, $P$, $R,T,\mathcal A$ y $p$; por ejemplo, $\partial G_{\rm abs}/\partial R=-G_i$ al mantener $T$ fijo y recalcular $\mathcal A=1-R-T$ y $\partial G_i/\partial p=\mathrm{DNI}_{\rm cs}\max(0,\mathbf n\cdot\mathbf s)/100$ en día y máscara válida. Donde exista información confiable, comparar $G_i$ con piranómetro en plano de inclinación/azimut conocidos y DNI con pirheliómetro o estación calibrada en condiciones de cielo despejado, corrigiendo tiempo, espectro, orientación, representatividad espacial y sombra; reportar sesgo/error sin presuponer umbrales. Una coincidencia con pvlib solo verifica coherencia de software del mismo modelo, no valida la atmósfera local. No hay aquí resultados de estación, campaña o medición de campo ni afirmación de precisión local.
+
+\section{Mapa de respaldo bibliográfico y límites de cada fuente}
+La correspondencia de fuentes con afirmaciones es deliberadamente acotada: una publicación sobre un algoritmo o producto no certifica por sí sola un resultado TerraPulse.
+\begin{center}\small
+\begin{tabular}{p{0.23\textwidth} p{0.42\textwidth} p{0.24\textwidth}}
+\toprule
+\textbf{Fuente} & \textbf{Qué respalda} & \textbf{Qué no respalda}\\\midrule
+Reda y Andreas \cite{reda2004} & Posición solar, convenciones de azimut y SPA. & DNI ni exactitud local de TerraPulse.\\
+Ineichen y Perez \cite{ineichen2002} & Formulación empírica de Linke y modelos de GHI/DNI en cielo despejado. & Atmósfera real de una fecha elegida.\\
+Holmgren et al. y API pvlib \cite{holmgren2018,pvlibineichen,pvlibsource} & Existencia de biblioteca y variante computacional con coeficientes explícitos. & Validación independiente del lugar.\\
+Kasten y Young \cite{kastenyoung1989} & Aproximación de masa óptica relativa. & Presión observada ni nubosidad.\\
+Horn \cite{horn1981} & Gradientes, normales y reflectancia en sombreado. & Absorción mediante albedo uniforme.\\
+NASADEM \cite{nasadem} & Producto HGT, referencia EGM96 y estructura de elevación. & Error vertical universal para cada píxel.\\
+Dubayah y Rich \cite{dubayah1995} & Importancia de topografía, sombra y componentes radiativos. & Validez del MVP sin sombras.\\
+Guía MCD43 \cite{modis43} & Definiciones de albedo black-sky, white-sky, bandas y BRDF. & Albedo 0.20 de esta ROI o reflectancia de laderas particulares.\\
+NIST SP 250-69 \cite{nisttrans} & Conservación de flujo incidente: reflectancia, transmitancia y absortancia. & Porcentajes ópticos medidos para esta ROI.\\
+Documentación pvlib \cite{pvlibalt2pres,pvliblocationsource,pvliblinke} & Presión estándar implementada, llamadas atmosféricas y consulta de Linke. & Presión/turbidez observadas o exactitud en fecha futura.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Entrega geoespacial y API: fases D y E}
+La entrega autorizada conserva solamente irradiancia directa \emph{incidente} $G_i$ de Ec.~(\ref{eq:incidence}), en W m$^{-2}$; ni un TIFF ni una API amplían el modelo físico o validan su exactitud radiométrica. La exportación numérica Float32 conserva CRS métrico, transformación espacial, resolución y máscara. La vista Inferno RGBA normaliza con $u=\operatorname{clip}(G_i/\mathrm{DNI}_{p},0,1)$ para $\mathrm{DNI}_{p}>0$ y fija $u=0$ para rango degenerado de noche o intensidad cero; registra límites $[0,\mathrm{DNI}_{p}]$ y deja transparentes únicamente los píxeles NoData. La vista se reproyecta a EPSG:4326 y sus límites se calculan desde la grilla final. El color es una codificación de la magnitud calculada, no otro método científico.
+
+La API acepta GeoJSON de ROI, fecha-hora local, zona IANA, porcentaje experimental y parámetros atmosféricos opcionales; conserva sus valores efectivos en metadatos. El muestreo geográfico consulta el GeoTIFF original mediante transformación de coordenadas e índice de píxel; nunca invierte el mapa de colores. Deben mantenerse sincronizados identificador, raster, PNG, límites y escala; una publicación parcial no se presenta como lista. El contrato técnico y las comprobaciones se desarrollan en \texttt{docs/features/solar-radiation-simulator.tex} y \texttt{docs/solar-api.md}. La validación física local, sombras, radiación difusa y el balance revisado de materiales permanecen fuera de esta entrega; el riesgo de verificación pendiente de fase C se conserva registrado sin repetir esa revisión por decisión del usuario.
+
+\section{Conclusiones}
+Se define una cadena propuesta para irradiancia directa de cielo despejado: geometría métrica con signo norte explícito, posición solar, atmósfera estándar/climatológica documentada, proyección sobre terreno y balance pasivo de flujos espectrales ponderados. Las fracciones asumidas no son mediciones ni prueban absorción física; los controles de interfaz son propuesta pendiente, no implementación. Un punto solar por ROI se conserva por eficiencia con el criterio y las limitaciones de la sección de aproximación espacial, pendientes de validación. NASADEM EGM96 aporta geometría, no exactitud vertical universal ni radiación. Ineichen/Perez, SPA y tablas climatológicas no validan TerraPulse; sin sombras, difusa y mediciones no se afirma balance completo ni precisión local. Todo parámetro y decisión señalados abajo queda sujeto a revisión por físico antes de las fases A--F.
+
+\section{Puntos de revisión y aprobación del modelo físico}
+\label{sec:approval}
+La autorización de desarrollo de las fases A y B permite su implementación experimental, no constituye validación física de precisión local. La tabla distingue ese alcance de las decisiones restantes \textbf{pendientes de aprobación}.
+\small
+\begin{longtable}{p{0.20\textwidth} p{0.19\textwidth} p{0.34\textwidth} p{0.19\textwidth}}
+\toprule
+\textbf{Elemento}&\textbf{Decisión propuesta}&\textbf{Justificación}&\textbf{Estado}\\\midrule
+\endhead
+Modelo de posición solar&SPA; ángulo aparente&Referencia científica para posición \cite{reda2004}; convención de Ec.~(\ref{eq:zenith}).&Implementación A autorizada; validación local pendiente\\
+Modelo de cielo despejado&Ineichen/Perez&Modelo empírico de DNI/GHI con Linke \cite{ineichen2002}.&Implementación B autorizada; validación local pendiente\\
+Irradiancia sobre superficies inclinadas&Proyección coseno (habitualmente llamada ley del coseno de Lambert)&Fundamento geométrico de Ec.~(\ref{eq:incidence}); no presupone BRDF Lambertiana.&Implementación C autorizada; sin BRDF ni validación local\\
+Absorción superficial&Balance $R+T+\mathcal A$&Solo en opacas $T=0$ y $\mathcal A=1-R$; Ec.~(\ref{eq:absorbed}) es condicional, no medición.&Pendiente de aprobación\\
+Posición solar única por ROI&Aproximación espacial&Comparar extremos y elevación; 10 km y 0,5$^\circ$ son hipótesis por calibrar, no garantías.&Pendiente de aprobación\\
+Ausencia de sombras topográficas&Simplificación MVP&No se calcula intersección del rayo con terreno remoto \cite{dubayah1995}.&Pendiente de aprobación\\
+Porcentaje de intensidad&Parámetro experimental&Ec.~(\ref{eq:intensity}) no representa meteorología observada.&Implementación B autorizada; no es medición\\
+Balance espectral&Fracciones configurables $R,T,\mathcal A$&Sistema pasivo; porcentajes deben sumar 100\%; escenario no es medición \cite{nisttrans}.&Pendiente de aprobación\\
+Superficie opaca/translúcida/transparente&Clasificación por transmisión y dispersión angular&No se infiere absorción real de porcentajes supuestos; sin multicapa ni calentamiento.&Pendiente de aprobación\\
+Presión atmosférica&Configurable o atmósfera estándar seca&Constitutiva Ec.~(\ref{eq:pressure}) si falta presión; sensibilidad por verificar.&Implementación A/B autorizada; no es medición\\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\noindent\textbf{Preguntas específicas al revisor:} ¿son correctos signo de $z_y$, aspecto norte-horario y normal? ¿Qué variación espacial admite el punto solar único? ¿Se aprueban presión estándar y Linke climatológica para este uso? ¿Qué evidencia espectral permitiría reportar absorción, y qué distinción angular se requiere para superficies transparentes/translúcidas? ¿Se exige sombra/horizonte y qué validación instrumental es necesaria?
+
+\begin{thebibliography}{99}
+\bibitem{reda2004} I. Reda and A. Andreas, ``Solar position algorithm for solar radiation applications,'' \emph{Solar Energy}, 76(5), 577--589, 2004. doi:10.1016/j.solener.2003.12.003.
+\bibitem{ineichen2002} P. Ineichen and R. Perez, ``A new airmass independent formulation for the Linke turbidity coefficient,'' \emph{Solar Energy}, 73(3), 151--157, 2002. doi:10.1016/S0038-092X(02)00045-2.
+\bibitem{holmgren2018} W. F. Holmgren, C. W. Hansen, and M. A. Mikofski, ``pvlib python: a Python package for modeling solar energy systems,'' \emph{Journal of Open Source Software}, 3(29), 884, 2018. doi:10.21105/joss.00884.
+\bibitem{horn1981} B. K. P. Horn, ``Hill shading and the reflectance map,'' \emph{Proceedings of the IEEE}, 69(1), 14--47, 1981. doi:10.1109/PROC.1981.11918.
+\bibitem{nasadem} NASA Land Processes Distributed Active Archive Center, \emph{NASADEM User Guide, Version 1.3}, January 2025. \url{https://lpdaac.usgs.gov/documents/2237/NASADEM_User_Guide_V13.pdf}.
+\bibitem{dubayah1995} R. Dubayah and P. M. Rich, ``Topographic solar radiation models for GIS,'' \emph{International Journal of Geographical Information Systems}, 9(4), 405--419, 1995. doi:10.1080/02693799508902046.
+\bibitem{kastenyoung1989} F. Kasten and A. T. Young, ``Revised optical air mass tables and approximation formula,'' \emph{Applied Optics}, 28(22), 4735--4738, 1989. doi:10.1364/AO.28.004735.
+\bibitem{modis43} NASA Earthdata, \emph{MCD43 User Guide, Version 005}. \url{https://www.earthdata.nasa.gov/s3fs-public/2025-04/MCD43_User_Guide_V5.pdf}.
+\bibitem{pvlibairmass} pvlib Python, ``get\_relative\_airmass reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.atmosphere.get_relative_airmass.html}.
+\bibitem{pvlibsource} pvlib Python, ``clearsky.ineichen source.'' \url{https://pvlib-python.readthedocs.io/en/stable/_modules/pvlib/clearsky.html#ineichen}.
+\bibitem{pvlibineichen} pvlib Python, ``ineichen clear-sky model reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.clearsky.ineichen.html}.
+\bibitem{pvliblocation} pvlib Python, ``Location.get\_clearsky reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.location.Location.get_clearsky.html}.
+\bibitem{pvlibspa} pvlib Python, ``spa\_python solar-position reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.solarposition.spa_python.html}.
+\bibitem{pvliblinke} pvlib Python, ``lookup\_linke\_turbidity reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.clearsky.lookup_linke_turbidity.html}.
+\bibitem{nisttrans} D. W. Allen, E. A. Early, B. K. Tsai, and C. C. Cooksey, \emph{Regular Spectral Transmittance}, NIST Special Publication 250-69, March 2011, Appendix A, equations A2--A4. \url{https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=840999}.
+\bibitem{pvlibalt2pres} pvlib Python, ``atmosphere.alt2pres reference.'' \url{https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.atmosphere.alt2pres.html}.
+\bibitem{pvliblocationsource} pvlib Python, ``Location source code.'' \url{https://pvlib-python.readthedocs.io/en/stable/_modules/pvlib/location.html#Location.get_clearsky}.
+\end{thebibliography}
+\end{document}

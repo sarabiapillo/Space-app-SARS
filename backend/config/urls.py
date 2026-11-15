@@ -20,4 +20,5 @@ from django.urls import include, path
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('scenes.urls')),   # contrato C4, ver docs/api.md
+    path('api/solar/', include('solar.urls')),
 ]

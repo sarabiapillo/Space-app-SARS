@@ -1,0 +1,4 @@
+pvlib==0.16.1
+# Phase D: validated standard Inferno LUT and RGBA PNG writer.
+matplotlib==3.11.2
+Pillow==13.0.0
