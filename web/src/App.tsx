@@ -17,6 +17,8 @@ import {
 } from './mocks/initialWorkspaces'
 import type {
   Carpeta,
+  DockWindow,
+  DockWindowKind,
   DrawTool,
   EscenaNisar,
   LngLat,
@@ -48,7 +50,10 @@ function App() {
   const [dateViewMode, setDateViewMode] = useState<ExploreDateViewMode>('t2')
   const [colormapId, setColormapId] = useState<ScientificColormapId>('inferno')
   const [activeTool, setActiveTool] = useState<DrawTool>('mover')
-  const [activeDockTab, setActiveDockTab] = useState<CenterDockTab>('map')
+  const [dockWindows, setDockWindows] = useState<DockWindow[]>([
+    { id: 'dock-map-1', kind: 'map', index: 1 },
+  ])
+  const [activeDockWindowId, setActiveDockWindowId] = useState<string>('dock-map-1')
   const [floatingToolsOpen, setFloatingToolsOpen] = useState<boolean>(true)
   const [isCaptureMode, setIsCaptureMode] = useState<boolean>(false)
 
@@ -64,6 +69,51 @@ function App() {
       }
 
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
+
+  // Ventanas acoplables del área central (mapa normal y agua/DG2): solo cambia la vista activa,
+  // el mapa y su estado se conservan porque el lienzo no se desmonta.
+  const activeDockWindow =
+    dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
+  const activeDockTab: CenterDockTab = activeDockWindow?.kind === 'agua' ? 'rain-dg2' : 'map'
+
+  const openDockWindow = useCallback(
+    (kind: DockWindowKind) => {
+      const nextIndex =
+        dockWindows.filter((w) => w.kind === kind).reduce((max, w) => Math.max(max, w.index), 0) + 1
+      const next: DockWindow = { id: newId(), kind, index: nextIndex }
+      setDockWindows((prev) => [...prev, next])
+      setActiveDockWindowId(next.id)
+    },
+    [dockWindows],
+  )
+
+  const closeDockWindow = useCallback(
+    (id: string) => {
+      if (dockWindows.length <= 1) return
+      const position = dockWindows.findIndex((w) => w.id === id)
+      if (position < 0) return
+      const remaining = dockWindows.filter((w) => w.id !== id)
+      setDockWindows(remaining)
+      if (activeDockWindowId === id) {
+        const fallback = remaining[Math.max(0, position - 1)] ?? remaining[0]
+        setActiveDockWindowId(fallback.id)
+      }
+    },
+    [dockWindows, activeDockWindowId],
+  )
+
+  const handleDockTabChange = useCallback(
+    (tab: CenterDockTab) => {
+      const kind: DockWindowKind = tab === 'rain-dg2' ? 'agua' : 'map'
+      const existing = dockWindows.find((w) => w.kind === kind)
+      if (existing) {
+        setActiveDockWindowId(existing.id)
+        return
+      }
+      openDockWindow(kind)
+    },
+    [dockWindows, openDockWindow],
+  )
 
   const handleViewChange = useCallback(
     (view: MapView, { userInitiated }: { userInitiated: boolean }) => {
@@ -244,7 +294,7 @@ function App() {
         solar={current.solar}
         onSolarChange={handleSolarChange}
         activeDockTab={activeDockTab}
-        onDockTabChange={setActiveDockTab}
+        onDockTabChange={handleDockTabChange}
         floatingToolsOpen={floatingToolsOpen}
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
@@ -285,8 +335,11 @@ function App() {
           onAnnotationsChange={handleAnnotationsChange}
           onCropRegionChange={handleCropRegionChange}
           onSolarChange={handleSolarChange}
-          activeDockTab={activeDockTab}
-          onDockTabChange={setActiveDockTab}
+          dockWindows={dockWindows}
+          activeDockWindowId={activeDockWindow?.id ?? ''}
+          onActivateDockWindow={setActiveDockWindowId}
+          onCloseDockWindow={closeDockWindow}
+          onOpenDockWindow={openDockWindow}
           floatingToolsOpen={floatingToolsOpen}
           onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
           isCaptureMode={isCaptureMode}

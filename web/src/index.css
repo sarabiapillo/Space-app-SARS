@@ -550,6 +550,136 @@ button:disabled {
   border-top: 2px solid #0ea5e9;
 }
 
+/* Ventanas del área central: grupo pestaña + cerrar, botón «+» y su menú */
+.ws-panel-tab-group {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  border-right: 1px solid var(--color-border);
+  background: #e5e7eb;
+}
+
+.ws-panel-tab-group .ws-panel-tab {
+  padding-right: 2px;
+  border-right: none;
+}
+
+.ws-panel-tab-group.is-active {
+  background: #ffffff;
+  border-top: 2px solid #3399ff;
+}
+
+.ws-panel-tab-group.is-active .ws-panel-tab {
+  background: transparent;
+  border-top: none;
+}
+
+.ws-panel-tab-group--hydro {
+  background: #e0f2fe;
+}
+
+.ws-panel-tab-group--hydro.is-active {
+  background: #f0f9ff;
+  border-top-color: #0ea5e9;
+}
+
+.ws-panel-tab__close {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+}
+
+.ws-panel-tab__close:hover:not(:disabled) {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.ws-panel-tab__close:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.ws-panel-tab-add-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.ws-panel-tab-add {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  background: #e5e7eb;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.ws-panel-tab-add:hover,
+.ws-panel-tab-add[aria-expanded='true'] {
+  background: #f3f4f6;
+  color: var(--color-text);
+}
+
+.ws-window-menu {
+  position: absolute;
+  top: calc(100% + 1px);
+  left: 0;
+  z-index: 60;
+  min-width: 210px;
+  padding: 3px;
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+}
+
+.ws-window-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ws-window-menu__item:hover {
+  background: #eaf4ff;
+  color: #1a5fa8;
+}
+
+.ws-window-menu__item span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ws-window-menu__item em {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--color-text-subtle);
+}
+
 .ws-panel-tabbar__meta {
   font-family: var(--font-mono);
   font-size: 10.5px;

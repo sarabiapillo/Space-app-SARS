@@ -18,6 +18,17 @@ export type Footprint = [LngLat, LngLat, LngLat, LngLat]
 /** Modo de visualización en la cabecera. */
 export type ViewMode = 'general' | 'editado'
 
+/** Tipo de ventana acoplable del área central. */
+export type DockWindowKind = 'map' | 'agua'
+
+/** Ventana acoplable del área central (pestaña de mapa o de agua/DG2). */
+export interface DockWindow {
+  id: string
+  kind: DockWindowKind
+  /** Consecutivo dentro de su tipo, usado en la etiqueta de la pestaña. */
+  index: number
+}
+
 /** Herramientas de la barra flotante inferior en "Mapa Editado". */
 export type DrawTool = 'mover' | 'lapiz' | 'peligro' | 'advertencia' | 'poligono' | 'etiqueta'
 
