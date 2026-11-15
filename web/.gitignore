@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+public/assets/
+public/maplibre-gl-worker*
 
 # Editor directories and files
 .vscode/*

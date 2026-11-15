@@ -93,9 +93,35 @@ function serveDataExplorePlugin(): Plugin {
   }
 }
 
+function copyMaplibreWorkerPlugin(): Plugin {
+  return {
+    name: 'copy-maplibre-worker',
+    buildStart() {
+      const srcDir = path.resolve(__dirname, 'node_modules', 'maplibre-gl', 'dist')
+      const targetDir = path.resolve(__dirname, 'public', 'assets')
+      const publicDir = path.resolve(__dirname, 'public')
+      if (fs.existsSync(srcDir)) {
+        fs.mkdirSync(targetDir, { recursive: true })
+        for (const file of [
+          'maplibre-gl-worker.mjs',
+          'maplibre-gl-worker.mjs.map',
+          'maplibre-gl-worker-dev.mjs',
+          'maplibre-gl-worker-dev.mjs.map',
+        ]) {
+          const src = path.join(srcDir, file)
+          if (fs.existsSync(src)) {
+            fs.copyFileSync(src, path.join(targetDir, file))
+            fs.copyFileSync(src, path.join(publicDir, file))
+          }
+        }
+      }
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), serveDataExplorePlugin()],
+  plugins: [react(), serveDataExplorePlugin(), copyMaplibreWorkerPlugin()],
   server: {
     proxy: {
       '/api': 'http://localhost:8000',
