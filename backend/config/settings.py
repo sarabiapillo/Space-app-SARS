@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "scenes",
     "analyses",
+    "solar",
 ]
 
 MIDDLEWARE = [
@@ -145,3 +146,8 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Servidor local de simulaciones solares; IDs opacos públicos, sin autenticación real.
+# Compartir estas rutas entre workers para que flock proteja la caché NASADEM.
+SOLAR_OUTPUT_ROOT = Path(os.environ.get('SOLAR_OUTPUT_ROOT', BASE_DIR.parent / 'data' / 'solar-runs'))
+SOLAR_NASADEM_CACHE = Path(os.environ.get('SOLAR_NASADEM_CACHE', BASE_DIR.parent / 'data' / 'nasadem-cache'))

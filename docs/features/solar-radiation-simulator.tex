@@ -1,6 +1,7 @@
 \documentclass[11pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+\usepackage{amsmath}
 \title{Simulador geoespacial de radiación solar: documentación de implementación}
 \author{TerraPulse AI}
 \date{\today}
@@ -125,7 +126,74 @@ Con pvlib 0.16.1 aislado: \texttt{PYTHONPATH=data/solar-pvlib-deps pytest -q pip
 
 Ejecución ilustrativa offline (sin red, ZIP NASADEM local de una tesela, misma sub-ROI de fases A/B): 15 de noviembre de 2026, 12:00 \texttt{America/Mexico\_City}, $p=100\%$, malla 361$\times$348 en EPSG:32615 con 123{,}625 píxeles válidos; $e_a=54.6398^\circ$, $A=180.4759^\circ$, $\mathrm{DNI}_{p}=880.7865$ W/m$^2$. La capa resultante tuvo media 698.9663 W/m$^2$, máximo 880.7541 W/m$^2$ (ladera encarada al Sol, acotado por $\mathrm{DNI}_{p}$), mínimo 0 W/m$^2$ (laderas opuestas) y NaN exactamente fuera de la máscara válida. Son salidas de software condicionadas a supuestos climatológicos y a un punto solar único por ROI, no una medición ni un mapa validado de Chiapas; falta sombra topográfica, difusa y materiales.
 
-\begin{thebibliography}{9}
+\section{Fases D y E: entrega incidente y contrato REST}
+Estas fases agregan un producto numérico GeoTIFF y una representación PNG de la \emph{misma} capa incidente; no incorporan física de materiales. La API acepta directamente una ROI GeoJSON Polygon o MultiPolygon EPSG:4326, sin depender de un \texttt{roi\_id}. Se conserva como riesgo conocido de fase C la comprobación pendiente de handedness del vector solar; no se repite su revisión independiente ni se condiciona D/E a ella por decisión explícita del usuario.
+
+\subsection{Magnitud numérica, escala y transparencia}
+El GeoTIFF usa Float32, CRS y afín nativos del terreno, unidades W/m$^2$ y máscara NoData; los ceros físicos válidos no se confunden con ausencia de dato. El PNG es una vista RGBA con Inferno estándar: para $D=\mathrm{DNI}_{p}>0$ se normaliza $u=\operatorname{clip}(G_i/D,0,1)$; si $D=0$, se usa $u=0$ sin división. La leyenda tiene límites explícitos $[0,D]$ W/m$^2$. Los píxeles válidos usan alfa 255, incluidos los ceros de noche; fuera de la máscara alfa 0. Los colores no se usan para reconstruir irradiancia.
+
+La vista se reproyecta a EPSG:4326 norte-arriba mediante vecino más cercano tanto para datos como para máscara, con un presupuesto de píxeles. Los límites geográficos devueltos proceden de la grilla final PNG, no del rectángulo original de la ROI. El consumidor coloca las esquinas en orden noroeste, noreste, sureste, suroeste; debe mantener la imagen, límites y escala de la misma corrida. El muestreo puntual transforma la coordenada EPSG:4326 al CRS del TIFF, indexa su píxel y lee valor y máscara del raster numérico, nunca del PNG. No representa un promedio subpíxel ni una interpolación de precisión adicional.
+
+\subsection{Límites de operación y seguridad}
+El MVP ejecuta de modo síncrono y restringido: rechaza geometrías o presupuestos excesivos antes de adquirir datos, no recibe rutas del cliente y sirve únicamente archivos de nombres fijos bajo una raíz controlada mediante identificadores opacos. El proveedor NASADEM sigue siendo de un solo proceso local; una segunda ejecución simultánea no se acepta. La publicación debe ser atómica: no se entrega una corrida lista hasta completar y verificar TIFF, PNG y manifiesto. Los detalles de límites y rutas públicas se documentan en el contrato REST adjunto; cualquier autenticación privada, cuotas de red o despliegue público requiere controles adicionales. No se modificó el frontend ni se publicaron cambios al repositorio remoto.
+
+\subsection{Contrato REST y ejemplo ejecutado}
+Rutas exactas, sin barra final, con \texttt{\{id\}} como UUID hexadecimal opaco de 32 caracteres:
+\begin{verbatim}
+POST /api/solar/simulations
+GET  /api/solar/simulations/{id}
+GET  /api/solar/simulations/{id}/preview/incident
+GET  /api/solar/simulations/{id}/export/incident
+GET  /api/solar/simulations/{id}/sample?lon=...&lat=...
+\end{verbatim}
+El POST exige \texttt{Content-Type: application/json}. Ejemplo utilizado en una prueba HTTP WSGI real local:
+\begin{verbatim}
+{
+  "roi": {"type":"Polygon","coordinates":[[
+    [-93.56,16.74],[-93.54,16.74],[-93.54,16.76],
+    [-93.56,16.76],[-93.56,16.74]
+  ]]},
+  "datetime_local":"2026-11-15T12:00:00",
+  "timezone":"America/Mexico_City",
+  "intensity_percent":50,
+  "temperature_c":12
+}
+\end{verbatim}
+Se observó HTTP 201 con \texttt{Location} al detalle. Este extracto de respuesta omite campos, no cifras; el identificador solo existe en el almacenamiento local de esa comprobación:
+\begin{verbatim}
+{
+ "id":"8e1a075f7712435bab9a0292d8eb36c0",
+ "status":"ready", "units":"W/m2", "night":false,
+ "clear_sky":{
+  "dni_clear_sky_w_m2":885.3905049756529,
+  "dni_adjusted_w_m2":442.69525248782645,
+  "intensity_percent":50.0, "linke_turbidity":3.85
+ },
+ "raster":{"crs":"EPSG:32615","width":72,"height":74,
+           "valid_pixels":4968},
+ "preview":{"crs":"EPSG:4326","width":74,"height":73,
+  "bounds_lonlat":[-93.56034941688789,16.739547709324466,
+                   -93.53927810823552,16.760334270562613],
+  "palette":"inferno",
+  "range_w_m2":[0.0,442.69525248782645],"zero_range":false}
+}
+\end{verbatim}
+La respuesta completa incluye \texttt{position}, \texttt{clear\_sky}, \texttt{request}, transformación afín, escala, hashes y enlaces \texttt{layers.incident.preview\_url}, \texttt{layers.incident.export\_url} y \texttt{sample\_url}. El GET conserva la ROI y parámetros efectivos persistidos, sin depender de memoria del proceso. Para la coordenada $(-93.55,16.75)$, el muestreo del TIFF devolvió HTTP 200 y
+\begin{verbatim}
+{"value_w_m2":400.95941162109375,"status":"valid"}
+\end{verbatim}
+Los otros estados de sample son \texttt{nodata} y \texttt{outside\_coverage}, con valor \texttt{null}. No se envían NaN ni rutas del servidor. El flujo HTTP de POST, detalle, PNG, TIFF y sample observó 201/200/200/200/200; se usó un ZIP NASADEM ya local con la adquisición sustituida únicamente para evitar la red. El pipeline, exportador, vistas y muestreo fueron reales; no es una prueba de descarga/autenticación Earthdata ni una medición radiométrica.
+
+\subsection{Ejecución, límites y verificaciones D/E}
+El contrato completo de arranque y consumo se encuentra en \texttt{docs/solar-api.md}. Desde la raíz, usar el entorno del proyecto con Django 5.2.19 y DRF 3.18.3 y \texttt{PYTHONPATH=data/solar-pvlib-deps:.:backend}; después \texttt{python backend/manage.py runserver --noreload 127.0.0.1:8000}. \texttt{pipeline/solar/requirements.txt} fija pvlib, Matplotlib y Pillow utilizados. El código normal conserva la configuración sensible externa y requiere autenticación Earthdata no interactiva si faltan teselas en caché. El proceso no realiza migraciones propias ni depende de tablas solares.
+
+Presupuestos de petición: máximo 1{,}000 vértices, dos teselas NASADEM, caja de hasta 0.2 grados por eje, diagonal geodésica de hasta 10 km y estimación máxima de 150{,}000 píxeles. Son límites operativos conservadores, no una validación de uniformidad solar. Configurar \texttt{SOLAR\_OUTPUT\_ROOT} y \texttt{SOLAR\_NASADEM\_CACHE} con rutas del servidor sin symlinks. Bloqueo de hilo y \texttt{fcntl.flock} protegen ejecuciones cooperantes con la misma raíz; usar un único proceso local y no mezclar adquisiciones externas concurrentes. No hay timeout duro, cola durable, política de retención ni soporte Windows/distribuido comprobado. La API del hackatón es pública: los IDs opacos no reemplazan autenticación ni permisos. Para exposición a Internet se requieren controles adicionales.
+
+Errores HTTP: 400 para entrada inválida, 404 para ID/archivo/capa no admitidos, 413 por presupuesto excedido, 429 ocupado y 503 por indisponibilidad del cálculo, proveedor o almacenamiento; el contenido JSON se sanea sin rutas o credenciales. Solo se sirve la capa incidente. El muestreo transforma coordenadas y lee un píxel Float32, con incertidumbre de cuantización y resolución; la vista usa vecino más cercano y no contiene información espectral o térmica adicional.
+
+Pruebas observadas D/E: RED de 11 casos sobre el exportador vacío y luego 11 aprobados. La API pasó de rutas ausentes (404) a 5 pruebas HTTP aprobadas, incluida una tesela sintética con el pipeline y exportación reales. El padre detectó y fijó en pruebas que el GET perdía la ROI (RED KeyError), y una verificación independiente encontró GeoJSON mal anidado que producía 500 HTML: RED TypeError y posterior 400 JSON sin llamadas al proveedor. Después se ejecutaron 16 pruebas D/E (108 advertencias) y 267 de la suite disponible (1545 advertencias), salidas 0. El verificador independiente reprodujo ambas corridas y confirmó en un recheck focalizado el cierre del error geométrico (400 JSON y cero llamadas al proveedor). El padre agregó además una regresión de procedencia: antes una temperatura omitida se convertía en 12 y se registraba como aportada por el usuario (RED); ahora la fase A conserva el origen predeterminado, y el POST/GET muestran el valor efectivo. Tras esta corrección se repitieron 16/267 con salida 0. Las fallas transitorias de colección por \texttt{PYTHONPATH} sin \texttt{backend} y de rutas durante integración paralela se preservaron como evidencia de preparación, no se declararon aprobadas. Se verificó estructura LaTeX, pero no se encontró compilador: generar PDF sigue pendiente. No se repitió la verificación independiente de C.
+
+\begin{thebibliography}{99}
 \bibitem{nasadem-solar} NASA Land Processes Distributed Active Archive Center, \emph{NASADEM User Guide}, versión 1.3, enero de 2025, sección 3, tabla 1.
 \bibitem{nrel-spa-solar} I. Reda y A. Andreas, \emph{Solar Position Algorithm for Solar Radiation Applications (Revised)}, NREL/TP-560-34302, ejemplo A.5, 2008.
 \bibitem{pvlib-spa-solar} pvlib Python 0.16.1, \emph{solarposition.spa\_python} y \emph{atmosphere.alt2pres}, documentación de la API, 2026.
