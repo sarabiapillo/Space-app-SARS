@@ -24,7 +24,7 @@ P1 **no** convierte a dB, no aplica máscaras ni calcula cambios: eso es de P2. 
 | Misma malla confirmada | ✅ |
 | Cobertura de la ROI medida | ✅ 99.57 % y 99.61 % |
 | Par anotado en `config.yaml` | ✅ |
-| Pruebas | ✅ 51 casos pasan con `pytest` (ver §9) |
+| Pruebas | ✅ 53 casos pasan con `pytest` (ver §9) |
 | Mínimo de cobertura aceptable | ⏳ Lo fija P3 |
 
 ## 3. Archivos de P1
@@ -40,6 +40,7 @@ P1 **no** convierte a dB, no aplica máscaras ni calcula cambios: eso es de P2. 
 | `pipeline/download.py` | CLI: recorta escenas del catálogo y compara el par |
 | `pipeline/nisar_h5.py` | Lectura por ventanas de los `.h5` NISAR (malla, ventana de la ROI, lectura por franjas, dB, multilook) |
 | `pipeline/etapa1.py`, `etapa1_figuras.py` | CLI de inspección de una escena, local o remota (figuras, valores de control y capas web) |
+| `pipeline/graficas_datos.py` | Datos de las gráficas de la Etapa 1 en `graficas.json`, para Chart.js y la base ([p1-graficas-chartjs.md](p1-graficas-chartjs.md)) |
 | `pipeline/web_export.py` | COG, PNG en Web Mercator y manifiesto `capas.json` para la interfaz web ([p1-etapa1-web.md](p1-etapa1-web.md)) |
 | `pipeline/tests/test_sources.py`, `test_nisar_h5.py`, `test_subset.py`, `test_etapa1.py` | Pruebas con datos sintéticos |
 
@@ -147,7 +148,7 @@ python -m pipeline.etapa1 <scene_id> [--escala-web VMIN VMAX]          # remoto:
 python -m pipeline.etapa1 "H5 FILES\archivo.h5" [--sin-vista] [--sin-figuras]
 ```
 
-Acepta un `.h5` local o un `scene_id` del catálogo (lectura remota, con verificación de identidad). Escribe en `data/explore/<granuleId>/`: `metadatos.json`, `LEEME_validacion.txt` (comprobaciones a mano con sus valores), `geotiff/` (γ⁰, σ⁰, dB con multilook 2×2, máscara, factor, looks), `figuras/` y `control/` (píxeles y bloques elegidos con semilla fija). `--sin-vista` omite la vista general, que obliga a leer la escena completa; en remoto se omite siempre, salvo con `--vista-remota`. También escribe `web/` (COG, PNG en EPSG:3857 y `capas.json`) para la interfaz web. Detalle completo: [p1-etapa1-web.md](p1-etapa1-web.md). Guía paso a paso para el equipo: [guia-capas-web.md](guia-capas-web.md).
+Acepta un `.h5` local o un `scene_id` del catálogo (lectura remota, con verificación de identidad). Escribe en `data/explore/<granuleId>/`: `metadatos.json`, `LEEME_validacion.txt` (comprobaciones a mano con sus valores), `geotiff/` (γ⁰, σ⁰, dB con multilook 2×2, máscara, factor, looks), `figuras/` (matplotlib), `graficas.json` (los números de las gráficas, para Chart.js y la base) y `control/` (píxeles y bloques elegidos con semilla fija). `--sin-vista` omite la vista general, que obliga a leer la escena completa; en remoto se omite siempre, salvo con `--vista-remota`. También escribe `web/` (COG, PNG en EPSG:3857 y `capas.json`) para la interfaz web. Detalle completo: [p1-etapa1-web.md](p1-etapa1-web.md). Guía paso a paso para el equipo: [guia-capas-web.md](guia-capas-web.md).
 
 ## 6. Contrato C1 (lo que recibe P2)
 
@@ -225,14 +226,14 @@ Catálogo del 2026-11-14 (`data/catalog/catalog_asf_GCOV_20261114T231456Z.json`)
 pytest
 ```
 
-Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 35 casos (de 51 en total):
+Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 37 casos (de 53 en total):
 
 | Archivo | Funciones de prueba | Qué cubre |
 |---|---|---|
 | `test_sources.py` | 4 | Normalización de resultados de ASF a `SceneMeta` |
 | `test_nisar_h5.py` | 17 | Malla, ventana de la ROI, lectura por franjas, potencia, dB, multilook, estadísticas |
 | `test_subset.py` | 9 | El recorte copia valores exactos y la georreferencia; cobertura sobre el polígono; rechazo por identidad y por capa inexistente; acumulación de capas en `scene.json`; detección de mallas desplazadas; ruta local de `ASFSource`; credenciales del `.env` |
-| `test_etapa1.py` | 5 | `etapa1` local y remoto (valores idénticos, procedencia, identidad), capas web (COG = GeoTIFF, PNG con transparencia, esquinas, escala fija) |
+| `test_etapa1.py` | 7 | `etapa1` local y remoto (valores idénticos, procedencia, identidad), capas web (COG = GeoTIFF, PNG con transparencia, esquinas, escala fija), `graficas.json` (mismos números que las figuras, sin perder conteos) |
 
 ## 10. Problemas frecuentes
 

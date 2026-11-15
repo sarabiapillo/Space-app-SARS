@@ -6,7 +6,8 @@
 Al terminar tendrás, para cada fecha del par de trabajo (GCOV T62/F10, 2026-06-18 y 2026-10-16):
 
 - las figuras de inspección de la ROI (γ⁰ y σ⁰ en dB, histogramas, máscara, ángulo de incidencia);
-- la carpeta `web/` que usa la interfaz: imágenes PNG para el mapa, COG con los valores en dB y el manifiesto `capas.json`.
+- la carpeta `web/` que usa la interfaz: imágenes PNG para el mapa, COG con los valores en dB y el manifiesto `capas.json`;
+- `graficas.json`: los números de las gráficas (histogramas, máscara, incidencia) para dibujarlas con Chart.js.
 
 **Tiempo:** unos 4 minutos por fecha. **Datos que se bajan:** solo la zona de la ROI. **Espacio en disco:** ~500 MB por fecha.
 
@@ -109,6 +110,7 @@ data/explore/<scene_id>/
 │   └── sigma0_HVHV_ml2_dB.png/.tif
 ├── geotiff/             γ⁰ y σ⁰ lineales y en dB, máscara, factor, looks
 ├── control/             píxeles para comprobar a mano
+├── graficas.json        datos de las gráficas para Chart.js y la base de datos
 ├── metadatos.json       todo lo calculado, con la versión del código y la URL de origen
 └── LEEME_validacion.txt comprobaciones a mano
 ```
@@ -128,6 +130,7 @@ data/explore/<scene_id>/
 - Para mostrar una capa en MapLibre, usar el PNG y `esquinas_lonlat` de `capas.json` como fuente `image`. Las esquinas ya vienen en el orden del tipo `Footprint` (sup-izq, sup-der, inf-der, inf-izq).
 - La leyenda va de gris negro = `vmin_dB` a blanco = `vmax_dB`, en dB.
 - Los valores (cursor, histogramas) salen del COG `.tif`, nunca del PNG.
+- Las gráficas de la escena (histogramas, máscara, incidencia por altura) salen de `graficas.json`. Formato y ejemplo de Chart.js en [p1-graficas-chartjs.md](p1-graficas-chartjs.md).
 - Mostrar las `advertencias` del manifiesto junto a la capa.
 
 Ejemplos de código y formato completo: [p1-etapa1-web.md](p1-etapa1-web.md) §4–5.
