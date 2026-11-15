@@ -115,6 +115,30 @@ export interface WorkspaceMap {
   croppedRegion: LngLat[] | null
   /** Configuración del Simulador Solar para esta copia. */
   solar: SolarSimulationState
+  /** Configuración y estado de la Simulación de Inundación / Lluvia DG2. */
+  flood?: FloodSimulationState
+}
+
+/** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */
+export interface FloodSimulationState {
+  enabled: boolean
+  selectedZoneId: string
+  rainfallAmount: number
+  rainfallDuration: number
+  rasterUrl: string | null
+  rasterBounds: [number, number, number, number] | null
+  showRasterOnMap: boolean
+  waterOpacity: number
+  stats?: {
+    rainfallMm: number
+    durationHours: number
+    totalVolumeM3: number
+    floodedAreaKm2: number
+    floodedAreaPct: number
+    maxDepthM: number
+    meanDepthM: number
+    waterSurfaceHa: number
+  } | null
 }
 
 /** Vista de cámara del mapa. */

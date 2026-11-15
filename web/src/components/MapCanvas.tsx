@@ -40,6 +40,7 @@ import {
 import {
   CHIAPAS_CENTRO,
   CHIAPAS_ZOOM,
+  DEFAULT_FLOOD,
   DANGER_CIRCLE_DEFAULT_LABEL,
   DANGER_CIRCLE_TOOLTIP,
   DEFAULT_EXPLORE_ESQUINAS_LONLAT,
@@ -67,6 +68,7 @@ import type {
   DockWindowKind,
   DrawTool,
   EscenaNisar,
+  FloodSimulationState,
   LngLat,
   MapAnnotation,
   MapView,
@@ -93,6 +95,7 @@ interface MapCanvasProps {
   annotations: MapAnnotation[]
   croppedRegion: LngLat[] | null
   solar: SolarSimulationState
+  flood?: FloodSimulationState
   exploreLayerId: ExploreLayerId
   dateViewMode: ExploreDateViewMode
   colormapId: ScientificColormapId
@@ -102,6 +105,7 @@ interface MapCanvasProps {
   onAnnotationsChange: (next: MapAnnotation[]) => void
   onCropRegionChange: (polygon: LngLat[] | null) => void
   onSolarChange: (next: SolarSimulationState) => void
+  onFloodChange?: (next: FloodSimulationState) => void
   /** Ventanas acoplables del área central (mapa o agua/DG2) y su ventana activa. */
   dockWindows: DockWindow[]
   activeDockWindowId: string
@@ -267,6 +271,7 @@ export function MapCanvas({
   annotations,
   croppedRegion,
   solar,
+  flood,
   exploreLayerId,
   dateViewMode,
   colormapId,
@@ -276,6 +281,7 @@ export function MapCanvas({
   onAnnotationsChange,
   onCropRegionChange,
   onSolarChange,
+  onFloodChange,
   dockWindows,
   activeDockWindowId,
   onActivateDockWindow,
@@ -308,7 +314,8 @@ export function MapCanvas({
   const [isDraggingToolbox, setIsDraggingToolbox] = useState(false)
 
   // Sector seleccionado en el modo Simulación Lluvia / DG2
-  const [dg2SectorId, setDg2SectorId] = useState<Dg2SectorId>('grijalva-chicoasen')
+  const dg2SectorId: Dg2SectorId = 'grijalva-chicoasen'
+  const activeFlood = flood || DEFAULT_FLOOD
 
   // Estado de captura de región (PNG / JPG)
   const [captureDragStart, setCaptureDragStart] = useState<{ x: number; y: number } | null>(null)
@@ -1152,6 +1159,78 @@ export function MapCanvas({
     solar.rasterBounds,
     solar.showRasterOnMap,
     solar.radiationIntensity,
+  ])
+
+  // Superponer en el mapa el ráster generado por la simulación de inundación / encharcamientos
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+
+    const FLOOD_CALC_SOURCE = 'flood-calc-raster-source'
+    const FLOOD_CALC_LAYER = 'flood-calc-raster-layer'
+
+    const shouldShow =
+      Boolean(activeFlood.rasterUrl) &&
+      Array.isArray(activeFlood.rasterBounds) &&
+      activeFlood.rasterBounds.length === 4 &&
+      activeFlood.showRasterOnMap !== false
+
+    if (!shouldShow) {
+      if (map.getLayer(FLOOD_CALC_LAYER)) {
+        map.setLayoutProperty(FLOOD_CALC_LAYER, 'visibility', 'none')
+      }
+      return
+    }
+
+    const bounds = activeFlood.rasterBounds!
+    const coords: [LngLat, LngLat, LngLat, LngLat] = [
+      [bounds[0], bounds[3]], // NW: [west, north]
+      [bounds[2], bounds[3]], // NE: [east, north]
+      [bounds[2], bounds[1]], // SE: [east, south]
+      [bounds[0], bounds[1]], // SW: [west, south]
+    ]
+
+    const opacity = ((activeFlood.waterOpacity ?? 85) / 100) * 0.9
+
+    const existingSource = map.getSource(FLOOD_CALC_SOURCE) as ImageSource | undefined
+    if (existingSource) {
+      existingSource.updateImage({
+        url: activeFlood.rasterUrl!,
+        coordinates: coords,
+      })
+      if (map.getLayer(FLOOD_CALC_LAYER)) {
+        map.setLayoutProperty(FLOOD_CALC_LAYER, 'visibility', 'visible')
+        map.setPaintProperty(FLOOD_CALC_LAYER, 'raster-opacity', opacity)
+      }
+    } else {
+      try {
+        map.addSource(FLOOD_CALC_SOURCE, {
+          type: 'image',
+          url: activeFlood.rasterUrl!,
+          coordinates: coords,
+        })
+        map.addLayer(
+          {
+            id: FLOOD_CALC_LAYER,
+            type: 'raster',
+            source: FLOOD_CALC_SOURCE,
+            paint: {
+              'raster-opacity': opacity,
+              'raster-fade-duration': 150,
+            },
+          },
+          map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
+        )
+      } catch (err) {
+        console.warn('No se pudo superponer el ráster de inundación en el mapa:', err)
+      }
+    }
+  }, [
+    mapReady,
+    activeFlood.rasterUrl,
+    activeFlood.rasterBounds,
+    activeFlood.showRasterOnMap,
+    activeFlood.waterOpacity,
   ])
 
   const handleFlyToZone = useCallback(
@@ -2786,9 +2865,11 @@ export function MapCanvas({
         {isDg2 && (
           <RainDg2Panel
             escena={escena}
-            selectedSectorId={dg2SectorId}
-            onSelectSector={setDg2SectorId}
-            onFlyToSector={handleFlyToZone}
+            flood={activeFlood}
+            onFloodChange={onFloodChange || (() => {})}
+            center={view.centro}
+            croppedRegion={croppedRegion}
+            onFlyToZone={handleFlyToZone}
             onClose={() => {
               const mapTab = dockWindows.find((w) => w.kind === 'map')
               if (mapTab) onActivateDockWindow(mapTab.id)

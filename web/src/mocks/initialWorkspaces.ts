@@ -1,5 +1,6 @@
 import type {
   EscenaNisar,
+  FloodSimulationState,
   Footprint,
   LngLat,
   MapAnnotation,
@@ -528,6 +529,18 @@ export const DEFAULT_SOLAR: Readonly<SolarSimulationState> = Object.freeze({
   enabled: false,
   sunAngle: 110,
   radiationIntensity: 65,
+})
+
+export const DEFAULT_FLOOD: Readonly<FloodSimulationState> = Object.freeze({
+  enabled: false,
+  selectedZoneId: 'sumidero',
+  rainfallAmount: 25,
+  rainfallDuration: 3,
+  rasterUrl: null,
+  rasterBounds: null,
+  showRasterOnMap: true,
+  waterOpacity: 85,
+  stats: null,
 })
 
 export const MAPA_GENERAL_ID = 'mapa-general-chiapas'

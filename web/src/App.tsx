@@ -6,6 +6,7 @@ import { DuplicateMapModal } from './components/DuplicateMapModal'
 import { TeamLandingPage } from './components/TeamLandingPage'
 import { useSavedMaps } from './hooks/useSavedMaps'
 import {
+  DEFAULT_FLOOD,
   DEFAULT_SOLAR,
   ESCENA_CHIAPAS,
   MAPA_GENERAL,
@@ -21,6 +22,7 @@ import type {
   DockWindowKind,
   DrawTool,
   EscenaNisar,
+  FloodSimulationState,
   LngLat,
   MapAnnotation,
   MapView,
@@ -41,6 +43,7 @@ function App() {
   const [activeCopyId, setActiveCopyId] = useState<string | null>(() => maps[0]?.id ?? null)
   const [generalOpacity, setGeneralOpacity] = useState<number>(MAPA_GENERAL.opacidadSar)
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
+  const [generalFlood, setGeneralFlood] = useState<FloodSimulationState>(DEFAULT_FLOOD)
   const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
@@ -65,6 +68,7 @@ function App() {
         ...MAPA_GENERAL,
         opacidadSar: generalOpacity,
         solar: generalSolar,
+        flood: generalFlood,
         escena: generalEscena,
       }
 
@@ -179,6 +183,17 @@ function App() {
       })
     } else {
       setGeneralSolar(nextSolar)
+    }
+  }
+
+  const handleFloodChange = (nextFlood: FloodSimulationState) => {
+    if (isEditing && activeCopy) {
+      updateMap(activeCopy.id, {
+        flood: nextFlood,
+        fechaModificacion: new Date().toISOString(),
+      })
+    } else {
+      setGeneralFlood(nextFlood)
     }
   }
 
@@ -326,6 +341,7 @@ function App() {
           annotations={current.annotations}
           croppedRegion={current.croppedRegion}
           solar={current.solar}
+          flood={current.flood || generalFlood}
           exploreLayerId={exploreLayerId}
           dateViewMode={dateViewMode}
           colormapId={colormapId}
@@ -335,6 +351,7 @@ function App() {
           onAnnotationsChange={handleAnnotationsChange}
           onCropRegionChange={handleCropRegionChange}
           onSolarChange={handleSolarChange}
+          onFloodChange={handleFloodChange}
           dockWindows={dockWindows}
           activeDockWindowId={activeDockWindow?.id ?? ''}
           onActivateDockWindow={setActiveDockWindowId}
