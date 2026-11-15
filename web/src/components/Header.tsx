@@ -7,6 +7,7 @@ import {
   PencilRuler,
   Plus,
   Sliders,
+  Sun,
 } from 'lucide-react'
 import {
   EXPLORE_LAYER_OPTIONS,
@@ -73,6 +74,8 @@ export function Header({
   colormapId,
   onColormapChange,
   activeTool,
+  solar,
+  onSolarChange,
   onDockTabChange,
   floatingToolsOpen,
   onToggleFloatingTools,
@@ -347,6 +350,19 @@ export function Header({
               <span>
                 Dibujo ({isEditing ? TOOL_LABELS[activeTool] : 'Solo lectura'})
               </span>
+            </button>
+
+            <button
+              type="button"
+              className={`ws-ribbon__btn ws-ribbon__btn--solar ${solar.enabled ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange('map')
+                onSolarChange({ ...solar, enabled: !solar.enabled })
+              }}
+              title="Activar/desactivar Simulador Solar con radiación directa incidente (Inferno)"
+            >
+              <Sun size={14} />
+              <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : 'Simulador Solar'}</span>
             </button>
 
           </div>

@@ -1,12 +1,15 @@
 import { useId, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { Sun, X } from 'lucide-react'
-import type { SolarSimulationState } from '../types/workspace'
+import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, Sun, X, Zap } from 'lucide-react'
+import type { LngLat, SolarSimulationState } from '../types/workspace'
 import { getColormapSpec } from '../utils/colormapLut'
+import { runSolarSimulation, type SolarSimulationResponse } from '../api/client'
 
 interface SolarPanelProps {
   solar: SolarSimulationState
   onSolarChange: (next: SolarSimulationState) => void
   onClose: () => void
+  center?: LngLat
+  croppedRegion?: LngLat[] | null
 }
 
 /** Convierte el ángulo solar [0..180] en hora solar (06:00 a 18:00). */
@@ -29,9 +32,13 @@ function sunArcCoords(angleDeg: number): { x: number; y: number } {
   }
 }
 
-export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
+export function RightPanel({ solar, onSolarChange, onClose, center, croppedRegion }: SolarPanelProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [simulationResult, setSimulationResult] = useState<SolarSimulationResponse | null>(null)
+  const [simulationError, setSimulationError] = useState<string | null>(null)
+
   const angleId = useId()
   const radId = useId()
   const infernoSpec = getColormapSpec('inferno')
@@ -56,16 +63,63 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
     })
   }
 
+  const handleRunBackendSimulation = async () => {
+    setIsSimulating(true)
+    setSimulationError(null)
+
+    try {
+      // 1. Construir ROI seguro (<10 km diagonal para respetar límites de NASADEM en memoria)
+      let cLon = center ? center[0] : -93.09
+      let cLat = center ? center[1] : 16.76
+      if (croppedRegion && croppedRegion.length >= 3) {
+        cLon = croppedRegion.reduce((acc, p) => acc + p[0], 0) / croppedRegion.length
+        cLat = croppedRegion.reduce((acc, p) => acc + p[1], 0) / croppedRegion.length
+      }
+      const delta = 0.018 // ~2km radio (4km x 4km box)
+      const roiPolygon: number[][][] = [[
+        [Number((cLon - delta).toFixed(5)), Number((cLat - delta).toFixed(5))],
+        [Number((cLon + delta).toFixed(5)), Number((cLat - delta).toFixed(5))],
+        [Number((cLon + delta).toFixed(5)), Number((cLat + delta).toFixed(5))],
+        [Number((cLon - delta).toFixed(5)), Number((cLat + delta).toFixed(5))],
+        [Number((cLon - delta).toFixed(5)), Number((cLat - delta).toFixed(5))],
+      ]]
+
+      // 2. Mapear ángulo a hora local
+      const totalMinutes = Math.round(6 * 60 + (solar.sunAngle / 180) * 12 * 60)
+      const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0')
+      const mm = String(totalMinutes % 60).padStart(2, '0')
+      const datetimeLocal = `2026-06-21T${hh}:${mm}:00`
+
+      const intensity = Math.max(1, Math.min(100, Math.round(solar.radiationIntensity || 75)))
+
+      const res = await runSolarSimulation({
+        roi: {
+          type: 'Polygon',
+          coordinates: roiPolygon,
+        },
+        datetime_local: datetimeLocal,
+        timezone: 'America/Mexico_City',
+        intensity_percent: intensity,
+      })
+
+      setSimulationResult(res)
+    } catch (err) {
+      setSimulationError(err instanceof Error ? err.message : 'Error al conectar con la API de simulación')
+    } finally {
+      setIsSimulating(false)
+    }
+  }
+
   return (
     <aside className="solar-card" aria-label="Simulación Solar y Radiación (Inferno)">
       <div className="solar-card__header">
         <div>
           <h3 className="solar-card__title">
             <Sun size={14} className="solar-card__icon" aria-hidden="true" />
-            Settings — Simulación Solar / Radiación
+            Simulador Solar & Radiación
           </h3>
           <p className="solar-card__subtitle">
-            Incidencia azimutal DEM y rampa térmica <strong>Inferno</strong>
+            Relieve DEM · NREL SPA · Rampa <strong>Inferno</strong>
           </p>
         </div>
         <button
@@ -232,6 +286,106 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
           <span>Media</span>
           <span>Mayor radiación</span>
         </div>
+      </div>
+
+      {/* Botón de Ejecución API NASADEM Backend */}
+      <div className="solar-api-section">
+        <button
+          type="button"
+          className="solar-api-btn"
+          disabled={isSimulating}
+          onClick={handleRunBackendSimulation}
+          title="Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend"
+        >
+          {isSimulating ? (
+            <>
+              <Loader2 size={13} className="spin" />
+              <span>Calculando física NASADEM...</span>
+            </>
+          ) : (
+            <>
+              <Zap size={13} />
+              <span>Calcular con API NASADEM</span>
+            </>
+          )}
+        </button>
+
+        {simulationError && (
+          <div className="solar-api-error">
+            <AlertCircle size={13} />
+            <span>{simulationError}</span>
+          </div>
+        )}
+
+        {simulationResult && (
+          <div className="solar-api-results">
+            <div className="solar-api-results__header">
+              <CheckCircle2 size={13} className="solar-api-results__ok" />
+              <span className="solar-api-results__title">Cálculo Físico Concluido</span>
+            </div>
+
+            <div className="solar-api-grid">
+              <div className="solar-api-stat">
+                <span className="solar-api-stat__label">DNI Ajustado</span>
+                <span className="solar-api-stat__val">
+                  {simulationResult.clear_sky.dni_adjusted_w_m2.toFixed(1)} W/m²
+                </span>
+              </div>
+              <div className="solar-api-stat">
+                <span className="solar-api-stat__label">Elevación Solar</span>
+                <span className="solar-api-stat__val">
+                  {simulationResult.position.apparent_elevation_deg.toFixed(1)}°
+                </span>
+              </div>
+              <div className="solar-api-stat">
+                <span className="solar-api-stat__label">Azimut</span>
+                <span className="solar-api-stat__val">
+                  {simulationResult.position.azimuth_deg.toFixed(1)}°
+                </span>
+              </div>
+              <div className="solar-api-stat">
+                <span className="solar-api-stat__label">Altitud DEM</span>
+                <span className="solar-api-stat__val">
+                  {simulationResult.position.altitude_m.toFixed(0)} m (EGM96)
+                </span>
+              </div>
+            </div>
+
+            {/* Acciones de exportación */}
+            <div className="solar-api-actions">
+              <a
+                href={simulationResult.layers.incident.export_url}
+                download="incident.tif"
+                className="solar-api-link"
+                title="Descargar GeoTIFF de 32-bit Float con la irradiancia incidente calculada"
+              >
+                <Download size={12} />
+                <span>incident.tif</span>
+              </a>
+              <a
+                href={simulationResult.layers.incident.preview_url}
+                target="_blank"
+                rel="noreferrer"
+                className="solar-api-link"
+                title="Abrir imagen de previsualización en alta resolución"
+              >
+                <ExternalLink size={12} />
+                <span>Preview PNG</span>
+              </a>
+            </div>
+
+            {/* Thumbnail visual */}
+            {simulationResult.layers.incident.preview_url && (
+              <div className="solar-api-preview-box">
+                <img
+                  src={simulationResult.layers.incident.preview_url}
+                  alt="Previsualización de radiación solar calculada"
+                  className="solar-api-preview-img"
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   )

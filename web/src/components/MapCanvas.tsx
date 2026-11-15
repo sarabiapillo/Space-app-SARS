@@ -2707,6 +2707,8 @@ export function MapCanvas({
             solar={solar}
             onSolarChange={onSolarChange}
             onClose={() => onSolarChange({ ...solar, enabled: false })}
+            center={view.centro}
+            croppedRegion={croppedRegion}
           />
         )}
       </div>

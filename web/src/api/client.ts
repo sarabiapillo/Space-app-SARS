@@ -401,3 +401,66 @@ export async function fetchExploreCharts(granuleId: string): Promise<ExploreChar
     }
   }
 }
+
+export interface SolarSimulationRequest {
+  roi: {
+    type: 'Polygon' | 'MultiPolygon'
+    coordinates: number[][][] | number[][][][]
+  }
+  datetime_local: string
+  timezone: string
+  intensity_percent: number
+  temperature_c?: number
+  pressure_hpa?: number
+}
+
+export interface SolarSimulationResponse {
+  id: string
+  status: string
+  model: string
+  units: string
+  position: {
+    azimuth_deg: number
+    apparent_elevation_deg: number
+    geometric_elevation_deg: number
+    altitude_m: number
+    altitude_datum: string
+    pressure_hpa: number
+    pressure_provenance: string
+    temperature_c: number
+    datetime_local: string
+    timezone: string
+  }
+  clear_sky: {
+    dni_clear_sky_w_m2: number
+    dni_adjusted_w_m2: number
+    linke_turbidity: number
+    airmass_relative: number
+  }
+  layers: {
+    incident: {
+      preview_url: string
+      export_url: string
+    }
+  }
+  sample_url: string
+}
+
+export async function runSolarSimulation(
+  req: SolarSimulationRequest
+): Promise<SolarSimulationResponse> {
+  const res = await fetch('/api/solar/simulations', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: `Error HTTP ${res.status}` }))
+    throw new Error(err.error || `Error HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
