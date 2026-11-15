@@ -1,18 +1,17 @@
 import {
-  CircleDot,
+  Camera,
+  CloudRain,
   Columns,
-  Copy,
   Download,
-  Hand,
   Layers,
-  Pencil,
-  Pentagon,
+  PencilRuler,
+  Plus,
   Sliders,
   Sun,
-  Tag,
 } from 'lucide-react'
 import {
   EXPLORE_LAYER_OPTIONS,
+  type CenterDockTab,
   type ExploreDateViewMode,
   type ExploreLayerId,
 } from '../mocks/initialWorkspaces'
@@ -38,9 +37,23 @@ interface HeaderProps {
   colormapId: ScientificColormapId
   onColormapChange: (id: ScientificColormapId) => void
   activeTool: DrawTool
-  onSelectTool: (tool: DrawTool) => void
   solar: SolarSimulationState
   onSolarChange: (next: SolarSimulationState) => void
+  activeDockTab: CenterDockTab
+  onDockTabChange: (tab: CenterDockTab) => void
+  floatingToolsOpen: boolean
+  onToggleFloatingTools: () => void
+  isCaptureMode: boolean
+  onStartCaptureMode: () => void
+}
+
+const TOOL_LABELS: Record<DrawTool, string> = {
+  mover: 'Mover',
+  lapiz: 'Lápiz',
+  peligro: 'Anomalía',
+  advertencia: 'Observación',
+  poligono: 'Recortar ROI',
+  etiqueta: 'Etiqueta',
 }
 
 export function Header({
@@ -59,15 +72,20 @@ export function Header({
   colormapId,
   onColormapChange,
   activeTool,
-  onSelectTool,
   solar,
   onSolarChange,
+  activeDockTab,
+  onDockTabChange,
+  floatingToolsOpen,
+  onToggleFloatingTools,
+  isCaptureMode,
+  onStartCaptureMode,
 }: HeaderProps) {
   const isEditing = viewMode === 'editado' && canShowEdited
 
   return (
     <header className="ws-header" role="banner">
-      {/* 1. Barra fina de menú clásico estilo COMSOL / SNAP / QGIS */}
+      {/* 1. Barra superior de menús en escala de grises oscura (estilo ventana técnica de escritorio) */}
       <div className="ws-menubar">
         <div className="ws-menubar__menus" role="menubar" aria-label="Menú principal de estación de trabajo">
           <button
@@ -83,7 +101,10 @@ export function Header({
             type="button"
             role="menuitem"
             className="ws-menubar__item"
-            onClick={() => onDateViewModeChange(dateViewMode === 't1' ? 't2' : 't1')}
+            onClick={() => {
+              onDockTabChange('map')
+              onDateViewModeChange(dateViewMode === 't1' ? 't2' : 't1')
+            }}
             title="Alternar escena activa GCOV t1 / t2"
           >
             Escenas GCOV
@@ -92,13 +113,14 @@ export function Header({
             type="button"
             role="menuitem"
             className="ws-menubar__item"
-            onClick={() =>
+            onClick={() => {
+              onDockTabChange('map')
               onExploreLayerChange(
                 exploreLayerId === 'gamma0_HHHH_ml2_dB'
                   ? 'sigma0_HHHH_ml2_dB'
                   : 'gamma0_HHHH_ml2_dB',
               )
-            }
+            }}
             title="Alternar calibración radiométrica RTC γ⁰ / elipsoidal σ⁰"
           >
             Procesamiento SAR
@@ -107,8 +129,8 @@ export function Header({
             type="button"
             role="menuitem"
             className="ws-menubar__item"
-            onClick={() => onDateViewModeChange('swipe')}
-            title="Activar comparador visual t1 ↔ t2 con escala común -22 a 0 dB"
+            onClick={() => onDockTabChange('rain-dg2')}
+            title="Abrir pestaña Simulación Lluvia / DG2"
           >
             Validación
           </button>
@@ -116,8 +138,8 @@ export function Header({
             type="button"
             role="menuitem"
             className="ws-menubar__item"
-            onClick={() => onSolarChange({ ...solar, enabled: !solar.enabled })}
-            title="Mostrar u ocultar panel acoplado de Simulación Solar / Radiación"
+            onClick={onToggleFloatingTools}
+            title="Mostrar u ocultar cuadro flotante arrastrable de herramientas de dibujo"
           >
             Ventana
           </button>
@@ -147,14 +169,14 @@ export function Header({
         </div>
       </div>
 
-      {/* 2. Cinta técnica Ribbon Bar agrupada por secciones con divisores verticales */}
+      {/* 2. Cinta técnica Ribbon Bar sin controles duplicados */}
       <div className="ws-ribbon" role="toolbar" aria-label="Cinta de herramientas técnicas">
         {/* Sección 1: Espacio de Trabajo */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
             <button
               type="button"
-              className={`ws-ribbon__btn ${viewMode === 'general' ? 'is-active' : ''}`}
+              className={`ws-ribbon__btn ws-ribbon__btn--ws-general ${viewMode === 'general' ? 'is-active' : ''}`}
               onClick={() => onViewModeChange('general')}
               title="Vista de solo lectura del Mapa General"
             >
@@ -163,7 +185,7 @@ export function Header({
             </button>
             <button
               type="button"
-              className={`ws-ribbon__btn ${viewMode === 'editado' ? 'is-active' : ''}`}
+              className={`ws-ribbon__btn ws-ribbon__btn--ws-edited ${viewMode === 'editado' ? 'is-active' : ''}`}
               onClick={() => onViewModeChange('editado')}
               disabled={!canShowEdited}
               title={
@@ -177,11 +199,11 @@ export function Header({
             </button>
             <button
               type="button"
-              className="ws-ribbon__btn ws-ribbon__btn--primary"
+              className="ws-ribbon__btn ws-ribbon__btn--create"
               onClick={onDuplicate}
               title="Duplicar vista actual en una nueva copia editable en localStorage"
             >
-              <Copy size={14} />
+              <Plus size={14} strokeWidth={2.5} />
               <span>Duplicar Mapa</span>
             </button>
           </div>
@@ -198,7 +220,10 @@ export function Header({
                 key={layer.id}
                 type="button"
                 className={`ws-ribbon__btn ws-ribbon__btn--mono ${exploreLayerId === layer.id ? 'is-active' : ''}`}
-                onClick={() => onExploreLayerChange(layer.id)}
+                onClick={() => {
+                  onDockTabChange('map')
+                  onExploreLayerChange(layer.id)
+                }}
                 title={layer.title}
               >
                 <span>{layer.shortLabel}</span>
@@ -246,7 +271,10 @@ export function Header({
             <button
               type="button"
               className={`ws-ribbon__btn ws-ribbon__btn--mono ${dateViewMode === 't1' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('t1')}
+              onClick={() => {
+                onDockTabChange('map')
+                onDateViewModeChange('t1')
+              }}
               title={`Mostrar escena t1 (${escena.t1}): ${escena.t1SceneId}`}
             >
               <span>t1: {escena.t1}</span>
@@ -254,19 +282,25 @@ export function Header({
             <button
               type="button"
               className={`ws-ribbon__btn ws-ribbon__btn--mono ${dateViewMode === 't2' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('t2')}
+              onClick={() => {
+                onDockTabChange('map')
+                onDateViewModeChange('t2')
+              }}
               title={`Mostrar escena t2 (${escena.t2}): ${escena.t2SceneId}`}
             >
               <span>t2: {escena.t2}</span>
             </button>
             <button
               type="button"
-              className={`ws-ribbon__btn ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('swipe')}
+              className={`ws-ribbon__btn ws-ribbon__btn--swipe ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange('map')
+                onDateViewModeChange('swipe')
+              }}
               title="Deslizador Antes/Después (Swipe t1 ↔ t2) con verificación de escala -22 a 0 dB"
             >
               <Columns size={14} />
-              <span>Swipe t1 ↔ t2</span>
+              <span>Comparador Swipe</span>
             </button>
           </div>
           <span className="ws-ribbon__label">Comparador Temporal t1/t2</span>
@@ -274,111 +308,70 @@ export function Header({
 
         <div className="ws-ribbon__divider" aria-hidden="true" />
 
-        {/* Sección 4: Herramientas de Geometría y Dibujo */}
+        {/* Sección 4: Vistas, Dibujo Flotante y Simulación */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
             <button
               type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'mover' ? 'is-active' : ''}`}
+              className={`ws-ribbon__btn ${floatingToolsOpen ? 'is-active' : ''}`}
               onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('mover')
+                onDockTabChange('map')
+                onToggleFloatingTools()
               }}
-              title="Mover lienzo / Seleccionar elementos dibujados"
+              title="Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo"
             >
-              <Hand size={13} />
-              <span>Mover</span>
+              <PencilRuler size={14} />
+              <span>
+                Dibujo ({isEditing ? TOOL_LABELS[activeTool] : 'Solo lectura'})
+              </span>
             </button>
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'lapiz' ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('lapiz')
-              }}
-              title="Dibujar trazo libre (LineString)"
-            >
-              <Pencil size={13} />
-              <span>Lápiz</span>
-            </button>
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'peligro' ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('peligro')
-              }}
-              title="Marcar anomalía radiométrica / zona de peligro"
-            >
-              <CircleDot size={13} className="icon-danger" />
-              <span>Anomalía</span>
-            </button>
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'advertencia' ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('advertencia')
-              }}
-              title="Marcar zona de observación / advertencia"
-            >
-              <CircleDot size={13} className="icon-warn" />
-              <span>Observación</span>
-            </button>
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('poligono')
-              }}
-              title="Seleccionar y recortar subregión poligonal"
-            >
-              <Pentagon size={13} />
-              <span>Recortar ROI</span>
-            </button>
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${isEditing && activeTool === 'etiqueta' ? 'is-active' : ''}`}
-              onClick={() => {
-                if (!isEditing && canShowEdited) onViewModeChange('editado')
-                onSelectTool('etiqueta')
-              }}
-              title="Insertar o editar etiqueta técnica sobre el mapa"
-            >
-              <Tag size={13} />
-              <span>Etiqueta</span>
-            </button>
-          </div>
-          <span className="ws-ribbon__label">Herramientas de Geometría y Dibujo</span>
-        </div>
 
-        <div className="ws-ribbon__divider" aria-hidden="true" />
-
-        {/* Sección 5: Simulación Solar / Radiación */}
-        <div className="ws-ribbon__group">
-          <div className="ws-ribbon__controls">
             <button
               type="button"
               className={`ws-ribbon__btn ${solar.enabled ? 'is-active' : ''}`}
-              onClick={() => onSolarChange({ ...solar, enabled: !solar.enabled })}
-              title="Activar/desactivar Simulador Solar y mapa de calor de radiación (Inferno)"
+              onClick={() => {
+                onDockTabChange('map')
+                onSolarChange({ ...solar, enabled: !solar.enabled })
+              }}
+              title="Activar/desactivar Simulador Solar con mapa de calor de radiación (Inferno)"
             >
               <Sun size={14} className="icon-sun" />
               <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : 'Simulador Solar'}</span>
             </button>
+
+            <button
+              type="button"
+              className={`ws-ribbon__btn ws-ribbon__btn--hydro ${activeDockTab === 'rain-dg2' ? 'is-active' : ''}`}
+              onClick={() => onDockTabChange(activeDockTab === 'rain-dg2' ? 'map' : 'rain-dg2')}
+              title="Alternar vista de Simulación Lluvia / Hidrodinámica DG2 sobre el mapa"
+            >
+              <CloudRain size={14} />
+              <span>Lluvia / DG2</span>
+            </button>
           </div>
-          <span className="ws-ribbon__label">Simulación Solar / Radiación</span>
+          <span className="ws-ribbon__label">Herramientas y Módulos</span>
         </div>
 
         <div className="ws-ribbon__divider" aria-hidden="true" />
 
-        {/* Sección 6: Exportar */}
+        {/* Sección 5: Acciones de Salida y Captura */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
             <button
               type="button"
-              className="ws-ribbon__btn"
+              className={`ws-ribbon__btn ws-ribbon__btn--capture ${isCaptureMode ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange('map')
+                onStartCaptureMode()
+              }}
+              title="Seleccionar región del mapa simulado y guardar imagen PNG o JPG"
+            >
+              <Camera size={14} />
+              <span>Capturar Imagen</span>
+            </button>
+            <button
+              type="button"
+              className="ws-ribbon__btn ws-ribbon__btn--export"
               onClick={onExportJson}
               title="Exportar proyecto y anotaciones en formato JSON reproducible"
             >
@@ -386,7 +379,7 @@ export function Header({
               <span>Exportar JSON</span>
             </button>
           </div>
-          <span className="ws-ribbon__label">Exportar</span>
+          <span className="ws-ribbon__label">Captura y Exportación</span>
         </div>
       </div>
     </header>

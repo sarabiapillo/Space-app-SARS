@@ -27,6 +27,27 @@ function serveDataExplorePlugin(): Plugin {
       }
 
       const relPath = decodeURIComponent(rawUrl.slice('/data/explore/'.length))
+
+      // Índice dinámico de escenas disponibles en ../data/explore/ para evitar 404 en consola
+      if (relPath === '_index.json') {
+        const scenes: Record<string, { hasCapas: boolean; hasGraficas: boolean }> = {}
+        if (fs.existsSync(dataExploreRoot)) {
+          for (const entry of fs.readdirSync(dataExploreRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue
+            const dir = path.join(dataExploreRoot, entry.name)
+            scenes[entry.name] = {
+              hasCapas: fs.existsSync(path.join(dir, 'web', 'capas.json')),
+              hasGraficas: fs.existsSync(path.join(dir, 'graficas.json')),
+            }
+          }
+        }
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.end(JSON.stringify({ scenes }))
+        return
+      }
+
       const absPath = path.resolve(dataExploreRoot, relPath)
 
       // Evitar cualquier escape fuera de ../data/explore/
@@ -75,4 +96,7 @@ function serveDataExplorePlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), serveDataExplorePlugin()],
+  optimizeDeps: {
+    exclude: ['maplibre-gl'],
+  },
 })

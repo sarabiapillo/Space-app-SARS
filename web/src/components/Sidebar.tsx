@@ -28,6 +28,7 @@ import {
 import { type GcovStackSpec } from '../mocks/initialWorkspaces'
 import { ExploradorFeature } from '../features/explorador'
 import { ComparadorFeature } from '../features/comparador'
+import { Etapa1ChartsPanel } from './Etapa1ChartsPanel'
 import { formatRelative } from '../utils/time'
 
 interface SidebarProps {
@@ -90,11 +91,13 @@ export function Sidebar({
   const [openNodes, setOpenNodes] = useState<{
     savedMaps: boolean
     catalogAndC1: boolean
+    chartsEtapa1: boolean
     compat: boolean
     sceneParams: boolean
   }>({
     savedMaps: true,
     catalogAndC1: true,
+    chartsEtapa1: true,
     compat: true,
     sceneParams: true,
   })
@@ -376,6 +379,25 @@ export function Sidebar({
                   onSelectStack?.(stack)
                 }}
               />
+            </div>
+          )}
+        </div>
+
+        {/* Nodo 2b: Gráficas Etapa 1 (Chart.js · T62/F10 Principal) */}
+        <div className="tree-node">
+          <button
+            type="button"
+            className="tree-node__header"
+            onClick={() => toggleNode('chartsEtapa1')}
+            aria-expanded={openNodes.chartsEtapa1}
+          >
+            <span className="tree-node__caret">{openNodes.chartsEtapa1 ? '▾' : '▸'}</span>
+            <span className="tree-node__title">Gráficas Etapa 1 (Chart.js · T62/F10)</span>
+          </button>
+
+          {openNodes.chartsEtapa1 && (
+            <div className="tree-node__body">
+              <Etapa1ChartsPanel compact />
             </div>
           )}
         </div>

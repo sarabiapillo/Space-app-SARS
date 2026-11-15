@@ -606,3 +606,201 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
     },
   ]
 }
+
+export type CenterDockTab = 'map' | 'rain-dg2'
+
+export type Dg2SectorId = 'grijalva-chicoasen' | 'canon-laderas' | 'tuxtla-urbana'
+
+export interface NonUrbanSector {
+  id: Dg2SectorId
+  nombre: string
+  tipo: 'elegible' | 'excluida'
+  criterio: string
+  nota: string
+  coordinates: [number, number][][]
+}
+
+export const DG2_ROI_SECTORS: readonly NonUrbanSector[] = [
+  {
+    id: 'grijalva-chicoasen',
+    nombre: 'Cauce Río Grijalva / Presa Chicoasén',
+    tipo: 'elegible',
+    criterio: 'Terreno natural / cauce abierto sin red de alcantarillado ni edificios densos',
+    nota: 'Apto para ecuaciones de aguas poco profundas DG2 con DEM hidrográfico + fricción Manning n.',
+    coordinates: [
+      [
+        [-93.2, 16.8],
+        [-93.02, 16.8],
+        [-92.98, 16.89],
+        [-93.16, 16.89],
+        [-93.2, 16.8],
+      ],
+    ],
+  },
+  {
+    id: 'canon-laderas',
+    nombre: 'Laderas y terrazas agrícolas (Valle Central)',
+    tipo: 'elegible',
+    criterio: 'Uso agrícola/forestal no urbano en malla UTM EPSG:32615',
+    nota: 'Candidato para contraste exploratorio frente a Δγ⁰ / Δσ⁰ de NISAR GCOV.',
+    coordinates: [
+      [
+        [-93.38, 16.66],
+        [-93.21, 16.66],
+        [-93.21, 16.88],
+        [-93.38, 16.88],
+        [-93.38, 16.66],
+      ],
+    ],
+  },
+  {
+    id: 'tuxtla-urbana',
+    nombre: 'Mancha Urbana de Tuxtla Gutiérrez',
+    tipo: 'excluida',
+    criterio: 'Zona urbana con edificios, calles y drenaje pluvial subterráneo',
+    nota: 'Excluida del alcance DG2 (flujo-dg2-simulacion-inundacion.tex §1): el solver no modela drenaje urbano ni obstrucción de edificaciones.',
+    coordinates: [
+      [
+        [-93.19, 16.71],
+        [-93.03, 16.71],
+        [-93.03, 16.79],
+        [-93.19, 16.79],
+        [-93.19, 16.71],
+      ],
+    ],
+  },
+]
+
+export function buildDg2EligibilityGeoJSON(selectedId: Dg2SectorId) {
+  return {
+    type: 'FeatureCollection' as const,
+    features: DG2_ROI_SECTORS.map((sec) => ({
+      type: 'Feature' as const,
+      properties: {
+        id: sec.id,
+        nombre: sec.nombre,
+        tipo: sec.tipo,
+        selected: sec.id === selectedId,
+      },
+      geometry: {
+        type: 'Polygon' as const,
+        coordinates: sec.coordinates,
+      },
+    })),
+  }
+}
+
+/**
+ * Contrato `graficas-etapa1-1` (`data/explore/<granuleId>/graficas.json`, `docs/p1-graficas-chartjs.md`).
+ */
+export interface ExploreHistogramStats {
+  n_validos: number
+  media_dB: number
+  mediana_dB: number
+  dB_de_la_media: number
+  desv_std_dB: number
+  p5_dB: number
+  p95_dB: number
+}
+
+export interface ExploreHistogramSeries {
+  nombre: string
+  bin_inicio_dB: number
+  conteos: number[]
+  total_en_rango: number
+  fuera_de_rango: number
+  estadisticas: ExploreHistogramStats
+}
+
+export interface ExploreHistogramChart {
+  id: 'histograma_gamma0_dB'
+  figura_png: string
+  tipo_sugerido: 'bar'
+  titulo: string
+  eje_x: {
+    etiqueta: string
+    unidad: string
+    ancho_bin: number
+    rango_bins: [number, number]
+  }
+  eje_y: {
+    etiqueta: string
+    unidad: string
+  }
+  como_leer?: string
+  series: ExploreHistogramSeries[]
+}
+
+export interface ExploreMaskChart {
+  id: 'mascara_roi'
+  figura_png: string
+  tipo_sugerido: 'bar'
+  titulo: string
+  eje_x: {
+    etiqueta: string
+    unidad: string | null
+  }
+  eje_y: {
+    etiqueta: string
+    unidad: string
+  }
+  categorias: string[]
+  etiquetas: string[]
+  series: Array<{
+    nombre: string
+    valores: number[]
+  }>
+  pct_validos_en_poligono: number
+  como_leer?: string
+}
+
+export interface ExploreIncidenceChart {
+  id: 'incidencia_por_altura'
+  figura_png: string
+  tipo_sugerido: 'line'
+  titulo: string
+  eje_x: {
+    etiqueta: string
+    unidad: string
+  }
+  eje_y: {
+    etiqueta: string
+    unidad: string
+  }
+  x: number[]
+  series: Array<{
+    nombre: string
+    valores: number[]
+  }>
+  altura_figura_m: number
+  como_leer?: string
+}
+
+export type ExploreChartEntry =
+  | ExploreHistogramChart
+  | ExploreMaskChart
+  | ExploreIncidenceChart
+
+export interface ExploreChartsManifest {
+  version: string
+  tipo: string
+  creado_utc: string
+  version_codigo: string
+  escena: {
+    granuleId: string
+    producto: string
+    fecha_inicio: string
+    trayectoria: number
+    marco: number
+    direccion: string
+    crid: string
+    madurez_catalogo: string
+    frecuencia: string
+    polarizaciones: string[]
+  }
+  fuentes: {
+    metadatos: string
+  }
+  graficas: ExploreChartEntry[]
+  advertencias: string[]
+}

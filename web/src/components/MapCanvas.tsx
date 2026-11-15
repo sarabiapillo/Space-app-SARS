@@ -17,17 +17,24 @@ import {
   type StyleSpecification,
 } from 'maplibre-gl'
 import {
+  Camera,
+  ChevronDown,
+  ChevronUp,
   CircleDot,
-  Columns,
+  CloudRain,
+  Crosshair,
+  Download,
+  GripHorizontal,
   Hand,
   Monitor,
   Pencil,
+  PencilRuler,
   Pentagon,
-  Sun,
   Tag,
   Terminal,
   Trash,
   Undo2,
+  X,
 } from 'lucide-react'
 import {
   CHIAPAS_CENTRO,
@@ -40,17 +47,20 @@ import {
   NISAR_IMAGE_URL,
   WARN_CIRCLE_DEFAULT_LABEL,
   WARN_CIRCLE_TOOLTIP,
+  buildDg2EligibilityGeoJSON,
+  type CenterDockTab,
+  type Dg2SectorId,
   type ExploreDateViewMode,
   type ExploreLayerId,
   type ExploreWebManifest,
 } from '../mocks/initialWorkspaces'
 import { fetchExploreManifest, verifyExploreScaleMatch } from '../api/client'
 import {
-  SCIENTIFIC_COLORMAPS,
   colorizePngWithLut,
   getColormapSpec,
   type ScientificColormapId,
 } from '../utils/colormapLut'
+import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
 import type {
   DrawTool,
@@ -82,17 +92,21 @@ interface MapCanvasProps {
   croppedRegion: LngLat[] | null
   solar: SolarSimulationState
   exploreLayerId: ExploreLayerId
-  onExploreLayerChange: (id: ExploreLayerId) => void
   dateViewMode: ExploreDateViewMode
-  onDateViewModeChange: (mode: ExploreDateViewMode) => void
   colormapId: ScientificColormapId
-  onColormapChange: (id: ScientificColormapId) => void
   activeTool: DrawTool
   onSelectTool: (tool: DrawTool) => void
   onViewChange?: (view: MapView, info: { userInitiated: boolean }) => void
   onAnnotationsChange: (next: MapAnnotation[]) => void
   onCropRegionChange: (polygon: LngLat[] | null) => void
   onSolarChange: (next: SolarSimulationState) => void
+  activeDockTab: CenterDockTab
+  onDockTabChange: (tab: CenterDockTab) => void
+  floatingToolsOpen: boolean
+  onToggleFloatingTools: () => void
+  isCaptureMode: boolean
+  onStartCaptureMode: () => void
+  onCancelCaptureMode: () => void
 }
 
 interface ViewportMetrics {
@@ -127,6 +141,10 @@ const DRAFT_POLY_SOURCE = 'draft-polygon-source'
 const DRAFT_POLY_FILL_LAYER = 'draft-polygon-fill'
 const DRAFT_POLY_LINE_LAYER = 'draft-polygon-line'
 const DRAFT_POLY_VERTEX_LAYER = 'draft-polygon-vertex'
+
+const DG2_SOURCE = 'dg2-eligibility-source'
+const DG2_FILL_LAYER = 'dg2-eligibility-fill'
+const DG2_LINE_LAYER = 'dg2-eligibility-line'
 
 const BASE_STYLE: StyleSpecification = {
   version: 8,
@@ -244,19 +262,25 @@ export function MapCanvas({
   croppedRegion,
   solar,
   exploreLayerId,
-  onExploreLayerChange,
   dateViewMode,
-  onDateViewModeChange,
   colormapId,
-  onColormapChange,
   activeTool,
   onSelectTool,
   onViewChange,
   onAnnotationsChange,
   onCropRegionChange,
   onSolarChange,
+  activeDockTab,
+  onDockTabChange,
+  floatingToolsOpen,
+  onToggleFloatingTools,
+  isCaptureMode,
+  onStartCaptureMode,
+  onCancelCaptureMode,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const mapStageRef = useRef<HTMLDivElement>(null)
+  const svgOverlayRef = useRef<SVGSVGElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [viewport, setViewport] = useState<ViewportMetrics>({
@@ -265,6 +289,28 @@ export function MapCanvas({
     width: 960,
     height: 640,
   })
+
+  // Estado del cuadro flotante arrastrable de herramientas de dibujo
+  const [toolboxPos, setToolboxPos] = useState<{ x: number; y: number }>({ x: 14, y: 14 })
+  const [toolboxCollapsed, setToolboxCollapsed] = useState(false)
+  const toolboxDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
+  const [isDraggingToolbox, setIsDraggingToolbox] = useState(false)
+
+  // Sector seleccionado en el modo Simulación Lluvia / DG2
+  const [dg2SectorId, setDg2SectorId] = useState<Dg2SectorId>('grijalva-chicoasen')
+
+  // Estado de captura de región (PNG / JPG)
+  const [captureDragStart, setCaptureDragStart] = useState<{ x: number; y: number } | null>(null)
+  const [captureRect, setCaptureRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [captureModal, setCaptureModal] = useState<{
+    canvas: HTMLCanvasElement
+    previewUrl: string
+    width: number
+    height: number
+    format: 'png' | 'jpeg'
+    quality: number
+    filename: string
+  } | null>(null)
 
   const [swipePct, setSwipePct] = useState<number>(50)
   const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
@@ -372,6 +418,7 @@ export function MapCanvas({
       center: initial.centro,
       zoom: initial.zoom,
       attributionControl: { compact: true },
+      canvasContextAttributes: { preserveDrawingBuffer: true },
     })
     mapRef.current = map
 
@@ -581,6 +628,58 @@ export function MapCanvas({
               'line-color': '#3399FF',
               'line-width': 1.8,
               'line-opacity': 0.9,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
+
+        if (!map.getSource(DG2_SOURCE)) {
+          map.addSource(DG2_SOURCE, {
+            type: 'geojson',
+            data: buildDg2EligibilityGeoJSON('grijalva-chicoasen'),
+          })
+          map.addLayer({
+            id: DG2_FILL_LAYER,
+            type: 'fill',
+            source: DG2_SOURCE,
+            layout: { visibility: 'none' },
+            paint: {
+              'fill-color': [
+                'case',
+                ['==', ['get', 'tipo'], 'excluida'],
+                '#EF4444',
+                ['==', ['get', 'id'], 'grijalva-chicoasen'],
+                '#0EA5E9',
+                '#10B981',
+              ],
+              'fill-opacity': [
+                'case',
+                ['boolean', ['get', 'selected'], false],
+                0.42,
+                0.22,
+              ],
+            },
+          })
+          map.addLayer({
+            id: DG2_LINE_LAYER,
+            type: 'line',
+            source: DG2_SOURCE,
+            layout: { visibility: 'none' },
+            paint: {
+              'line-color': [
+                'case',
+                ['==', ['get', 'tipo'], 'excluida'],
+                '#DC2626',
+                ['==', ['get', 'id'], 'grijalva-chicoasen'],
+                '#0284C7',
+                '#059669',
+              ],
+              'line-width': [
+                'case',
+                ['boolean', ['get', 'selected'], false],
+                3,
+                1.6,
+              ],
               'line-dasharray': [3, 2],
             },
           })
@@ -1202,12 +1301,215 @@ export function MapCanvas({
     }
   }, [isDraggingSwipe, esquinasX, esquinasW])
 
+  // Arrastre del cuadro flotante de herramientas de dibujo dentro del lienzo del mapa
+  useEffect(() => {
+    if (!isDraggingToolbox) return
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'grabbing'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (e: MouseEvent) => {
+      const drag = toolboxDragRef.current
+      const stage = mapStageRef.current
+      if (!drag || !stage) return
+      const stageRect = stage.getBoundingClientRect()
+      const maxX = Math.max(8, stageRect.width - 230)
+      const maxY = Math.max(8, stageRect.height - 80)
+      const nextX = Math.min(maxX, Math.max(8, drag.origX + (e.clientX - drag.startX)))
+      const nextY = Math.min(maxY, Math.max(8, drag.origY + (e.clientY - drag.startY)))
+      setToolboxPos({ x: Math.round(nextX), y: Math.round(nextY) })
+    }
+
+    const onMouseUp = () => {
+      toolboxDragRef.current = null
+      setIsDraggingToolbox(false)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [isDraggingToolbox])
+
+  const handleCenterRoi = () => {
+    mapRef.current?.flyTo({
+      center: CHIAPAS_CENTRO,
+      zoom: CHIAPAS_ZOOM,
+      duration: 500,
+    })
+  }
+
+  // Sincronizar polígonos vectoriales de elegibilidad no urbana cuando está activa la pestaña Simulación Lluvia / DG2
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const isDg2 = activeDockTab === 'rain-dg2'
+    const visibility = isDg2 ? 'visible' : 'none'
+    try {
+      if (map.getLayer(DG2_FILL_LAYER)) {
+        map.setLayoutProperty(DG2_FILL_LAYER, 'visibility', visibility)
+      }
+      if (map.getLayer(DG2_LINE_LAYER)) {
+        map.setLayoutProperty(DG2_LINE_LAYER, 'visibility', visibility)
+      }
+      const src = map.getSource(DG2_SOURCE) as GeoJSONSource | undefined
+      if (src) {
+        src.setData(buildDg2EligibilityGeoJSON(dg2SectorId))
+      }
+    } catch {
+      // Ignorar si el estilo aún no termina de cargar
+    }
+  }, [mapReady, activeDockTab, dg2SectorId])
+
   // Sombreado direccional de radiación solar con los stops exactos de Inferno
   const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
   const radRatio = solar.radiationIntensity / 100
   const sunFocusX = 85 - (solar.sunAngle / 180) * 70
   const sunFocusY = 54 - Math.sin((solar.sunAngle * Math.PI) / 180) * 20
   const shadowSideX = 100 - sunFocusX
+
+  // Captura la región seleccionada (o toda la vista) combinando WebGL + capa SVG de anotaciones
+  const executeRegionCapture = useCallback(
+    async (rectCss?: { x: number; y: number; w: number; h: number }) => {
+      const map = mapRef.current
+      const stage = mapStageRef.current
+      if (!map || !stage) return
+
+      const mapCanvasEl = map.getCanvas()
+      const stageW = stage.clientWidth || viewport.width || 960
+      const stageH = stage.clientHeight || viewport.height || 640
+
+      const cropX = rectCss ? Math.max(0, Math.round(rectCss.x)) : 0
+      const cropY = rectCss ? Math.max(0, Math.round(rectCss.y)) : 0
+      const cropW = rectCss ? Math.max(16, Math.round(rectCss.w)) : stageW
+      const cropH = rectCss ? Math.max(16, Math.round(rectCss.h)) : stageH
+
+      const scaleX = mapCanvasEl.width / Math.max(1, stageW)
+      const scaleY = mapCanvasEl.height / Math.max(1, stageH)
+
+      const outCanvas = document.createElement('canvas')
+      outCanvas.width = Math.max(1, Math.round(cropW * scaleX))
+      outCanvas.height = Math.max(1, Math.round(cropH * scaleY))
+
+      const ctx = outCanvas.getContext('2d')
+      if (!ctx) return
+
+      // 1. Dibujar el lienzo WebGL de MapLibre (preserveDrawingBuffer: true)
+      ctx.drawImage(
+        mapCanvasEl,
+        cropX * scaleX,
+        cropY * scaleY,
+        cropW * scaleX,
+        cropH * scaleY,
+        0,
+        0,
+        outCanvas.width,
+        outCanvas.height,
+      )
+
+      // 2. Superponer sombreado solar si está activo
+      if (solar.enabled && solar.radiationIntensity > 0) {
+        const rad = solar.radiationIntensity / 100
+        const grad = ctx.createRadialGradient(
+          outCanvas.width * (sunFocusX / 100),
+          outCanvas.height * (sunFocusY / 100),
+          10,
+          outCanvas.width * 0.5,
+          outCanvas.height * 0.5,
+          Math.max(outCanvas.width, outCanvas.height) * 0.75,
+        )
+        grad.addColorStop(0, `rgba(252, 255, 164, ${(0.24 * rad).toFixed(2)})`)
+        grad.addColorStop(0.55, `rgba(237, 105, 37, ${(0.18 * rad).toFixed(2)})`)
+        grad.addColorStop(1, `rgba(0, 0, 4, ${(0.26 * rad).toFixed(2)})`)
+        ctx.fillStyle = grad
+        ctx.fillRect(0, 0, outCanvas.width, outCanvas.height)
+      }
+
+      // 3. Superponer la capa SVG (ROI, Swipe t1/t2 y anotaciones)
+      const svgEl = svgOverlayRef.current
+      if (svgEl) {
+        try {
+          const serialized = new XMLSerializer().serializeToString(svgEl)
+          const svgBlob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' })
+          const svgUrl = URL.createObjectURL(svgBlob)
+          await new Promise<void>((resolve) => {
+            const img = new Image()
+            img.onload = () => {
+              ctx.drawImage(
+                img,
+                cropX,
+                cropY,
+                cropW,
+                cropH,
+                0,
+                0,
+                outCanvas.width,
+                outCanvas.height,
+              )
+              URL.revokeObjectURL(svgUrl)
+              resolve()
+            }
+            img.onerror = () => {
+              URL.revokeObjectURL(svgUrl)
+              resolve()
+            }
+            img.src = svgUrl
+          })
+        } catch {
+          // Si falla la serialización SVG, al menos se conserva el lienzo WebGL
+        }
+      }
+
+      const defaultFormat = 'png'
+      const previewUrl = outCanvas.toDataURL('image/png')
+      const dateTag = dateViewMode === 'swipe' ? `${escena.t1}_vs_${escena.t2}` : dateViewMode === 't1' ? escena.t1 : escena.t2
+      setCaptureModal({
+        canvas: outCanvas,
+        previewUrl,
+        width: outCanvas.width,
+        height: outCanvas.height,
+        format: defaultFormat,
+        quality: 0.92,
+        filename: `terrapulse_${exploreLayerId}_${dateTag}`,
+      })
+      onCancelCaptureMode()
+      setCaptureRect(null)
+      setCaptureDragStart(null)
+    },
+    [
+      viewport.width,
+      viewport.height,
+      solar.enabled,
+      solar.radiationIntensity,
+      sunFocusX,
+      sunFocusY,
+      dateViewMode,
+      escena.t1,
+      escena.t2,
+      exploreLayerId,
+      onCancelCaptureMode,
+    ],
+  )
+
+  const handleDownloadCapture = () => {
+    if (!captureModal) return
+    const mime = captureModal.format === 'png' ? 'image/png' : 'image/jpeg'
+    const ext = captureModal.format === 'png' ? 'png' : 'jpg'
+    const dataUrl =
+      captureModal.format === 'png'
+        ? captureModal.canvas.toDataURL(mime)
+        : captureModal.canvas.toDataURL(mime, captureModal.quality)
+    const a = document.createElement('a')
+    a.href = dataUrl
+    const safeName = captureModal.filename.trim() || 'terrapulse-captura'
+    a.download = safeName.endsWith(`.${ext}`) ? safeName : `${safeName}.${ext}`
+    a.click()
+  }
 
   const vmin = activeLayerEntry?.escala.vmin_dB ?? -22.0
   const vmax = activeLayerEntry?.escala.vmax_dB ?? 0.0
@@ -1222,13 +1524,33 @@ export function MapCanvas({
   ]
 
   return (
-    <main className="ws-center-dock" aria-label="Graphics / Map Plot 1">
-      {/* 1. Cabecera de ventana acoplada ("Graphics / Map Plot 1") */}
-      <div className="ws-panel-tabbar">
-        <div className="ws-panel-tab is-active">
-          <Monitor size={13} aria-hidden="true" />
-          <span>Graphics / Map Plot 1</span>
+    <main className="ws-center-dock" aria-label="Área Central de Estación de Trabajo">
+      {/* 1. Cabecera de pestañas acopladas (SAR Map Plot | Gráficas Etapa 1 | Lluvia / DG2) */}
+      <div className="ws-panel-tabbar" role="tablist" aria-label="Vistas del área central">
+        <div className="ws-panel-tabbar__tabs">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeDockTab === 'map'}
+            className={`ws-panel-tab ${activeDockTab === 'map' ? 'is-active' : ''}`}
+            onClick={() => onDockTabChange('map')}
+          >
+            <Monitor size={13} aria-hidden="true" />
+            <span>Graphics / Map Plot 1</span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeDockTab === 'rain-dg2'}
+            className={`ws-panel-tab ws-panel-tab--hydro ${activeDockTab === 'rain-dg2' ? 'is-active' : ''}`}
+            onClick={() => onDockTabChange('rain-dg2')}
+          >
+            <CloudRain size={13} aria-hidden="true" />
+            <span>Simulación Lluvia / DG2</span>
+          </button>
         </div>
+
         <div className="ws-panel-tabbar__summary">
           <span className="ws-mono">
             {isEditing && activeMapName ? activeMapName : 'Mapa General (Solo lectura)'}
@@ -1253,205 +1575,74 @@ export function MapCanvas({
         </div>
       </div>
 
-      {/* 2. Barra compacta de iconos justo encima del lienzo del mapa (estilo COMSOL Graphics Toolbar) */}
       <div
-        className="ws-graphics-toolbar"
-        role="toolbar"
-        aria-label="Barra de herramientas de Graphics / Map Plot 1"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+        }}
       >
-        <div className="ws-graphics-toolbar__group">
-          <button
-            type="button"
-            className={`ws-tool-btn ${activeTool === 'mover' ? 'is-active' : ''}`}
-            onClick={() => selectTool('mover')}
-            title="Mover / Seleccionar elemento dibujado (Clic para seleccionar, Supr para borrar)"
+        {/* 2. Barra compacta sin duplicidad con la Ribbon Bar (solo acciones de lienzo) */}
+          <div
+            className="ws-graphics-toolbar"
+            role="toolbar"
+            aria-label="Barra de acciones del lienzo Graphics / Map Plot 1"
           >
-            <Hand size={13} />
-            <span>Mover/Seleccionar</span>
-          </button>
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${isEditing && activeTool === 'lapiz' ? 'is-active' : ''}`}
-            onClick={() => selectTool('lapiz')}
-            disabled={!isEditing}
-            title="Dibujar trazo libre sobre el mapa"
-          >
-            <Pencil size={13} />
-            <span>Lápiz</span>
-          </button>
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${isEditing && activeTool === 'peligro' ? 'is-active' : ''}`}
-            onClick={() => selectTool('peligro')}
-            disabled={!isEditing}
-            title={DANGER_CIRCLE_TOOLTIP}
-          >
-            <CircleDot size={13} className="icon-danger" />
-            <span>Círculo Anomalía/Peligro</span>
-          </button>
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${isEditing && activeTool === 'advertencia' ? 'is-active' : ''}`}
-            onClick={() => selectTool('advertencia')}
-            disabled={!isEditing}
-            title={WARN_CIRCLE_TOOLTIP}
-          >
-            <CircleDot size={13} className="icon-warn" />
-            <span>Círculo Observación</span>
-          </button>
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
-            onClick={() => selectTool('poligono')}
-            disabled={!isEditing}
-            title="Seleccionar y recortar subregión poligonal con máscara exterior"
-          >
-            <Pentagon size={13} />
-            <span>Recortar Región</span>
-          </button>
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${isEditing && activeTool === 'etiqueta' ? 'is-active' : ''}`}
-            onClick={() => selectTool('etiqueta')}
-            disabled={!isEditing}
-            title="Insertar o editar etiqueta técnica"
-          >
-            <Tag size={13} />
-            <span>Etiqueta</span>
-          </button>
-
-          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
-
-          <button
-            type="button"
-            className={`ws-tool-btn ${solar.enabled ? 'is-active' : ''}`}
-            onClick={() => onSolarChange({ ...solar, enabled: !solar.enabled })}
-            title="Activar/desactivar Simulador Solar con rampa térmica Inferno"
-          >
-            <Sun size={13} className="icon-sun" />
-            <span>Simulador Solar</span>
-          </button>
-
-          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
-
-          <button
-            type="button"
-            className="ws-tool-btn"
-            onClick={handleUndoLastDrawing}
-            disabled={!isEditing || (annotations.length === 0 && draftPolygon.length === 0)}
-            title="Deshacer último trazo o vértice"
-          >
-            <Undo2 size={13} />
-            <span>Deshacer</span>
-          </button>
-
-          <button
-            type="button"
-            className="ws-tool-btn ws-tool-btn--danger"
-            onClick={() => selectedAnnotation && handleDeleteAnnotation(selectedAnnotation.id)}
-            disabled={!selectedAnnotation}
-            title="Eliminar elemento seleccionado (Tecla Delete / Backspace)"
-          >
-            <Trash size={13} />
-            <span>Eliminar Seleccionado</span>
-          </button>
-
-          <button
-            type="button"
-            className="ws-tool-btn"
-            onClick={handleClearAllDrawings}
-            disabled={
-              !isEditing ||
-              (annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0)
-            }
-            title="Limpiar todos los dibujos y recortes de la copia activa"
-          >
-            <Trash size={13} />
-            <span>Limpiar Todo</span>
-          </button>
-        </div>
-
-        <div className="ws-graphics-toolbar__right">
-          <div className="ws-graphics-toolbar__MiniGroup" role="group" aria-label="Selector rápido de capa GCOV">
-            {EXPLORE_LAYER_OPTIONS.map((opt) => (
+            <div className="ws-graphics-toolbar__group">
               <button
-                key={opt.id}
                 type="button"
-                className={`ws-tool-btn ws-tool-btn--mono ${opt.id === exploreLayerId ? 'is-active' : ''}`}
-                onClick={() => onExploreLayerChange(opt.id)}
-                title={opt.title}
+                className={`ws-tool-btn ${floatingToolsOpen ? 'is-active' : ''}`}
+                onClick={onToggleFloatingTools}
+                title="Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo"
               >
-                {opt.shortLabel}
+                <PencilRuler size={13} />
+                <span>{floatingToolsOpen ? 'Ocultar Caja de Dibujo' : 'Mostrar Caja de Dibujo'}</span>
               </button>
-            ))}
+
+              <button
+                type="button"
+                className={`ws-tool-btn ${isCaptureMode ? 'is-active' : ''}`}
+                onClick={() => (isCaptureMode ? onCancelCaptureMode() : onStartCaptureMode())}
+                title="Seleccionar región del mapa simulado y guardar PNG / JPG"
+              >
+                <Camera size={13} />
+                <span>{isCaptureMode ? 'Cancelar Captura' : 'Capturar Región (PNG/JPG)'}</span>
+              </button>
+
+              <button
+                type="button"
+                className="ws-tool-btn"
+                onClick={handleCenterRoi}
+                title="Centrar vista sobre la ROI oficial de Chiapas"
+              >
+                <Crosshair size={13} />
+                <span>Centrar ROI</span>
+              </button>
+            </div>
+
+            <div className="ws-graphics-toolbar__right">
+              <span className="ws-mono" style={{ fontSize: 11, color: '#475569' }}>
+                {isEditing ? `Herramienta activa: ${activeTool}` : 'Vista de solo lectura (duplica el mapa para editar)'}
+              </span>
+            </div>
           </div>
 
-          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
-
-          <select
-            className="ws-toolbar-select"
-            value={colormapId}
-            onChange={(e) => onColormapChange(e.target.value as ScientificColormapId)}
-            aria-label="Seleccionar paleta de color del mapa de calor"
-            title="Paleta científica aplicada píxel por píxel mediante LUT de 256 colores"
-          >
-            {SCIENTIFIC_COLORMAPS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-
-          <div className="ws-graphics-toolbar__MiniGroup" role="group" aria-label="Fecha o Swipe">
-            <button
-              type="button"
-              className={`ws-tool-btn ws-tool-btn--mono ${dateViewMode === 't1' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('t1')}
-              title={`t1 (${escena.t1})`}
-            >
-              t1
-            </button>
-            <button
-              type="button"
-              className={`ws-tool-btn ws-tool-btn--mono ${dateViewMode === 't2' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('t2')}
-              title={`t2 (${escena.t2})`}
-            >
-              t2
-            </button>
-            <button
-              type="button"
-              className={`ws-tool-btn ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
-              onClick={() => onDateViewModeChange('swipe')}
-              title="Comparador Antes/Después (Swipe t1 ↔ t2)"
-            >
-              <Columns size={12} />
-              <span>Swipe</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Área del lienzo geoespacial + Barra de Escala de Color Vertical a la derecha */}
-      <div className="map-canvas">
-        <div
-          ref={containerRef}
-          className="map-canvas__map"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            width: '100%',
-            height: '100%',
-          }}
-        />
+          {/* 3. Área del lienzo geoespacial + Barra de Escala de Color Vertical a la derecha */}
+          <div className="map-canvas" ref={mapStageRef}>
+            <div
+              ref={containerRef}
+              className="map-canvas__map"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                width: '100%',
+                height: '100%',
+              }}
+            />
 
         {/* Efecto direccional de radiación del Simulador Solar con los stops de Inferno */}
         {showSolarOverlay && (
@@ -1473,6 +1664,7 @@ export function MapCanvas({
 
         {/* OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
         <svg
+          ref={svgOverlayRef}
           className="synchronized-vector-svg"
           width={viewport.width}
           height={viewport.height}
@@ -2050,8 +2242,356 @@ export function MapCanvas({
           </form>
         )}
 
+        {/* Cuadro Flotante Arrastrable para Herramientas de Dibujo */}
+        {floatingToolsOpen && (
+          <aside
+            className="ws-floating-toolbox"
+            style={{ left: `${toolboxPos.x}px`, top: `${toolboxPos.y}px` }}
+            aria-label="Herramientas de dibujo flotantes"
+          >
+            <div
+              className="ws-floating-toolbox__handle"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                toolboxDragRef.current = {
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  origX: toolboxPos.x,
+                  origY: toolboxPos.y,
+                }
+                setIsDraggingToolbox(true)
+              }}
+              title="Arrastrar caja de herramientas a cualquier esquina del mapa"
+            >
+              <div className="ws-floating-toolbox__handle-title">
+                <GripHorizontal size={13} />
+                <span>Dibujo y Geometría</span>
+              </div>
+              <div className="ws-floating-toolbox__handle-actions">
+                <button
+                  type="button"
+                  className="ws-floating-toolbox__icon-btn"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setToolboxCollapsed((c) => !c)}
+                  title={toolboxCollapsed ? 'Expandir herramientas' : 'Minimizar herramientas'}
+                >
+                  {toolboxCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                </button>
+                <button
+                  type="button"
+                  className="ws-floating-toolbox__icon-btn"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={onToggleFloatingTools}
+                  title="Ocultar caja de herramientas"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {!toolboxCollapsed && (
+              <div className="ws-floating-toolbox__body">
+                {!isEditing && (
+                  <div className="ws-floating-toolbox__readonly">
+                    Solo lectura: usa <strong>+ Duplicar Mapa</strong> para dibujar.
+                  </div>
+                )}
+
+                <div className="ws-floating-toolbox__grid">
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${activeTool === 'mover' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('mover')}
+                    title="Mover lienzo / Seleccionar elementos"
+                  >
+                    <Hand size={13} />
+                    <span>Mover</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${isEditing && activeTool === 'lapiz' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('lapiz')}
+                    disabled={!isEditing}
+                    title="Dibujar trazo libre"
+                  >
+                    <Pencil size={13} />
+                    <span>Lápiz</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${isEditing && activeTool === 'peligro' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('peligro')}
+                    disabled={!isEditing}
+                    title={DANGER_CIRCLE_TOOLTIP}
+                  >
+                    <CircleDot size={13} className="icon-danger" />
+                    <span>Círculo Peligro</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${isEditing && activeTool === 'advertencia' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('advertencia')}
+                    disabled={!isEditing}
+                    title={WARN_CIRCLE_TOOLTIP}
+                  >
+                    <CircleDot size={13} className="icon-warn" />
+                    <span>Círculo Adv.</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('poligono')}
+                    disabled={!isEditing}
+                    title="Seleccionar y recortar subregión poligonal"
+                  >
+                    <Pentagon size={13} />
+                    <span>Sel. Región</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`ws-tool-btn ${isEditing && activeTool === 'etiqueta' ? 'is-active' : ''}`}
+                    onClick={() => selectTool('etiqueta')}
+                    disabled={!isEditing}
+                    title="Insertar o editar etiqueta técnica"
+                  >
+                    <Tag size={13} />
+                    <span>Etiqueta</span>
+                  </button>
+                </div>
+
+                <div className="ws-floating-toolbox__footer">
+                  <button
+                    type="button"
+                    className="ws-tool-btn"
+                    onClick={handleUndoLastDrawing}
+                    disabled={!isEditing || (annotations.length === 0 && draftPolygon.length === 0)}
+                    title="Deshacer último trazo o vértice"
+                  >
+                    <Undo2 size={12} />
+                    <span>Deshacer</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ws-tool-btn ws-tool-btn--danger"
+                    onClick={() => selectedAnnotation && handleDeleteAnnotation(selectedAnnotation.id)}
+                    disabled={!selectedAnnotation}
+                    title="Eliminar elemento seleccionado"
+                  >
+                    <Trash size={12} />
+                    <span>Eliminar</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ws-tool-btn"
+                    onClick={handleClearAllDrawings}
+                    disabled={
+                      !isEditing ||
+                      (annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0)
+                    }
+                    title="Limpiar todos los dibujos y recortes"
+                  >
+                    <Trash size={12} />
+                    <span>Limpiar</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
+
+        {/* Modo de selección rectangular para Capturar Región (PNG / JPG) */}
+        {isCaptureMode && (
+          <div
+            className="ws-capture-overlay"
+            onMouseDown={(e) => {
+              const stage = mapStageRef.current
+              if (!stage) return
+              const rect = stage.getBoundingClientRect()
+              const x = e.clientX - rect.left
+              const y = e.clientY - rect.top
+              setCaptureDragStart({ x, y })
+              setCaptureRect({ x, y, w: 0, h: 0 })
+            }}
+            onMouseMove={(e) => {
+              if (!captureDragStart) return
+              const stage = mapStageRef.current
+              if (!stage) return
+              const rect = stage.getBoundingClientRect()
+              const curX = Math.min(rect.width, Math.max(0, e.clientX - rect.left))
+              const curY = Math.min(rect.height, Math.max(0, e.clientY - rect.top))
+              setCaptureRect({
+                x: Math.min(captureDragStart.x, curX),
+                y: Math.min(captureDragStart.y, curY),
+                w: Math.abs(curX - captureDragStart.x),
+                h: Math.abs(curY - captureDragStart.y),
+              })
+            }}
+            onMouseUp={() => {
+              if (captureRect && captureRect.w >= 20 && captureRect.h >= 20) {
+                void executeRegionCapture(captureRect)
+              } else {
+                setCaptureDragStart(null)
+                setCaptureRect(null)
+              }
+            }}
+          >
+            <div className="ws-capture-banner" onMouseDown={(e) => e.stopPropagation()}>
+              <Camera size={14} />
+              <span>Arrastra un recuadro sobre la región simulada o captura la vista completa:</span>
+              <button
+                type="button"
+                className="ws-tool-btn is-active"
+                onClick={() => void executeRegionCapture()}
+              >
+                Capturar Vista Completa
+              </button>
+              <button
+                type="button"
+                className="ws-tool-btn"
+                onClick={() => {
+                  setCaptureDragStart(null)
+                  setCaptureRect(null)
+                  onCancelCaptureMode()
+                }}
+              >
+                Cancelar
+              </button>
+            </div>
+
+            {captureRect && captureRect.w > 2 && captureRect.h > 2 && (
+              <div
+                className="ws-capture-selection"
+                style={{
+                  left: `${captureRect.x}px`,
+                  top: `${captureRect.y}px`,
+                  width: `${captureRect.w}px`,
+                  height: `${captureRect.h}px`,
+                }}
+              >
+                <span>
+                  {Math.round(captureRect.w)} × {Math.round(captureRect.h)} px
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Modal de previsualización y descarga de imagen PNG / JPG */}
+        {captureModal && (
+          <div className="ws-capture-modal-backdrop" role="dialog" aria-modal="true" aria-label="Guardar captura del mapa">
+            <div className="ws-capture-modal">
+              <div className="ws-capture-modal__header">
+                <strong>
+                  <Camera size={14} /> Previsualización de Captura ({captureModal.width} × {captureModal.height} px)
+                </strong>
+                <button
+                  type="button"
+                  className="ws-floating-toolbox__icon-btn"
+                  onClick={() => setCaptureModal(null)}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="ws-capture-modal__preview">
+                <img src={captureModal.previewUrl} alt="Previsualización de región capturada" />
+              </div>
+
+              <div className="ws-capture-modal__controls">
+                <label>
+                  <span>Nombre del archivo</span>
+                  <input
+                    type="text"
+                    value={captureModal.filename}
+                    onChange={(e) =>
+                      setCaptureModal((prev) => (prev ? { ...prev, filename: e.target.value } : null))
+                    }
+                  />
+                </label>
+
+                <label>
+                  <span>Formato</span>
+                  <select
+                    value={captureModal.format}
+                    onChange={(e) => {
+                      const fmt = e.target.value as 'png' | 'jpeg'
+                      setCaptureModal((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              format: fmt,
+                              previewUrl:
+                                fmt === 'png'
+                                  ? prev.canvas.toDataURL('image/png')
+                                  : prev.canvas.toDataURL('image/jpeg', prev.quality),
+                            }
+                          : null,
+                      )
+                    }}
+                  >
+                    <option value="png">PNG (sin pérdida)</option>
+                    <option value="jpeg">JPG (comprimido)</option>
+                  </select>
+                </label>
+
+                {captureModal.format === 'jpeg' && (
+                  <label>
+                    <span>Calidad JPG: {Math.round(captureModal.quality * 100)}%</span>
+                    <input
+                      type="range"
+                      min={0.6}
+                      max={1}
+                      step={0.02}
+                      value={captureModal.quality}
+                      onChange={(e) => {
+                        const q = Number(e.target.value)
+                        setCaptureModal((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                quality: q,
+                                previewUrl: prev.canvas.toDataURL('image/jpeg', q),
+                              }
+                            : null,
+                        )
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <div className="ws-capture-modal__actions">
+                <button
+                  type="button"
+                  className="ws-tool-btn"
+                  onClick={() => setCaptureModal(null)}
+                >
+                  Cerrar
+                </button>
+                <button
+                  type="button"
+                  className="ws-ribbon__btn ws-ribbon__btn--primary"
+                  onClick={handleDownloadCapture}
+                >
+                  <Download size={14} />
+                  <span>Descargar .{captureModal.format === 'png' ? 'png' : 'jpg'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Panel superpuesto compacto y colapsable de Simulación Lluvia / DG2 sobre el mapa */}
+        {activeDockTab === 'rain-dg2' && (
+          <RainDg2Panel
+            escena={escena}
+            selectedSectorId={dg2SectorId}
+            onSelectSector={setDg2SectorId}
+          />
+        )}
+
         {/* Panel derecho acoplable/flotante de Simulación Solar */}
-        {solar.enabled && (
+        {solar.enabled && activeDockTab === 'map' && (
           <RightPanel
             solar={solar}
             onSolarChange={onSolarChange}
@@ -2237,6 +2777,7 @@ export function MapCanvas({
           </div>
         )}
       </section>
+      </div>
     </main>
   )
 }

@@ -9,6 +9,7 @@ import {
   ESCENA_CHIAPAS,
   MAPA_GENERAL,
   checkPairCompat,
+  type CenterDockTab,
   type ExploreDateViewMode,
   type ExploreLayerId,
   type GcovStackSpec,
@@ -45,6 +46,9 @@ function App() {
   const [dateViewMode, setDateViewMode] = useState<ExploreDateViewMode>('t2')
   const [colormapId, setColormapId] = useState<ScientificColormapId>('inferno')
   const [activeTool, setActiveTool] = useState<DrawTool>('mover')
+  const [activeDockTab, setActiveDockTab] = useState<CenterDockTab>('map')
+  const [floatingToolsOpen, setFloatingToolsOpen] = useState<boolean>(true)
+  const [isCaptureMode, setIsCaptureMode] = useState<boolean>(false)
 
   const activeCopy = maps.find((m) => m.id === activeCopyId) ?? maps[0] ?? null
   const isEditing = viewMode === 'editado' && activeCopy !== null
@@ -235,9 +239,14 @@ function App() {
         colormapId={colormapId}
         onColormapChange={setColormapId}
         activeTool={activeTool}
-        onSelectTool={setActiveTool}
         solar={current.solar}
         onSolarChange={handleSolarChange}
+        activeDockTab={activeDockTab}
+        onDockTabChange={setActiveDockTab}
+        floatingToolsOpen={floatingToolsOpen}
+        onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
+        isCaptureMode={isCaptureMode}
+        onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
       />
 
       <div className="app__body">
@@ -265,17 +274,21 @@ function App() {
           croppedRegion={current.croppedRegion}
           solar={current.solar}
           exploreLayerId={exploreLayerId}
-          onExploreLayerChange={setExploreLayerId}
           dateViewMode={dateViewMode}
-          onDateViewModeChange={setDateViewMode}
           colormapId={colormapId}
-          onColormapChange={setColormapId}
           activeTool={activeTool}
           onSelectTool={setActiveTool}
           onViewChange={handleViewChange}
           onAnnotationsChange={handleAnnotationsChange}
           onCropRegionChange={handleCropRegionChange}
           onSolarChange={handleSolarChange}
+          activeDockTab={activeDockTab}
+          onDockTabChange={setActiveDockTab}
+          floatingToolsOpen={floatingToolsOpen}
+          onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
+          isCaptureMode={isCaptureMode}
+          onStartCaptureMode={() => setIsCaptureMode(true)}
+          onCancelCaptureMode={() => setIsCaptureMode(false)}
         />
       </div>
 
