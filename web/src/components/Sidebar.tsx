@@ -16,18 +16,29 @@ import {
   Trash,
   X,
 } from 'lucide-react'
-import { CARPETAS, type Carpeta, type WorkspaceMap } from '../types/workspace'
+import {
+  CARPETAS,
+  type Carpeta,
+  type EscenaNisar,
+  type WorkspaceMap,
+} from '../types/workspace'
+import { type GcovStackSpec } from '../mocks/initialWorkspaces'
+import { ExploradorFeature } from '../features/explorador'
+import { ComparadorFeature } from '../features/comparador'
 import { formatRelative } from '../utils/time'
 
 interface SidebarProps {
   maps: WorkspaceMap[]
   /** Id de la copia activa en "Mapa Editado"; `null` si se está viendo el Mapa General. */
   activeMapId: string | null
+  escena: EscenaNisar
   onSelectMap: (id: string) => void
   onRenameMap: (id: string, newName: string) => void
   onDeleteMap: (id: string) => void
   opacity: number
   onOpacityChange: (value: number) => void
+  onSelectStack?: (stack: GcovStackSpec) => void
+  onChangePair?: (t1: string, t2: string) => void
 }
 
 function useNow(intervalMs: number): number {
@@ -42,17 +53,32 @@ function useNow(intervalMs: number): number {
 export function Sidebar({
   maps,
   activeMapId,
+  escena,
   onSelectMap,
   onRenameMap,
   onDeleteMap,
   opacity,
   onOpacityChange,
+  onSelectStack,
+  onChangePair,
 }: SidebarProps) {
   const [folderFilter, setFolderFilter] = useState<Carpeta | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [pairDraft, setPairDraft] = useState<{
+    stack: EscenaNisar['pila']
+    t1: string
+    t2: string
+  }>({
+    stack: escena.pila,
+    t1: escena.t1,
+    t2: escena.t2,
+  })
   const now = useNow(30_000)
   const sliderId = useId()
+
+  const activeT1 = pairDraft.stack === escena.pila ? pairDraft.t1 : escena.t1
+  const activeT2 = pairDraft.stack === escena.pila ? pairDraft.t2 : escena.t2
 
   const visibleMaps = folderFilter ? maps.filter((m) => m.carpeta === folderFilter) : maps
 
@@ -194,6 +220,25 @@ export function Sidebar({
             )
           })}
         </ul>
+
+        {/* Pilas GCOV Reales de Chiapas y Validador de Bloqueo CRID (Contrato C4) */}
+        <ExploradorFeature
+          activeStackId={escena.pila}
+          onSelectStack={(stack) => {
+            setPairDraft({ stack: stack.id, t1: stack.defaultT1, t2: stack.defaultT2 })
+            onSelectStack?.(stack)
+          }}
+        />
+
+        <ComparadorFeature
+          stackId={escena.pila}
+          t1={activeT1}
+          t2={activeT2}
+          onChangePair={(nextT1, nextT2) => {
+            setPairDraft({ stack: escena.pila, t1: nextT1, t2: nextT2 })
+            onChangePair?.(nextT1, nextT2)
+          }}
+        />
       </div>
 
       <div className="sidebar__footer">
@@ -216,6 +261,16 @@ export function Sidebar({
             className="slider"
             style={{ '--slider-fill': `${opacity}%` } as CSSProperties}
           />
+        </div>
+
+        <div className="sidebar-trace-box" aria-label="Metadatos de trazabilidad NISAR">
+          <div className="sidebar-trace-box__line">
+            {escena.producto} · {escena.pila} · {escena.t1} → {escena.t2} · HH/HV · Unidad:{' '}
+            {escena.unidad} · CRID: {escena.crid}
+          </div>
+          <div className="sidebar-trace-box__badge">
+            ⚠️ Exploratorio · Datos sintéticos (Mock C4)
+          </div>
         </div>
       </div>
     </aside>

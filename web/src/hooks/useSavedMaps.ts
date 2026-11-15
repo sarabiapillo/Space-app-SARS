@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { createInitialCopies, DEFAULT_SOLAR, ESCENA_CHIAPAS } from '../mocks/initialWorkspaces'
+import {
+  DANGER_CIRCLE_DEFAULT_LABEL,
+  DEFAULT_SOLAR,
+  ESCENA_CHIAPAS,
+  WARN_CIRCLE_DEFAULT_LABEL,
+  createInitialCopies,
+} from '../mocks/initialWorkspaces'
 import {
   CARPETAS,
   type LngLat,
@@ -32,13 +38,17 @@ function normalizeAnnotation(raw: unknown): MapAnnotation | null {
     isLngLat(a.center) &&
     isNumber(a.radiusKm)
   ) {
-    const defaultLabel = a.kind === 'peligro' ? 'Zona de Peligro' : 'Zona de Advertencia'
+    const defaultLabel =
+      a.kind === 'peligro' ? DANGER_CIRCLE_DEFAULT_LABEL : WARN_CIRCLE_DEFAULT_LABEL
+    const rawLabel = typeof a.label === 'string' ? a.label.trim() : ''
+    const isLegacyGeneric =
+      rawLabel === '' || rawLabel === 'Zona de Peligro' || rawLabel === 'Zona de Advertencia'
     return {
       id: a.id,
       kind: a.kind,
       center: a.center,
       radiusKm: a.radiusKm,
-      label: typeof a.label === 'string' && a.label.trim() ? a.label : defaultLabel,
+      label: isLegacyGeneric ? defaultLabel : rawLabel,
     }
   }
   if (a.kind === 'etiqueta' && isLngLat(a.position) && typeof a.text === 'string') {
@@ -96,9 +106,48 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     zoom: m.zoom,
     escena: {
       granuleId:
-        typeof escenaRaw?.granuleId === 'string' ? escenaRaw.granuleId : ESCENA_CHIAPAS.granuleId,
+        typeof escenaRaw?.granuleId === 'string' && !escenaRaw.granuleId.includes('GSLC')
+          ? escenaRaw.granuleId
+          : ESCENA_CHIAPAS.granuleId,
+      producto:
+        typeof escenaRaw?.producto === 'string' ? escenaRaw.producto : ESCENA_CHIAPAS.producto,
+      descripcionProducto:
+        typeof escenaRaw?.descripcionProducto === 'string'
+          ? escenaRaw.descripcionProducto
+          : ESCENA_CHIAPAS.descripcionProducto,
       epsg: isNumber(escenaRaw?.epsg) ? escenaRaw.epsg : ESCENA_CHIAPAS.epsg,
-      banda: typeof escenaRaw?.banda === 'string' ? escenaRaw.banda : ESCENA_CHIAPAS.banda,
+      banda:
+        typeof escenaRaw?.banda === 'string' && escenaRaw.banda.includes('1.257')
+          ? escenaRaw.banda
+          : ESCENA_CHIAPAS.banda,
+      polarizacion:
+        typeof escenaRaw?.polarizacion === 'string'
+          ? escenaRaw.polarizacion
+          : ESCENA_CHIAPAS.polarizacion,
+      madurez:
+        escenaRaw?.madurez === 'BETA' ||
+        escenaRaw?.madurez === 'PROVISIONAL' ||
+        escenaRaw?.madurez === 'VALIDATED'
+          ? escenaRaw.madurez
+          : ESCENA_CHIAPAS.madurez,
+      cicloRepeticion:
+        typeof escenaRaw?.cicloRepeticion === 'string'
+          ? escenaRaw.cicloRepeticion
+          : ESCENA_CHIAPAS.cicloRepeticion,
+      pila:
+        escenaRaw?.pila === 'T55/F80' ||
+        escenaRaw?.pila === 'T62/F10' ||
+        escenaRaw?.pila === 'T156/F80'
+          ? escenaRaw.pila
+          : ESCENA_CHIAPAS.pila,
+      direccion:
+        escenaRaw?.direccion === 'ASCENDING' || escenaRaw?.direccion === 'DESCENDING'
+          ? escenaRaw.direccion
+          : ESCENA_CHIAPAS.direccion,
+      t1: typeof escenaRaw?.t1 === 'string' ? escenaRaw.t1 : ESCENA_CHIAPAS.t1,
+      t2: typeof escenaRaw?.t2 === 'string' ? escenaRaw.t2 : ESCENA_CHIAPAS.t2,
+      crid: typeof escenaRaw?.crid === 'string' ? escenaRaw.crid : ESCENA_CHIAPAS.crid,
+      unidad: typeof escenaRaw?.unidad === 'string' ? escenaRaw.unidad : ESCENA_CHIAPAS.unidad,
       fuente: typeof escenaRaw?.fuente === 'string' ? escenaRaw.fuente : ESCENA_CHIAPAS.fuente,
     },
     annotations,

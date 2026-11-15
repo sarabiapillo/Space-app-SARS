@@ -52,11 +52,22 @@ export interface SolarSimulationState {
   radiationIntensity: number
 }
 
-/** Metadatos de la escena NISAR asociada al mapa. */
+/** Metadatos de la escena y pila NISAR GCOV asociada al mapa. */
 export interface EscenaNisar {
   granuleId: string
+  producto: string
+  descripcionProducto: string
   epsg: number
   banda: string
+  polarizacion: string
+  madurez: 'BETA' | 'PROVISIONAL' | 'VALIDATED'
+  cicloRepeticion: string
+  pila: 'T55/F80' | 'T62/F10' | 'T156/F80'
+  direccion: 'DESCENDING' | 'ASCENDING'
+  t1: string
+  t2: string
+  crid: string
+  unidad: string
   fuente: string
 }
 

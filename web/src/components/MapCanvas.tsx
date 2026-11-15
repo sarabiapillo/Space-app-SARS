@@ -29,12 +29,17 @@ import {
 import {
   CHIAPAS_CENTRO,
   CHIAPAS_ZOOM,
+  DANGER_CIRCLE_DEFAULT_LABEL,
+  DANGER_CIRCLE_TOOLTIP,
   NISAR_FOOTPRINT,
   NISAR_IMAGE_URL,
+  WARN_CIRCLE_DEFAULT_LABEL,
+  WARN_CIRCLE_TOOLTIP,
 } from '../mocks/initialWorkspaces'
 import { RightPanel } from './RightPanel'
 import type {
   DrawTool,
+  EscenaNisar,
   LngLat,
   MapAnnotation,
   MapView,
@@ -57,6 +62,7 @@ interface MapCanvasProps {
   opacity: number
   isEditing: boolean
   activeMapName: string | null
+  escena: EscenaNisar
   annotations: MapAnnotation[]
   croppedRegion: LngLat[] | null
   solar: SolarSimulationState
@@ -261,6 +267,7 @@ export function MapCanvas({
   opacity,
   isEditing,
   activeMapName,
+  escena,
   annotations,
   croppedRegion,
   solar,
@@ -491,7 +498,8 @@ export function MapCanvas({
           kind: c.kind,
           center: c.center,
           radiusKm: c.radiusKm,
-          label: c.kind === 'peligro' ? 'Zona de Peligro' : 'Zona de Advertencia',
+          label:
+            c.kind === 'peligro' ? DANGER_CIRCLE_DEFAULT_LABEL : WARN_CIRCLE_DEFAULT_LABEL,
         }
         onAnnotationsChangeRef.current([...annotationsRef.current, nextAnn])
         setSelectedAnnotationId(nextAnn.id)
@@ -1395,6 +1403,7 @@ export function MapCanvas({
               <div
                 key={ann.id}
                 onClick={(e) => handleSelectElement(e, ann)}
+                title={ann.kind === 'peligro' ? DANGER_CIRCLE_TOOLTIP : WARN_CIRCLE_TOOLTIP}
                 className={`map-marker-tag ${
                   ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
                 } ${isSelected ? 'is-selected' : ''}`}
@@ -1466,12 +1475,28 @@ export function MapCanvas({
         </div>
       )}
 
-      {/* Etiqueta de ubicación y copia activa */}
-      <div className="map-badge">
+      {/* 4. Barra discreta de trazabilidad obligatoria (plan-de-trabajo.md §6 y propuesta.pdf §9.2) */}
+      <div className="map-badge" role="region" aria-label="Trazabilidad científica de escena NISAR">
         <span className="map-badge__location">📍 Chiapas, México</span>
         {isEditing && activeMapName && (
           <span className="map-badge__copy">· {activeMapName}</span>
         )}
+        <span className="map-badge__sep" aria-hidden="true">
+          |
+        </span>
+        <span
+          className="map-badge__trace"
+          title={`${escena.descripcionProducto} | ${escena.banda} | Ciclo: ${escena.cicloRepeticion} | Fuente: ${escena.fuente}`}
+        >
+          {escena.producto} · {escena.pila} · {escena.t1} → {escena.t2} · HH/HV · Unidad:{' '}
+          {escena.unidad} · CRID: {escena.crid}
+        </span>
+        <span
+          className="map-badge__exploratory"
+          title="Resultado sin etiquetas de campo independientes; datos sintéticos de prueba del Contrato C4 (AGENTS.md §2.5 y §6)."
+        >
+          ⚠️ Exploratorio · Datos sintéticos (Mock C4)
+        </span>
       </div>
 
       {/* Chip flotante arriba del mapa cuando hay una región recortada activa */}
@@ -1529,7 +1554,7 @@ export function MapCanvas({
             type="text"
             className="label-popover__input"
             value={labelEditor.text}
-            maxLength={48}
+            maxLength={96}
             onChange={(e) => setLabelEditor({ ...labelEditor, text: e.target.value })}
             placeholder="Escribe una etiqueta..."
             autoFocus
@@ -1581,6 +1606,7 @@ export function MapCanvas({
             type="button"
             className={`dock-btn ${activeTool === 'peligro' ? 'is-active' : ''}`}
             onClick={() => selectTool('peligro')}
+            title={DANGER_CIRCLE_TOOLTIP}
           >
             <CircleDot size={17} className="icon-danger" aria-hidden="true" />
             <span>Círculo Peligro</span>
@@ -1590,6 +1616,7 @@ export function MapCanvas({
             type="button"
             className={`dock-btn ${activeTool === 'advertencia' ? 'is-active' : ''}`}
             onClick={() => selectTool('advertencia')}
+            title={WARN_CIRCLE_TOOLTIP}
           >
             <CircleDot size={17} className="icon-warn" aria-hidden="true" />
             <span>Círculo Advertencia</span>

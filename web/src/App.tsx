@@ -4,9 +4,16 @@ import { Sidebar } from './components/Sidebar'
 import { MapCanvas } from './components/MapCanvas'
 import { DuplicateMapModal } from './components/DuplicateMapModal'
 import { useSavedMaps } from './hooks/useSavedMaps'
-import { DEFAULT_SOLAR, MAPA_GENERAL } from './mocks/initialWorkspaces'
+import {
+  DEFAULT_SOLAR,
+  ESCENA_CHIAPAS,
+  MAPA_GENERAL,
+  checkPairCompat,
+  type GcovStackSpec,
+} from './mocks/initialWorkspaces'
 import type {
   Carpeta,
+  EscenaNisar,
   LngLat,
   MapAnnotation,
   MapView,
@@ -26,13 +33,19 @@ function App() {
   const [activeCopyId, setActiveCopyId] = useState<string | null>(() => maps[0]?.id ?? null)
   const [generalOpacity, setGeneralOpacity] = useState<number>(MAPA_GENERAL.opacidadSar)
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
+  const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
 
   const activeCopy = maps.find((m) => m.id === activeCopyId) ?? maps[0] ?? null
   const isEditing = viewMode === 'editado' && activeCopy !== null
   const current: WorkspaceMap = isEditing
     ? activeCopy
-    : { ...MAPA_GENERAL, opacidadSar: generalOpacity, solar: generalSolar }
+    : {
+        ...MAPA_GENERAL,
+        opacidadSar: generalOpacity,
+        solar: generalSolar,
+        escena: generalEscena,
+      }
 
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 
@@ -103,6 +116,55 @@ function App() {
     }
   }
 
+  const handleSelectStack = (stack: GcovStackSpec) => {
+    const dirCode = stack.direction === 'DESCENDING' ? 'D' : 'A'
+    const trackStr = String(stack.track).padStart(3, '0')
+    const frameStr = String(stack.frame).padStart(3, '0')
+    const nextEscena: EscenaNisar = {
+      ...current.escena,
+      granuleId: `NISAR_L2_PR_GCOV_001_${trackStr}_${dirCode}_${frameStr}_4005_DHDH_A_${stack.defaultT1.replace(
+        /-/g,
+        '',
+      )}_${stack.defaultT2.replace(/-/g, '')}_${stack.crid}`,
+      pila: stack.id,
+      direccion: stack.direction,
+      t1: stack.defaultT1,
+      t2: stack.defaultT2,
+      crid: stack.crid,
+      madurez: stack.maturity,
+    }
+    if (isEditing && activeCopy) {
+      updateMap(activeCopy.id, {
+        escena: nextEscena,
+        fechaModificacion: new Date().toISOString(),
+      })
+    } else {
+      setGeneralEscena(nextEscena)
+    }
+  }
+
+  const handleChangePair = (t1: string, t2: string) => {
+    const compat = checkPairCompat(t1, t2, current.escena.pila)
+    // Si cruza 2026-10-23 (P05023 vs P05036) o t1 === t2, ComparadorFeature muestra el bloqueo visual y no altera el par válido del mapa
+    if (!compat.comparable) return
+
+    const nextEscena: EscenaNisar = {
+      ...current.escena,
+      t1,
+      t2,
+      crid: compat.cridT1,
+      madurez: compat.maturityT1,
+    }
+    if (isEditing && activeCopy) {
+      updateMap(activeCopy.id, {
+        escena: nextEscena,
+        fechaModificacion: new Date().toISOString(),
+      })
+    } else {
+      setGeneralEscena(nextEscena)
+    }
+  }
+
   const handleConfirmDuplicate = (nombre: string, carpeta: Carpeta) => {
     const copy: WorkspaceMap = {
       ...current,
@@ -158,11 +220,14 @@ function App() {
         <Sidebar
           maps={maps}
           activeMapId={isEditing && activeCopy ? activeCopy.id : null}
+          escena={current.escena}
           onSelectMap={handleSelectMap}
           onRenameMap={handleRenameMap}
           onDeleteMap={handleDeleteMap}
           opacity={current.opacidadSar}
           onOpacityChange={handleOpacityChange}
+          onSelectStack={handleSelectStack}
+          onChangePair={handleChangePair}
         />
 
         <MapCanvas
@@ -171,6 +236,7 @@ function App() {
           opacity={current.opacidadSar}
           isEditing={isEditing}
           activeMapName={isEditing && activeCopy ? activeCopy.nombre : null}
+          escena={current.escena}
           annotations={current.annotations}
           croppedRegion={current.croppedRegion}
           solar={current.solar}
