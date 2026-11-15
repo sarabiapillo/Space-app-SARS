@@ -2,7 +2,7 @@
 
 > **Alcance de este documento:** esta guía existe únicamente para orientar a un agente de IA en la generación e integración de una simulación de inundación dentro de TerraPulse AI. No sustituye la metodología científica del proyecto, la documentación del modelo hidráulico seleccionado ni una validación hidrológica independiente.
 
-> **Rama de referencia:** `feat/mapa-editable-sandbox`. Esta es la rama actualizada sobre la que el agente debe consultar e implementar los pasos de esta guía, salvo que el equipo indique explícitamente otra rama.
+> **Rama de referencia para esta propuesta documental:** `simulacion-inundancion` (observada en `a5d95fc`). El código productor se consulta en sus ramas; esta guía no autoriza fusionarlas, cambiar el checkout de otra persona ni iniciar una simulación.
 
 > **Trabajo paralelo:** las ramas no deben fusionarse como parte de esta guía. El agente debe consumir los contratos y artefactos de las ramas productoras, mantener sus cambios aislados y coordinar cualquier integración mediante Pull Requests aprobados por los equipos responsables.
 
@@ -31,24 +31,25 @@ La página de Bristol describe LISFLOOD-FP como un modelo hidrodinámico bidimen
 
 ## Mapa de ramas analizadas
 
-Esta guía se actualizó después de revisar todas las referencias disponibles localmente y en `origin`, sin cambiar de rama ni fusionar ramas:
+Referencias locales observadas para esta revisión (instantánea, no garantía de estado futuro). La documentación DG2 se actualiza en un worktree aislado de `simulacion-inundancion`, sin fusionar ramas ni cambiar el checkout principal:
 
 | Referencia | Commit observado | Estado relevante | Uso para esta guía |
 |---|---|---|---|
 | `main` | `98f7e07` | Configuración inicial del proyecto | Base histórica; no contiene frontend funcional ni simulación |
-| `origin/ETAPA-1` | `6205e22` | Pipeline de adquisición NISAR avanzado; incluye recorte remoto/local, inspección HDF5 y contrato C1 | Fuente de datos para la simulación; consultar sus archivos mediante la referencia de rama |
+| `ETAPA-1` / `origin/ETAPA-1` | `09cd24d` | Recorte remoto/local NISAR, inspección HDF5 y capas PNG/COG de observación | Fuente C1 y contexto/validación, no forzamiento ni profundidad DG2 |
 | `origin/ETAPA-2` | `98f7e07` | Sin cambios respecto a `main` | No aporta implementación adicional actualmente |
 | `origin/frontend` | `98f7e07` | Sin cambios respecto a `main` | No aporta frontend actualmente |
-| `feat/mapa-editable-sandbox` | `dc0a915` | Frontend React/Vite/MapLibre con mapas editables, anotaciones, capas mock y persistencia local | Rama actual de referencia para la interfaz |
+| `origin/feat/mapa-editable-sandbox` | `2bc437e` | Frontend React/TypeScript/Vite/MapLibre con ROI, anotaciones, capas mock y persistencia local; incorpora ETAPA-1 | Referencia actualizada para reutilizar la interfaz existente |
+| `simulacion-inundancion` | `a5d95fc` | Documentos de propuesta DG2 y guía; código web y adquisición de la línea integrada | Rama de esta documentación; aún sin solver ni API hidráulica |
 
 ### Qué aporta cada rama
 
-- **Datos y adquisición:** `origin/ETAPA-1` contiene `pipeline/download.py`, `pipeline/nisar_h5.py`, `pipeline/sources/subset.py`, inspección de escenas y pruebas adicionales. Su documentación define el contrato C1: GeoTIFFs de la ROI más `scene.json`, todavía en potencia lineal y sin máscara aplicada.
-- **Frontend:** `feat/mapa-editable-sandbox` contiene [`web/`](../web), React, Vite, TypeScript y MapLibre. Su estado actual usa datos mock y `localStorage`; no consume aún la API Django ni resultados hidráulicos.
+- **Datos y adquisición:** `ETAPA-1` contiene `pipeline/download.py`, `pipeline/nisar_h5.py`, `pipeline/sources/subset.py` y `pipeline/sources/asf.py` con recorte remoto/local, inspección y pruebas. En la rama de esta propuesta también están esos módulos. C1 entrega GeoTIFFs de la ROI y `scene.json`, todavía en potencia lineal y sin máscara científica aplicada; no son entradas hidráulicas listas.
+- **Frontend existente (mismo stack para DG2):** [`web/package.json`](../web/package.json) declara React, TypeScript, Vite, MapLibre GL JS y lucide-react. [`MapCanvas.tsx`](../web/src/components/MapCanvas.tsx) permite dibujar ROI y mostrar imágenes; [`api/client.ts`](../web/src/api/client.ts) intenta `/api/` pero utiliza mocks marcados cuando falla, con `localStorage` para mapas. Ni un mock ni la visualización solar son hidráulica. No se propone reemplazar el frontend ni añadir librerías web para el primer caso.
 - **Backend:** ninguna de las referencias revisadas contiene todavía una implementación funcional de modelos, endpoints o integración de simulaciones. [`backend/`](../backend) sigue siendo el esqueleto inicial.
 - **Simulación:** ninguna rama revisada contiene todavía un solver hidráulico o un adaptador LISFLOOD-FP. Esta guía describe el trabajo que falta.
 
-El agente debe verificar siempre el contenido de la rama que produce un artefacto. Que un archivo exista en `origin/ETAPA-1` no significa que exista en `feat/mapa-editable-sandbox`.
+El agente debe verificar siempre el contenido del commit que produce cada artefacto. Los módulos C1 ya existen en la rama documental observada, pero la disponibilidad de DEM, lluvia, solver DG2 o API no se deduce de esa integración.
 
 ### Inspección segura entre ramas
 
@@ -57,9 +58,10 @@ Para consultar una rama sin cambiar de rama ni fusionarla:
 ```bash
 git show origin/ETAPA-1:pipeline/sources/subset.py
 git show origin/ETAPA-1:docs/p1-datos.md
-git show feat/mapa-editable-sandbox:web/src/App.tsx
+git show origin/feat/mapa-editable-sandbox:web/src/components/MapCanvas.tsx
+git show simulacion-inundancion:web/package.json
 git diff --stat main...origin/ETAPA-1
-git diff --stat main...feat/mapa-editable-sandbox
+git diff --stat main...simulacion-inundancion
 ```
 
 No ejecutar `git merge`, `git rebase`, `git cherry-pick` ni `git checkout` sobre estas ramas como parte de la implementación de esta guía. Si una integración es necesaria, debe solicitarla el equipo responsable mediante un PR independiente.
@@ -68,12 +70,14 @@ Los módulos bajo `pipeline/hydrology/` descritos más adelante son rutas propue
 
 ## Decisiones pendientes antes de una simulación real
 
+La dirección DG2 y el alcance de terreno no urbano están detallados en [el flujo DG2 independiente](flujo-dg2-simulacion-inundacion.pdf) y su [fuente LaTeX](flujo-dg2-simulacion-inundacion.tex). El mismo frontend React/TypeScript/Vite/MapLibre se reutilizaría; no se instala ningún solver ni se añade una librería de frontend. Para el cálculo físico se propone evaluar LISFLOOD-FP 8.0 DG2 CPU como programa externo, con adaptador Python independiente de Django; Rasterio/NumPy existentes preparan y validan rasters, no resuelven SWE. Solo se usaría un dominio donde la ausencia de infraestructura urbana modelada no distorsione el flujo.
+
 No hay autorización para fijar estas elecciones por defecto. **PENDIENTE** significa que el equipo debe decidir y registrar evidencia y responsable por rol; no se asignan personas. Las recomendaciones son opciones condicionadas, no decisiones aprobadas. Mientras falten entradas reales, pueden desarrollarse y probarse benchmarks sintéticos; no puede afirmarse que se simuló un evento real.
 
 | Decisión (estado) | Evidencia/recomendación, no decisión | Responsable por rol |
 |---|---|---|
 | Evento y dominio (PENDIENTE) | Elegir fenómeno y dominio hidráulico, que puede extenderse aguas arriba/abajo de la ROI de visualización/evaluación. | Equipo de ciencia/hidrología |
-| Formulación, solver y versión (PENDIENTE) | Comparar ATS, ACC y SWE completo según fenómeno, costo y validación; no se presupone ACC aprobado. | Equipo de modelado |
+| Ruta DG2 comunicada; versión/artefacto (PENDIENTE) | El físico eligió DG2 para la propuesta de inundación no urbana. SWE completo, costo y estabilidad aún requieren justificación; LISFLOOD-FP 8.0 DG2 CPU es candidato externo, no binario aprobado ni instalado. ATS, ACC y FV1 quedan como alternativas separadas. | Equipo de modelado |
 | DEM, datum vertical y geometría de cauces/canales (PENDIENTE) | Documentar fuente, datum, cobertura, calidad, batimetría y estructuras. | Equipo de datos geoespaciales |
 | Lluvia/caudal, fronteras, infiltración y estado inicial (PENDIENTE) | Definir series, unidades, periodo y procedencia; evitar contar dos veces lluvia y escorrentía entrante. Infiltración es explícita, nunca cero silencioso. | Equipo de hidrología |
 | Malla, tiempos y hardware (PENDIENTE) | Medir desempeño en dominio pequeño antes de prometer interacción. | Equipo de modelado/plataforma |
@@ -97,8 +101,8 @@ La implementación completa debe poder:
 
 Ninguna rama contiene todavía una cadena de simulación completa:
 
-- La rama `origin/ETAPA-1` sí implementa el recorte remoto/local de escenas y la inspección HDF5, pero esos cambios no están presentes en la rama actual hasta que se integren mediante el proceso del equipo.
-- La rama actual [`pipeline/sources/asf.py`](../pipeline/sources/asf.py) deja pendiente el recorte remoto de escenas.
+- `ETAPA-1` implementa recorte remoto/local e inspección HDF5; ambas funciones también están presentes en `simulacion-inundancion` (incluido `ASFSource.fetch_subset`). Se comprobó C1 para el par GCOV T62/F10 en la ROI, no una entrada hidráulica ni una inundación validada.
+- [`pipeline/web_export.py`](../pipeline/web_export.py) genera PNG para visualizar y COG numéricos en dB para exploración SAR; no convierte salidas DG2 a profundidad en metros. El GDAL del entorno declarado no trae drivers NISAR/HDF5; esos productos se leen con `h5py`.
 - No existen aún módulos finales de preprocesamiento SAR, cambio radar, validación hidráulica o simulación hidráulica en una rama integrada.
 - [`backend/scenes/models.py`](../backend/scenes/models.py) y [`backend/analyses/models.py`](../backend/analyses/models.py) están vacíos.
 - En la rama actual, [`web/`](../web) sí tiene una interfaz React/MapLibre, pero utiliza mocks y almacenamiento local; no está conectada al backend.
@@ -152,14 +156,14 @@ data/processed/<simulation_id>/
 
 La implementación puede avanzar en paralelo, pero la validación final debe respetar este orden:
 
-1. `origin/ETAPA-1` confirma C1 y la cobertura real de la ROI.
+1. C1 del par GCOV y la cobertura de la ROI ya están documentados en `ETAPA-1` y presentes en `simulacion-inundancion`; confirmar datos auxiliares y dominio antes de intentar hidráulica.
 2. Procesamiento SAR genera C2 y la observación de inundación.
 3. El agente hidráulico genera C6 a partir del DEM y las condiciones hidráulicas.
 4. Validación genera C3 y el `validation.json` hidráulico.
 5. Backend expone C2, C3 y C6 mediante C4.
 6. Frontend consume C4 o C5 y distingue observación, simulación y validación.
 
-Hasta que una etapa esté disponible en una rama integrada por el equipo, el agente debe usar el contrato documentado y un mock explícito, no suponer que el archivo ya existe.
+C1 y las capas SAR de exploración ya tienen código en `simulacion-inundancion`. Para C2--C6 y API hidráulica, usar el contrato documentado y un mock explícito hasta tener implementación verificada; no confundir PNG/COG SAR con salidas DG2.
 
 ---
 
@@ -698,10 +702,11 @@ No usar escenas reales ni credenciales en pruebas unitarias. Usar dominios raste
 
 - Shaw et al. (2021), LISFLOOD-FP 8.0: https://doi.org/10.5194/gmd-14-3577-2021
 - Sharifian et al. (2023), LISFLOOD-FP 8.1: https://doi.org/10.5194/gmd-16-2391-2023
-- Release oficial: https://zenodo.org/records/6912932
+- Artefacto 8.0 para evaluar DG2: https://zenodo.org/records/4073011; guía de ejecución de los desarrolladores: https://www.seamlesswave.com/LISFLOOD8.0
+- Artefacto 8.1 citado para ACC/GPU (no prueba DG2 8.1): https://zenodo.org/records/6912932
 - Se conservan las páginas de [Bristol](https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/) y [heritage](https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/heritage/) como resumen e historia.
 
-Hay discrepancia por resolver: artículo/documentación mencionan GPLv3 y metadatos Zenodo GPL-2.0; no se inspeccionó LICENSE del artefacto. GPL por sí sola no prohíbe uso comercial. Verificar release concreto y obligaciones antes de empaquetar/distribuir; no inferir licencia aplicable.
+Los metadatos Zenodo consultados indican GPL-2.0 para los artefactos, mientras las publicaciones/documentación mencionan GPLv3; no se inspeccionó el archivo LICENSE del release concreto. No resolver esa discrepancia por inferencia ni asumir restricciones comerciales: verificar licencia y obligaciones del artefacto seleccionado antes de distribuirlo. LISFLOOD-FP hidráulico no es LISFLOOD OS del JRC (modelo hidrológico distinto).
 
 ## Fuera de alcance de esta guía
 
