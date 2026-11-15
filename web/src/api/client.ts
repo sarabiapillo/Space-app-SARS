@@ -102,7 +102,7 @@ export async function getChangeDetail(id: string): Promise<ApiEnvelope<C4ChangeD
 export async function checkCompat(
   t1: string,
   t2: string,
-  stackId: GcovStackSpec['id'] = 'T55/F80',
+  stackId: GcovStackSpec['id'] = 'T62/F10',
 ): Promise<ApiEnvelope<C4CompatReport>> {
   const qs = new URLSearchParams({ t1, t2, stack: stackId })
   return fetchOrFallback(`/api/compat?${qs.toString()}`, () => {
@@ -110,6 +110,8 @@ export async function checkCompat(
     return {
       t1,
       t2,
+      t1_scene_id: res.t1SceneId,
+      t2_scene_id: res.t2SceneId,
       comparable: res.comparable,
       errors: res.errors,
       warnings: res.warnings,

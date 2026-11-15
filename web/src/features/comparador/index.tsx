@@ -13,9 +13,9 @@ export interface ComparadorFeatureProps {
 }
 
 /**
- * Módulo Comparador Temporal (Rol P5 — `docs/plan-de-trabajo.md` §1, §5 y §6):
- * Selector de fechas `t1` y `t2` y validador visual `checkPairCompat(t1, t2)` con bloqueo CRID
- * cuando se cruza la fecha `2026-10-23` (`P05023` PROVISIONAL vs `P05036` VALIDATED).
+ * Módulo Comparador Temporal (Rol P5 — `docs/plan-de-trabajo.md` §5, §6 y `data/raw/<scene_id>/scene.json`):
+ * Selector de fechas `t1` y `t2` y validador visual `checkPairCompat(t1, t2)` con bloqueo por
+ * cambio de procesador (`CRID P05023 ≠ P05036`) y diferencia de madurez (`PROVISIONAL ≠ VALIDATED`).
  */
 export function ComparadorFeature({ stackId, t1, t2, onChangePair }: ComparadorFeatureProps) {
   const stack = PILAS_GCOV_CHIAPAS.find((s) => s.id === stackId) ?? PILAS_GCOV_CHIAPAS[0]
@@ -23,15 +23,15 @@ export function ComparadorFeature({ stackId, t1, t2, onChangePair }: ComparadorF
   const compat = checkPairCompat(t1, t2, stack.id)
 
   return (
-    <section className="c4-module" aria-label="Validador de Comparabilidad Temporal C4">
+    <section className="c4-module" aria-label="Validador de Comparabilidad Temporal C1/C4">
       <div className="c4-module__header">
-        <span className="c4-module__title">Comparabilidad Temporal ({stack.id})</span>
+        <span className="c4-module__title">Comparabilidad ({stack.id})</span>
         <span
           className={`c4-compat-pill ${
             compat.comparable ? 'c4-compat-pill--ok' : 'c4-compat-pill--blocked'
           }`}
         >
-          {compat.comparable ? '✓ Par comparable' : '⛔ Bloqueo CRID / Par inválido'}
+          {compat.comparable ? '✓ COMPARABLE' : '⛔ BLOQUEO CRID / MADUREZ'}
         </span>
       </div>
 
@@ -67,6 +67,15 @@ export function ComparadorFeature({ stackId, t1, t2, onChangePair }: ComparadorF
         </label>
       </div>
 
+      <div className="c4-granules-box" aria-label="IDs de gránulos seleccionados">
+        <div className="c4-granules-box__item" title={compat.t1SceneId}>
+          <span>t1:</span> <code>{compat.t1SceneId}</code>
+        </div>
+        <div className="c4-granules-box__item" title={compat.t2SceneId}>
+          <span>t2:</span> <code>{compat.t2SceneId}</code>
+        </div>
+      </div>
+
       {!compat.comparable && (
         <ul className="c4-compat-messages c4-compat-messages--error" role="alert">
           {compat.errors.map((err, idx) => (
@@ -77,9 +86,7 @@ export function ComparadorFeature({ stackId, t1, t2, onChangePair }: ComparadorF
 
       {compat.comparable && compat.warnings.length > 0 && (
         <div className="c4-compat-messages c4-compat-messages--warn">
-          <span>
-            CRID {compat.cridT1} ({compat.maturityT1}) verificado · Unidad: dB (γ⁰/σ⁰)
-          </span>
+          {compat.warnings[0]}
         </div>
       )}
     </section>

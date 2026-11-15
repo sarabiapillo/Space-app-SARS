@@ -33,8 +33,12 @@ import {
   DANGER_CIRCLE_TOOLTIP,
   NISAR_FOOTPRINT,
   NISAR_IMAGE_URL,
+  NISAR_RASTER_LAYERS,
+  NISAR_REPROJECTED_FOOTPRINT,
   WARN_CIRCLE_DEFAULT_LABEL,
   WARN_CIRCLE_TOOLTIP,
+  type NisarBlendMode,
+  type NisarRasterLayerId,
 } from '../mocks/initialWorkspaces'
 import { RightPanel } from './RightPanel'
 import type {
@@ -119,6 +123,11 @@ const BASE_STYLE: StyleSpecification = {
       attribution:
         'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
     },
+    [NISAR_SOURCE]: {
+      type: 'image',
+      url: NISAR_IMAGE_URL,
+      coordinates: NISAR_REPROJECTED_FOOTPRINT,
+    },
   },
   layers: [
     {
@@ -127,6 +136,18 @@ const BASE_STYLE: StyleSpecification = {
       source: 'esri-satellite',
       minzoom: 0,
       maxzoom: 22,
+    },
+    {
+      id: NISAR_LAYER,
+      type: 'raster',
+      source: NISAR_SOURCE,
+      paint: {
+        'raster-opacity': 0.65,
+        'raster-resampling': 'linear',
+        'raster-contrast': 0.15,
+        'raster-saturation': 0.1,
+        'raster-fade-duration': 0,
+      },
     },
   ],
 }
@@ -159,72 +180,6 @@ function radiusKmForScreenPixels(targetRadiusPx: number, latDeg: number, zoom: n
   const latRad = (latDeg * Math.PI) / 180
   const kmPerPixel = (40075.017 * Math.max(0.2, Math.cos(latRad))) / (512 * Math.pow(2, zoom))
   return Number(Math.max(0.015, targetRadiusPx * kmPerPixel).toFixed(4))
-}
-
-function preloadImage(url: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const img = new Image()
-    const timer = window.setTimeout(() => resolve(false), 1800)
-    img.onload = () => {
-      window.clearTimeout(timer)
-      resolve(img.naturalWidth > 0)
-    }
-    img.onerror = () => {
-      window.clearTimeout(timer)
-      resolve(false)
-    }
-    img.src = url
-  })
-}
-
-function createFallbackSarDataUrl(): string {
-  const canvas = document.createElement('canvas')
-  canvas.width = 512
-  canvas.height = 512
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return ''
-
-  const baseGrad = ctx.createLinearGradient(0, 0, 512, 512)
-  baseGrad.addColorStop(0, 'rgba(6, 78, 59, 0.48)')
-  baseGrad.addColorStop(0.45, 'rgba(16, 185, 129, 0.36)')
-  baseGrad.addColorStop(0.75, 'rgba(134, 25, 143, 0.28)')
-  baseGrad.addColorStop(1, 'rgba(6, 95, 70, 0.48)')
-  ctx.fillStyle = baseGrad
-  ctx.fillRect(0, 0, 512, 512)
-
-  for (let i = 0; i < 32; i++) {
-    const cx = (i * 79) % 512
-    const cy = (i * 131) % 512
-    const r = 38 + (i % 5) * 24
-    const g = ctx.createRadialGradient(cx, cy, 4, cx, cy, r)
-    if (i % 3 === 0) {
-      g.addColorStop(0, 'rgba(217, 70, 239, 0.36)')
-      g.addColorStop(1, 'rgba(134, 25, 143, 0)')
-    } else {
-      g.addColorStop(0, 'rgba(16, 185, 129, 0.42)')
-      g.addColorStop(1, 'rgba(6, 78, 59, 0)')
-    }
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.arc(cx, cy, r, 0, Math.PI * 2)
-    ctx.fill()
-  }
-
-  ctx.fillStyle = 'rgba(2, 6, 23, 0.68)'
-  ctx.beginPath()
-  ctx.moveTo(95, 130)
-  ctx.bezierCurveTo(150, 120, 195, 175, 255, 210)
-  ctx.bezierCurveTo(300, 235, 345, 225, 395, 275)
-  ctx.bezierCurveTo(355, 295, 275, 260, 215, 238)
-  ctx.bezierCurveTo(155, 215, 110, 175, 85, 150)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.strokeStyle = 'rgba(16, 185, 129, 0.85)'
-  ctx.lineWidth = 4
-  ctx.strokeRect(2, 2, 508, 508)
-
-  return canvas.toDataURL('image/png')
 }
 
 function sameView(a: MapView, b: MapView): boolean {
@@ -287,6 +242,9 @@ export function MapCanvas({
   })
 
   const [activeTool, setActiveTool] = useState<DrawTool>('mover')
+  const [rasterLayerId, setRasterLayerId] = useState<NisarRasterLayerId>('rgb_polarimetric')
+  const [blendMode, setBlendMode] = useState<NisarBlendMode>('fusion')
+  const [showTraceDetails, setShowTraceDetails] = useState(false)
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [draftFreehand, setDraftFreehand] = useState<LngLat[]>([])
   const [draftCircle, setDraftCircle] = useState<{
@@ -600,32 +558,29 @@ export function MapCanvas({
           })
         }
 
-        const fallbackDataUrl = createFallbackSarDataUrl()
-        if (fallbackDataUrl && !map.getSource(NISAR_SOURCE)) {
+        if (!map.getSource(NISAR_SOURCE)) {
           map.addSource(NISAR_SOURCE, {
             type: 'image',
-            url: fallbackDataUrl,
-            coordinates: NISAR_FOOTPRINT,
+            url: NISAR_IMAGE_URL,
+            coordinates: NISAR_REPROJECTED_FOOTPRINT,
           })
           map.addLayer({
             id: NISAR_LAYER,
             type: 'raster',
             source: NISAR_SOURCE,
             paint: {
-              'raster-opacity': alpha,
+              'raster-opacity': alpha * 0.88,
+              'raster-resampling': 'linear',
+              'raster-contrast': 0.15,
+              'raster-saturation': 0.1,
               'raster-fade-duration': 0,
             },
           })
-
-          preloadImage(NISAR_IMAGE_URL).then((ok) => {
-            if (cancelled || !ok) return
-            try {
-              const src = map.getSource(NISAR_SOURCE) as ImageSource | undefined
-              src?.updateImage({ url: NISAR_IMAGE_URL, coordinates: NISAR_FOOTPRINT })
-            } catch {
-              // Conserva la textura SAR en `<canvas>`
-            }
-          })
+        } else if (map.getLayer(NISAR_LAYER)) {
+          map.setPaintProperty(NISAR_LAYER, 'raster-opacity', alpha * 0.88)
+          map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
+          map.setPaintProperty(NISAR_LAYER, 'raster-contrast', 0.15)
+          map.setPaintProperty(NISAR_LAYER, 'raster-saturation', 0.1)
         }
       } catch (err) {
         console.warn('No se pudo inicializar la capa NISAR:', err)
@@ -813,8 +768,12 @@ export function MapCanvas({
       setMapReady(true)
     }
 
-    map.once('style.load', initMapLayers)
-    map.once('load', initMapLayers)
+    if (map.isStyleLoaded()) {
+      initMapLayers()
+    } else {
+      map.once('style.load', initMapLayers)
+      map.once('load', initMapLayers)
+    }
 
     return () => {
       cancelled = true
@@ -825,18 +784,44 @@ export function MapCanvas({
     }
   }, [])
 
-  // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
+  const activeRasterLayer =
+    NISAR_RASTER_LAYERS.find((layer) => layer.id === rasterLayerId) ?? NISAR_RASTER_LAYERS[0]
+
+  // Conectar slider de opacidad y modo de fusión (`Fusión Terreno` vs `Radar Puro`)
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
     const alpha = opacity / 100
+    const isFusion = blendMode === 'fusion'
+    const effectiveOpacity = isFusion ? Number((alpha * 0.88).toFixed(3)) : alpha
+
     if (map.getLayer(NISAR_LAYER)) {
-      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', alpha)
+      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', effectiveOpacity)
+      map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
+      map.setPaintProperty(NISAR_LAYER, 'raster-contrast', isFusion ? 0.15 : 0.04)
+      map.setPaintProperty(NISAR_LAYER, 'raster-saturation', isFusion ? 0.1 : 0)
     }
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
-      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.12)
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.05)
     }
-  }, [opacity, mapReady])
+  }, [opacity, blendMode, mapReady])
+
+  // Actualizar imagen de `nisar-radar` en tiempo real al alternar compuesto RGB / γ⁰ / σ⁰ / máscara
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const imgSource = map.getSource(NISAR_SOURCE) as ImageSource | undefined
+    if (imgSource && typeof imgSource.updateImage === 'function') {
+      try {
+        imgSource.updateImage({
+          url: activeRasterLayer.url,
+          coordinates: NISAR_REPROJECTED_FOOTPRINT,
+        })
+      } catch (err) {
+        console.warn('No se pudo actualizar la capa raster NISAR:', err)
+      }
+    }
+  }, [activeRasterLayer, mapReady])
 
   // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
@@ -1158,6 +1143,18 @@ export function MapCanvas({
           zIndex: 5,
         }}
       >
+        {/* Delimitación exacta del polígono ROI oficial de Chiapas (2687 × 5504 px a 10 m en EPSG:32615) */}
+        <polygon
+          points={NISAR_FOOTPRINT.map((pt) => projectLngLat(pt, viewport))
+            .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+            .join(' ')}
+          fill="rgba(16, 185, 129, 0.02)"
+          stroke="#10B981"
+          strokeWidth={1.6}
+          strokeDasharray="6 4"
+          style={{ pointerEvents: 'none' }}
+        />
+
         {/* Máscara inversa de recorte (`croppedRegion`) */}
         {croppedScreenPts && (
           <g>
@@ -1475,29 +1472,105 @@ export function MapCanvas({
         </div>
       )}
 
-      {/* 4. Barra discreta de trazabilidad obligatoria (plan-de-trabajo.md §6 y propuesta.pdf §9.2) */}
-      <div className="map-badge" role="region" aria-label="Trazabilidad científica de escena NISAR">
-        <span className="map-badge__location">📍 Chiapas, México</span>
-        {isEditing && activeMapName && (
-          <span className="map-badge__copy">· {activeMapName}</span>
-        )}
-        <span className="map-badge__sep" aria-hidden="true">
-          |
-        </span>
-        <span
-          className="map-badge__trace"
-          title={`${escena.descripcionProducto} | ${escena.banda} | Ciclo: ${escena.cicloRepeticion} | Fuente: ${escena.fuente}`}
+      {/* Barra flotante superior única y compacta (Trazabilidad + Selector Radar NISAR ROI + Modo Fusión/Puro) */}
+      <div
+        className="map-top-bar"
+        role="region"
+        aria-label="Control de capas NISAR y trazabilidad científica"
+      >
+        <div className="map-top-bar__brand" title={`t1: ${escena.t1SceneId} | t2: ${escena.t2SceneId}`}>
+          <span className="map-top-bar__loc">📍 Chiapas</span>
+          {isEditing && activeMapName && (
+            <span className="map-top-bar__copy">· {activeMapName}</span>
+          )}
+          <span className="map-top-bar__stack">
+            {escena.pila} {escena.direccion === 'ASCENDING' ? 'ASC' : 'DESC'} · 99.6% ROI · 10 m
+          </span>
+        </div>
+
+        <span className="map-top-bar__sep" aria-hidden="true" />
+
+        <div className="map-top-bar__layers" role="group" aria-label="Capas Radar NISAR ROI">
+          {NISAR_RASTER_LAYERS.map((layer) => {
+            const active = layer.id === activeRasterLayer.id
+            return (
+              <button
+                key={layer.id}
+                type="button"
+                className={`map-top-bar__pill ${active ? 'is-active' : ''}`}
+                onClick={() => setRasterLayerId(layer.id)}
+                title={`${layer.title} · ${layer.roiStatsLabel} (${layer.scaleLabel})`}
+              >
+                {layer.shortLabel}
+              </button>
+            )
+          })}
+        </div>
+
+        <span className="map-top-bar__sep" aria-hidden="true" />
+
+        <div className="map-top-bar__modes" role="group" aria-label="Modo de visualización del radar">
+          <button
+            type="button"
+            className={`map-top-bar__mode-btn ${blendMode === 'fusion' ? 'is-active' : ''}`}
+            onClick={() => setBlendMode('fusion')}
+            title="Fusión Terreno: realza el contraste (0.15) y permite ver el relieve satelital y el cauce del río Grijalva debajo del radar"
+          >
+            Fusión Terreno
+          </button>
+          <button
+            type="button"
+            className={`map-top-bar__mode-btn ${blendMode === 'puro' ? 'is-active' : ''}`}
+            onClick={() => setBlendMode('puro')}
+            title="Radar Puro: muestra la retrodispersión SAR con opacidad directa sin realce de saturación"
+          >
+            Radar Puro
+          </button>
+        </div>
+
+        <span className="map-top-bar__sep" aria-hidden="true" />
+
+        <button
+          type="button"
+          className={`map-top-bar__info-btn ${showTraceDetails ? 'is-active' : ''}`}
+          onClick={() => setShowTraceDetails((prev) => !prev)}
+          title="Mostrar u ocultar detalles de trazabilidad C1, escala dB y enlace a figura original"
         >
-          {escena.producto} · {escena.pila} · {escena.t1} → {escena.t2} · HH/HV · Unidad:{' '}
-          {escena.unidad} · CRID: {escena.crid}
-        </span>
-        <span
-          className="map-badge__exploratory"
-          title="Resultado sin etiquetas de campo independientes; datos sintéticos de prueba del Contrato C4 (AGENTS.md §2.5 y §6)."
-        >
-          ⚠️ Exploratorio · Datos sintéticos (Mock C4)
-        </span>
+          ⓘ C1 · {activeRasterLayer.scaleLabel}
+        </button>
       </div>
+
+      {showTraceDetails && (
+        <div className="map-trace-dropdown" role="dialog" aria-label="Detalles de trazabilidad NISAR">
+          <div className="map-trace-dropdown__row">
+            <strong>{activeRasterLayer.shortLabel}:</strong> {activeRasterLayer.title}
+          </div>
+          <div className="map-trace-dropdown__row">
+            <span>📊 {activeRasterLayer.scaleLabel}</span>
+            <span>·</span>
+            <span>{activeRasterLayer.roiStatsLabel}</span>
+          </div>
+          <div className="map-trace-dropdown__row">
+            <span>
+              🛰️ {escena.producto} · {escena.pila} ({escena.direccion}) · {escena.t1} → {escena.t2} ·
+              CRID: <code>{escena.crid}</code> ({escena.madurez}) · EPSG:{escena.epsg} → EPSG:4326
+            </span>
+          </div>
+          <div className="map-trace-dropdown__footer">
+            <span className="map-badge__exploratory">
+              ⚠️ Etapa 1 (C1 real en data/raw/) · Δσ⁰ pendiente de Contrato C2
+            </span>
+            <a
+              href={activeRasterLayer.sourceFigureUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="roi-layer-switcher__link"
+            >
+              Ver figura Etapa 1 ↗
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* Chip flotante arriba del mapa cuando hay una región recortada activa */}
       {hasActiveCrop && (

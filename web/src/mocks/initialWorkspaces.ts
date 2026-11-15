@@ -24,25 +24,110 @@ export const WARN_CIRCLE_DEFAULT_LABEL =
 export const WARN_CIRCLE_TOOLTIP =
   'NISAR Science Users’ Handbook §6.2–§6.3 (2025, DOI: 10.48577/jpl.UD4HV3): Variación en dispersión volumétrica del dosel en canal cruzado HV (umbral de referencia bosque -13 dB) o humedad superficial del suelo (modelo Oh et al., 1992); límite de saturación de biomasa L-Band en 100 Mg/ha.'
 
-/** WKT oficial de la ROI en Chiapas (AGENTS.md §4). */
+/** WKT oficial de la ROI en Chiapas (`pipeline/config.yaml` y `data/raw/<scene_id>/scene.json`). */
 export const CHIAPAS_ROI_WKT =
   'POLYGON((-93.3919 16.6539,-92.8757 16.6539,-92.8757 16.8964,-93.3919 16.8964,-93.3919 16.6539))'
+
+/** Límites geográficos exactos de la ROI de Chiapas en EPSG:4326 (`2687 × 5504 px` a `10 × 10 m` en EPSG:32615). */
+export const CHIAPAS_ROI_BOUNDS = Object.freeze({
+  west: -93.3919,
+  south: 16.6539,
+  east: -92.8757,
+  north: 16.8964,
+})
 
 /** Fecha de corte en el catálogo ASF donde el CRID cambió de P05023 a P05036 (AGENTS.md §4). */
 export const CRID_TRANSITION_DATE = '2026-10-23'
 
+/** IDs reales de las 5 escenas GCOV descargadas en `data/raw/` (Contrato C1). */
+export const RAW_SCENE_IDS = Object.freeze({
+  T62_T1_20260618:
+    'NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001',
+  T62_T2_20261016:
+    'NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001',
+  T62_POST_20261028:
+    'NISAR_L2_PR_GCOV_034_062_A_010_4005_DHDH_A_20261028T114006_20261028T114041_P05036_N_F_J_001',
+  T55_T1_20260618:
+    'NISAR_L2_PR_GCOV_023_055_D_080_4005_DHDH_A_20260618T004048_20260618T004123_P05023_N_F_J_001',
+  T55_T2_20261016:
+    'NISAR_L2_PR_GCOV_033_055_D_080_4005_DHDH_A_20261016T004045_20261016T004119_P05023_N_F_J_001',
+})
+
+export interface C1LayerSpec {
+  id: 'HHHH' | 'HVHV' | 'mask' | 'numberOfLooks' | 'rtcGammaToSigmaFactor'
+  archivo: string
+  dtype: 'float32' | 'uint8'
+  nodata: string
+  descripcion: string
+  handbookRef: string
+}
+
+/**
+ * Las 5 capas reales extraídas de `Frequency A` en `data/raw/<scene_id>/` (Contrato C1).
+ */
+export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
+  {
+    id: 'HHHH',
+    archivo: 'HHHH.tif',
+    dtype: 'float32',
+    nodata: 'NaN',
+    descripcion: 'Potencia lineal γ⁰ co-polarizada HH (sin dB, sin máscara; 2687 × 5504 px a 10 m).',
+    handbookRef: 'NISAR Handbook §5.2 (GCOV Backscatter Covariance)',
+  },
+  {
+    id: 'HVHV',
+    archivo: 'HVHV.tif',
+    dtype: 'float32',
+    nodata: 'NaN',
+    descripcion: 'Potencia lineal γ⁰ polarización cruzada HV (sensible a volumen de dosel; sin dB).',
+    handbookRef: 'NISAR Handbook §6.2 (Forests & Biomass L-HV)',
+  },
+  {
+    id: 'mask',
+    archivo: 'mask.tif',
+    dtype: 'uint8',
+    nodata: 'null',
+    descripcion:
+      'Máscara de validez original (0 = no válido, 255 = fuera de adquisición, otro = subfranja válida).',
+    handbookRef: 'NISAR Handbook §5.3 (GCOV Mask Layer)',
+  },
+  {
+    id: 'numberOfLooks',
+    archivo: 'numberOfLooks.tif',
+    dtype: 'float32',
+    nodata: 'NaN',
+    descripcion: 'Número efectivo de looks radiométricos por celda en malla UTM EPSG:32615.',
+    handbookRef: 'NISAR Handbook §5.2 (Equivalent Number of Looks)',
+  },
+  {
+    id: 'rtcGammaToSigmaFactor',
+    archivo: 'rtcGammaToSigmaFactor.tif',
+    dtype: 'float32',
+    nodata: 'NaN',
+    descripcion:
+      'Factor de conversión radiométrica (σ⁰ = γ⁰ · factor) entre retrodispersión corregida por terreno RTC (γ⁰) y elipsoidal (σ⁰).',
+    handbookRef: 'NISAR Handbook §5.3 (RTC Area Normalization Factor)',
+  },
+])
+
 export interface GcovStackSpec {
-  id: 'T55/F80' | 'T62/F10' | 'T156/F80'
+  id: 'T62/F10' | 'T55/F80' | 'T156/F80'
+  roleLabel: string
   track: number
   frame: number
-  direction: 'DESCENDING' | 'ASCENDING'
-  directionLabel: 'Descendente' | 'Ascendente'
+  direction: 'ASCENDING' | 'DESCENDING'
+  directionLabel: 'Ascendente' | 'Descendente'
   product: 'GCOV'
   band: string
   polarizations: readonly ['HH', 'HV']
   crid: 'P05023'
   maturity: 'PROVISIONAL'
   repeatCycleDays: 12
+  roiValidPctLabel: string
+  gridResolutionLabel: string
+  t1SceneId: string
+  t2SceneId: string
+  postTransitionSceneId: string
   dates: readonly string[]
   /** Fecha posterior al cambio de procesador (P05036) para demostrar bloqueo CRID. */
   postTransitionDate: string
@@ -52,41 +137,15 @@ export interface GcovStackSpec {
 }
 
 /**
- * Las 3 pilas GCOV reales comparables sobre la ROI de Chiapas
- * (consulta del catálogo ASF 2026-11-12 UTC, `docs/plan-de-trabajo.md` §1 y §5).
+ * Las 3 pilas GCOV reales sobre la ROI de Chiapas (`pipeline/config.yaml` y `data/raw/<scene_id>/scene.json`).
+ * - Pila Principal: `T62/F10` (ASCENDING, 99.57% / 99.61% cobertura ROI en `data/raw/`).
+ * - Pila de Respaldo: `T55/F80` (DESCENDING, ~50.28% cobertura mitad este en `data/raw/`).
+ * - Pila 3: `T156/F80` (DESCENDING, 8 fechas en catálogo, sin recorte en `data/raw/`).
  */
 export const PILAS_GCOV_CHIAPAS: readonly GcovStackSpec[] = Object.freeze([
   {
-    id: 'T55/F80',
-    track: 55,
-    frame: 80,
-    direction: 'DESCENDING',
-    directionLabel: 'Descendente',
-    product: 'GCOV',
-    band: 'L-Band (24 cm, 1.257 GHz, Frequency A)',
-    polarizations: ['HH', 'HV'],
-    crid: 'P05023',
-    maturity: 'PROVISIONAL',
-    repeatCycleDays: 12,
-    dates: [
-      '2026-06-18',
-      '2026-06-30',
-      '2026-07-12',
-      '2026-07-24',
-      '2026-08-17',
-      '2026-08-29',
-      '2026-09-10',
-      '2026-09-22',
-      '2026-10-04',
-      '2026-10-16',
-    ],
-    postTransitionDate: '2026-10-28',
-    defaultT1: '2026-06-18',
-    defaultT2: '2026-10-16',
-    notes: 'Pila 1 (Par principal de Fase 1): 10 fechas cada 12 días (falta 2026-08-05; usar MOE en 2026-07-24).',
-  },
-  {
     id: 'T62/F10',
+    roleLabel: 'Par de Trabajo Principal (data/raw/)',
     track: 62,
     frame: 10,
     direction: 'ASCENDING',
@@ -97,6 +156,11 @@ export const PILAS_GCOV_CHIAPAS: readonly GcovStackSpec[] = Object.freeze([
     crid: 'P05023',
     maturity: 'PROVISIONAL',
     repeatCycleDays: 12,
+    roiValidPctLabel: '99.6% (t1: 99.57%, t2: 99.61%)',
+    gridResolutionLabel: '10 × 10 m · EPSG:32615 (2687 × 5504 px)',
+    t1SceneId: RAW_SCENE_IDS.T62_T1_20260618,
+    t2SceneId: RAW_SCENE_IDS.T62_T2_20261016,
+    postTransitionSceneId: RAW_SCENE_IDS.T62_POST_20261028,
     dates: [
       '2026-06-18',
       '2026-06-30',
@@ -112,10 +176,49 @@ export const PILAS_GCOV_CHIAPAS: readonly GcovStackSpec[] = Object.freeze([
     postTransitionDate: '2026-10-28',
     defaultT1: '2026-06-18',
     defaultT2: '2026-10-16',
-    notes: 'Pila 2: 10 fechas ascendentes (jun–oct 2026), mismas fechas que T55/F80 con CRID P05023.',
+    notes:
+      'Par de trabajo principal en data/raw/: 99.57% (t1) y 99.61% (t2) de píxeles válidos en el polígono ROI. Incluye 5ta escena 2026-10-28 (P05036 VALIDATED).',
+  },
+  {
+    id: 'T55/F80',
+    roleLabel: 'Par de Respaldo (data/raw/ · ~50% este)',
+    track: 55,
+    frame: 80,
+    direction: 'DESCENDING',
+    directionLabel: 'Descendente',
+    product: 'GCOV',
+    band: 'L-Band (24 cm, 1.257 GHz, Frequency A)',
+    polarizations: ['HH', 'HV'],
+    crid: 'P05023',
+    maturity: 'PROVISIONAL',
+    repeatCycleDays: 12,
+    roiValidPctLabel: '~50.3% este (32.6% fuera de adquisición al oeste)',
+    gridResolutionLabel: '10 × 10 m · EPSG:32615 (2687 × 5504 px)',
+    t1SceneId: RAW_SCENE_IDS.T55_T1_20260618,
+    t2SceneId: RAW_SCENE_IDS.T55_T2_20261016,
+    postTransitionSceneId:
+      'NISAR_L2_PR_GCOV_034_055_D_080_4005_DHDH_A_20261028T004045_20261028T004119_P05036_N_F_J_001',
+    dates: [
+      '2026-06-18',
+      '2026-06-30',
+      '2026-07-12',
+      '2026-07-24',
+      '2026-08-17',
+      '2026-08-29',
+      '2026-09-10',
+      '2026-09-22',
+      '2026-10-04',
+      '2026-10-16',
+    ],
+    postTransitionDate: '2026-10-28',
+    defaultT1: '2026-06-18',
+    defaultT2: '2026-10-16',
+    notes:
+      'Par de respaldo descargado en data/raw/: el marco solo cubre al este de lon ≈ -93.14 (50.28% t1 / 50.25% t2).',
   },
   {
     id: 'T156/F80',
+    roleLabel: 'Catálogo ASF (Sin verificar en .h5)',
     track: 156,
     frame: 80,
     direction: 'DESCENDING',
@@ -126,6 +229,14 @@ export const PILAS_GCOV_CHIAPAS: readonly GcovStackSpec[] = Object.freeze([
     crid: 'P05023',
     maturity: 'PROVISIONAL',
     repeatCycleDays: 12,
+    roiValidPctLabel: 'Sin verificar en .h5',
+    gridResolutionLabel: 'EPSG:32615 (en catálogo)',
+    t1SceneId:
+      'NISAR_L2_PR_GCOV_024_156_D_080_4005_DHDH_A_20260625T004812_20260625T004847_P05023_N_F_J_001',
+    t2SceneId:
+      'NISAR_L2_PR_GCOV_033_156_D_080_4005_DHDH_A_20261011T004809_20261011T004844_P05023_N_F_J_001',
+    postTransitionSceneId:
+      'NISAR_L2_PR_GCOV_034_156_D_080_4005_DHDH_A_20261023T004809_20261023T004844_P05036_N_F_J_001',
     dates: [
       '2026-06-25',
       '2026-07-07',
@@ -139,7 +250,7 @@ export const PILAS_GCOV_CHIAPAS: readonly GcovStackSpec[] = Object.freeze([
     postTransitionDate: '2026-10-23',
     defaultT1: '2026-06-25',
     defaultT2: '2026-10-11',
-    notes: 'Pila 3: 8 fechas descendentes (jun–oct 2026; 2026-09-05 tiene contador 001 y 002).',
+    notes: 'Pila 3: 8 fechas descendentes en catálogo (2026-09-05 tiene contador 001 y 002).',
   },
 ])
 
@@ -149,19 +260,44 @@ export interface PairCompatCheckResult {
   cridT2: 'P05023' | 'P05036'
   maturityT1: 'PROVISIONAL' | 'VALIDATED'
   maturityT2: 'PROVISIONAL' | 'VALIDATED'
+  t1SceneId: string
+  t2SceneId: string
   errors: string[]
   warnings: string[]
   isSyntheticMock: true
 }
 
+export function resolveSceneIdForStackDate(
+  stackId: GcovStackSpec['id'],
+  date: string,
+): string {
+  if (stackId === 'T62/F10') {
+    if (date === '2026-06-18') return RAW_SCENE_IDS.T62_T1_20260618
+    if (date === '2026-10-16') return RAW_SCENE_IDS.T62_T2_20261016
+    if (date === '2026-10-28') return RAW_SCENE_IDS.T62_POST_20261028
+  }
+  if (stackId === 'T55/F80') {
+    if (date === '2026-06-18') return RAW_SCENE_IDS.T55_T1_20260618
+    if (date === '2026-10-16') return RAW_SCENE_IDS.T55_T2_20261016
+  }
+  const stack = PILAS_GCOV_CHIAPAS.find((s) => s.id === stackId) ?? PILAS_GCOV_CHIAPAS[0]
+  const dirCode = stack.direction === 'ASCENDING' ? 'A' : 'D'
+  const trackStr = String(stack.track).padStart(3, '0')
+  const frameStr = String(stack.frame).padStart(3, '0')
+  const crid = date >= CRID_TRANSITION_DATE ? 'P05036' : 'P05023'
+  const compact = date.replace(/-/g, '')
+  return `NISAR_L2_PR_GCOV_028_${trackStr}_${dirCode}_${frameStr}_4005_DHDH_A_${compact}T114006_${compact}T114041_${crid}_N_F_J_001`
+}
+
 /**
- * Validador visual y de reglas de comparabilidad (`pipeline/compat.py` y `plan-de-trabajo.md` §1 y §5).
- * Bloquea cualquier par que cruce la fecha `2026-10-23` donde el CRID cambió de `P05023` a `P05036`.
+ * Validador visual y de reglas de comparabilidad (`pipeline/compat.py` y `data/raw/<scene_id>/scene.json`).
+ * Bloquea cualquier par que cruce la fecha `2026-10-23` donde el CRID cambió de `P05023` (`PROVISIONAL`)
+ * a `P05036` (`VALIDATED`), incluyendo la 5ta escena real descargada (`2026-10-28` T62/F10).
  */
 export function checkPairCompat(
   t1: string,
   t2: string,
-  stackId: GcovStackSpec['id'] = 'T55/F80',
+  stackId: GcovStackSpec['id'] = 'T62/F10',
 ): PairCompatCheckResult {
   const cridT1: 'P05023' | 'P05036' = t1 >= CRID_TRANSITION_DATE ? 'P05036' : 'P05023'
   const cridT2: 'P05023' | 'P05036' = t2 >= CRID_TRANSITION_DATE ? 'P05036' : 'P05023'
@@ -169,6 +305,9 @@ export function checkPairCompat(
     cridT1 === 'P05036' ? 'VALIDATED' : 'PROVISIONAL'
   const maturityT2: 'PROVISIONAL' | 'VALIDATED' =
     cridT2 === 'P05036' ? 'VALIDATED' : 'PROVISIONAL'
+
+  const t1SceneId = resolveSceneIdForStackDate(stackId, t1)
+  const t2SceneId = resolveSceneIdForStackDate(stackId, t2)
 
   const errors: string[] = []
   const warnings: string[] = []
@@ -181,31 +320,35 @@ export function checkPairCompat(
 
   if (cridT1 !== cridT2) {
     errors.push(
-      `Bloqueo CRID (corte ${CRID_TRANSITION_DATE}): crid '${cridT1}' (${t1}) vs '${cridT2}' (${t2}). No se deben cruzar versiones de procesador P05023 y P05036.`,
+      `Bloqueo por cambio de procesador (corte ${CRID_TRANSITION_DATE}): CRID '${cridT1}' (${t1}) ≠ '${cridT2}' (${t2}) [PGE R05.02.3 v1.0.11 vs R05.03.2 v1.0.20].`,
     )
     errors.push(
-      `maturity: '${maturityT1}' vs '${maturityT2}' (AGENTS.md §5: prohibido mezclar niveles de madurez).`,
+      `Diferencia de madurez: '${maturityT1}' ≠ '${maturityT2}' (AGENTS.md §5: prohibido mezclar PROVISIONAL con VALIDATED).`,
     )
   } else if (cridT1 === 'P05036' && cridT2 === 'P05036') {
     warnings.push(
-      'Cada pila P05036 (post 2026-10-23) cuenta por ahora con una sola fecha en catálogo.',
+      'La escena 2026-10-28 (P05036, VALIDATED) no tiene pareja: es la única fecha P05036 de su pila.',
     )
   }
 
-  if (stackId === 'T55/F80' && (t1 === '2026-07-24' || t2 === '2026-07-24')) {
+  if (stackId === 'T62/F10' && cridT1 === 'P05023' && cridT2 === 'P05023') {
     warnings.push(
-      '2026-07-24 T55/F80 tiene un segundo producto con órbita FOE sin madurez; se selecciona el producto MOE.',
+      'Malla verificada en .h5 (data/raw/): EPSG:32615, 10 × 10 m (2687 × 5504 px), cobertura válida ROI 99.57% (t1) y 99.61% (t2).',
+    )
+  } else if (stackId === 'T55/F80') {
+    warnings.push(
+      'Cobertura parcial en data/raw/: T55/F80 solo cubre ~50.3% de la ROI (mitad este, lon > -93.14; 32.6% fuera de adquisición).',
+    )
+    if (t1 === '2026-07-24' || t2 === '2026-07-24') {
+      warnings.push(
+        '2026-07-24 T55/F80 tiene un segundo producto con órbita FOE sin madurez; usar el producto MOE.',
+      )
+    }
+  } else if (stackId === 'T156/F80') {
+    warnings.push(
+      'Pila T156/F80 solo en catálogo; resolución y cobertura de ROI aún no verificadas en .h5.',
     )
   }
-  if (stackId === 'T156/F80' && (t1 === '2026-09-05' || t2 === '2026-09-05')) {
-    warnings.push(
-      '2026-09-05 T156/F80 tiene dos productos en catálogo (contador 001 y 002); verificar cobertura de ROI en el .h5.',
-    )
-  }
-
-  warnings.push(
-    'Resolución y cobertura real de la ROI en malla EPSG:32615 se verifican en el archivo .h5 (pipeline/inspect.py).',
-  )
 
   return {
     comparable: errors.length === 0,
@@ -213,43 +356,152 @@ export function checkPairCompat(
     cridT2,
     maturityT1,
     maturityT2,
+    t1SceneId,
+    t2SceneId,
     errors,
     warnings,
     isSyntheticMock: true,
   }
 }
 
+/**
+ * Escena y par de trabajo principal verificados en `.h5` (`pipeline/config.yaml` y `data/raw/`):
+ * Pila `T62/F10` ASCENDING (`2026-06-18` → `2026-10-16`, `CRID: P05023`, `PROVISIONAL`, cobertura `99.6%`).
+ */
 export const ESCENA_CHIAPAS: Readonly<EscenaNisar> = Object.freeze({
-  granuleId: 'NISAR_L2_PR_GCOV_001_055_D_080_4005_DHDH_A_20260618_20261016_P05023',
+  granuleId: RAW_SCENE_IDS.T62_T1_20260618,
+  t1SceneId: RAW_SCENE_IDS.T62_T1_20260618,
+  t2SceneId: RAW_SCENE_IDS.T62_T2_20261016,
   producto: 'NISAR L2 GCOV',
   descripcionProducto:
-    'Matriz de Covarianza Polarimétrica Geocodificada en malla UTM EPSG:32615, retrodispersión corregida radiométricamente por terreno RTC γ⁰ / σ⁰ en dB',
+    'Matriz de Covarianza Polarimétrica Geocodificada en malla UTM EPSG:32615 (10 × 10 m, 2687 × 5504 px), potencia lineal γ⁰ RTC y factor σ⁰ en dB',
   epsg: 32615,
+  resolucionM: '10 × 10 m (2687 × 5504 px)',
+  coberturaRoiPct: '99.6% (t1: 99.57%, t2: 99.61%)',
   banda: 'L-Band (24 cm, 1.257 GHz, Frequency A)',
   polarizacion: 'Dual-Pol (HH+HV)',
   madurez: 'PROVISIONAL',
   cicloRepeticion: '12 días',
-  pila: 'T55/F80',
-  direccion: 'DESCENDING',
+  pila: 'T62/F10',
+  direccion: 'ASCENDING',
   t1: '2026-06-18',
   t2: '2026-10-16',
   crid: 'P05023',
   unidad: 'dB (γ⁰/σ⁰)',
-  fuente: 'NASA Earthdata / ASF Vertex',
+  fuente: 'NASA Earthdata / ASF Vertex (h5py por ventanas · Contrato C1)',
 })
 
-export const CHIAPAS_CENTRO: LngLat = [-93.12, 16.75]
-export const CHIAPAS_ZOOM = 8.4
+/** Centro exacto del polígono ROI de Chiapas: `[(-93.3919 + -92.8757)/2, (16.6539 + 16.8964)/2]`. */
+export const CHIAPAS_CENTRO: LngLat = [-93.1338, 16.77515]
+export const CHIAPAS_ZOOM = 10.1
 
-/** Imagen de radar superpuesta (referencia visual; las diferencias Δγ⁰/Δσ⁰ se calculan sobre GCOV en dB). */
-export const NISAR_IMAGE_URL = '/nisar_chiapas.jpg'
+export type NisarRasterLayerId =
+  | 'rgb_polarimetric'
+  | 'gamma0_hhhh'
+  | 'gamma0_hvhv'
+  | 'sigma0_hhhh'
+  | 'mascara'
 
-/** Coordenadas aproximadas de la escena en Chiapas: sup-izq, sup-der, inf-der, inf-izq. */
+export type NisarBlendMode = 'fusion' | 'puro'
+
+export interface NisarRasterLayerOption {
+  id: NisarRasterLayerId
+  shortLabel: string
+  title: string
+  url: string
+  sourceFigureUrl: string
+  scaleLabel: string
+  roiStatsLabel: string
+}
+
+/**
+ * Coordenadas exactas en EPSG:4326 obtenidas al reproyectar con `rasterio.warp.reproject`
+ * (`Resampling.bilinear`, 2752 × 1344 px) los GeoTIFF `data/raw/.../HHHH.tif`, `HVHV.tif`,
+ * `mask.tif` y `rtcGammaToSigmaFactor.tif` desde `EPSG:32615` (`web/public/rasters/reprojection_bounds.json`).
+ */
+export const NISAR_REPROJECTED_BOUNDS = Object.freeze({
+  west: -93.392386,
+  south: 16.653506,
+  east: -92.875581,
+  north: 16.896813,
+})
+
+/**
+ * Coordenadas exactas reproyectadas en orden MapLibre `image` source:
+ * `[[west, north], [east, north], [east, south], [west, south]]`.
+ */
+export const NISAR_REPROJECTED_FOOTPRINT: Footprint = [
+  [NISAR_REPROJECTED_BOUNDS.west, NISAR_REPROJECTED_BOUNDS.north],
+  [NISAR_REPROJECTED_BOUNDS.east, NISAR_REPROJECTED_BOUNDS.north],
+  [NISAR_REPROJECTED_BOUNDS.east, NISAR_REPROJECTED_BOUNDS.south],
+  [NISAR_REPROJECTED_BOUNDS.west, NISAR_REPROJECTED_BOUNDS.south],
+]
+
+/**
+ * Capas raster HD (`2752 × 1344 px`) reproyectadas a `EPSG:4326` directamente desde `data/raw/`
+ * con filtro antibloqueo de speckle Lee 3×3 y canal Alfa en agua abierta (`HH < -16 dB`) y `mask == 0`.
+ */
+export const NISAR_RASTER_LAYERS: readonly NisarRasterLayerOption[] = Object.freeze([
+  {
+    id: 'rgb_polarimetric',
+    shortLabel: 'Compuesto RGB (HH/HV)',
+    title:
+      'Compuesto SAR Polarimétrico en Falso Color Científico (R = γ⁰ HH dB, G = γ⁰ HV dB, B = razón HH/HV · semitransparencia alfa en agua HH < -16 dB)',
+    url: '/rasters/roi_rgb_polarimetric.webp',
+    sourceFigureUrl: '/B_roi_gamma0_dB.png',
+    scaleLabel: 'R: HH · G: HV · B: HH/HV',
+    roiStatsLabel: '2752×1344 px EPSG:4326 · Agua HH < -16 dB con fusión alfa',
+  },
+  {
+    id: 'gamma0_hhhh',
+    shortLabel: 'γ⁰ HHHH [dB]',
+    title: 'Retrodispersión RTC γ⁰ HHHH [dB] en alto contraste HD con transparencia gradual en agua/sombras',
+    url: '/rasters/roi_hhhh_db_hd.webp',
+    sourceFigureUrl: '/B_roi_gamma0_dB.png',
+    scaleLabel: '-12.31 a -1.18 dB (p2–p98)',
+    roiStatsLabel: 'Media ROI: -6.46 dB · Filtro Lee 3×3 · 2752×1344 px',
+  },
+  {
+    id: 'gamma0_hvhv',
+    shortLabel: 'γ⁰ HVHV [dB]',
+    title: 'Retrodispersión RTC γ⁰ HVHV [dB] en paleta Viridis/Esmeralda científica (sensible a volumen de dosel)',
+    url: '/rasters/roi_hvhv_db_hd.webp',
+    sourceFigureUrl: '/B_roi_gamma0_dB.png',
+    scaleLabel: '-18.70 a -8.27 dB (p2–p98)',
+    roiStatsLabel: 'Media ROI: -12.27 dB · Dosel L-HV · 2752×1344 px',
+  },
+  {
+    id: 'sigma0_hhhh',
+    shortLabel: 'σ⁰ HHHH [dB]',
+    title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HHHH en dB, realce topográfico)',
+    url: '/rasters/roi_sigma0_hhhh_hd.webp',
+    sourceFigureUrl: '/B2_roi_sigma0_dB.png',
+    scaleLabel: '-14.06 a -2.55 dB (p2–p98)',
+    roiStatsLabel: 'Media ROI: -8.18 dB · Factor RTC σ⁰/γ⁰ · 2752×1344 px',
+  },
+  {
+    id: 'mascara',
+    shortLabel: 'Máscara',
+    title: 'Máscara de validez GCOV (mask.tif: 99.61% válido en esmeralda translúcido, 0.39% layover/sombra en rojo sobre el Cañón del Sumidero)',
+    url: '/rasters/roi_mask_hd.webp',
+    sourceFigureUrl: '/D_mascara.png',
+    scaleLabel: '99.61% válido · 0.39% layover (rojo)',
+    roiStatsLabel: 'mask.tif reproyectada a EPSG:4326 (Cañón del Sumidero)',
+  },
+])
+
+/** Imagen de radar superpuesta por defecto (Compuesto SAR Polarimétrico HD en EPSG:4326). */
+export const NISAR_IMAGE_URL = '/rasters/roi_rgb_polarimetric.webp'
+
+/**
+ * Coordenadas del polígono ROI oficial en Chiapas (`pipeline/config.yaml` y `data/raw/<scene_id>/scene.json`):
+ * orden MapLibre `image` source: sup-izq (NW), sup-der (NE), inf-der (SE), inf-izq (SW).
+ */
 export const NISAR_FOOTPRINT: Footprint = [
-  [-94.15, 18.25],
-  [-91.85, 17.85],
-  [-92.3, 15.3],
-  [-94.6, 15.7],
+  [CHIAPAS_ROI_BOUNDS.west, CHIAPAS_ROI_BOUNDS.north],
+  [CHIAPAS_ROI_BOUNDS.east, CHIAPAS_ROI_BOUNDS.north],
+  [CHIAPAS_ROI_BOUNDS.east, CHIAPAS_ROI_BOUNDS.south],
+  [CHIAPAS_ROI_BOUNDS.west, CHIAPAS_ROI_BOUNDS.south],
 ]
 
 export const DEFAULT_SOLAR: Readonly<SolarSimulationState> = Object.freeze({
@@ -260,14 +512,14 @@ export const DEFAULT_SOLAR: Readonly<SolarSimulationState> = Object.freeze({
 
 export const MAPA_GENERAL_ID = 'mapa-general-chiapas'
 
-/** Estado base de solo lectura (Par principal Fase 1: T55/F80, 2026-06-18 -> 2026-10-16, P05023). */
+/** Estado base de solo lectura (Par de trabajo principal: T62/F10 ASC, 2026-06-18 -> 2026-10-16, P05023). */
 export const MAPA_GENERAL: Readonly<WorkspaceMap> = Object.freeze({
   id: MAPA_GENERAL_ID,
-  nombre: 'Mapa General - Chiapas (GCOV T55/F80)',
+  nombre: 'Mapa General - Chiapas (GCOV T62/F10 · 99.6% ROI)',
   carpeta: null,
-  fechaModificacion: '2026-11-14T00:00:00.000Z',
+  fechaModificacion: '2026-11-15T02:43:39.000Z',
   esEditable: false,
-  opacidadSar: 70,
+  opacidadSar: 72,
   centro: CHIAPAS_CENTRO,
   zoom: CHIAPAS_ZOOM,
   escena: ESCENA_CHIAPAS,
@@ -280,23 +532,23 @@ export const MAPA_GENERAL: Readonly<WorkspaceMap> = Object.freeze({
 const MINUTO = 60_000
 const DIA = 24 * 60 * MINUTO
 
-/** Copias iniciales de ejemplo si `localStorage` está vacío. */
+/** Copias iniciales de ejemplo si `localStorage` está vacío, posicionadas dentro de la ROI real. */
 export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
   const c1Annotations: MapAnnotation[] = [
     {
       id: 'init-warn-malpaso',
       kind: 'advertencia',
-      center: [-93.6, 17.17],
-      radiusKm: 5.2,
+      center: [-93.22, 16.81],
+      radiusKm: 3.4,
       label: WARN_CIRCLE_DEFAULT_LABEL,
     },
   ]
   const c2Annotations: MapAnnotation[] = [
     {
-      id: 'init-danger-sierra',
+      id: 'init-danger-grijalva',
       kind: 'peligro',
-      center: [-93.0, 15.95],
-      radiusKm: 6.5,
+      center: [-93.02, 16.73],
+      radiusKm: 3.8,
       label: DANGER_CIRCLE_DEFAULT_LABEL,
     },
   ]
@@ -304,13 +556,13 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
   return [
     {
       id: 'copia-1-presa-malpaso',
-      nombre: 'Copia 1 - Presa Malpaso (T55/F80)',
+      nombre: 'Copia 1 - Sector Noroeste ROI (T62/F10 Principal)',
       carpeta: 'Mis Análisis',
       fechaModificacion: new Date(now - 5 * MINUTO).toISOString(),
       esEditable: true,
       opacidadSar: 75,
-      centro: [-93.6, 17.17],
-      zoom: 10.2,
+      centro: CHIAPAS_CENTRO,
+      zoom: 10.3,
       escena: { ...ESCENA_CHIAPAS },
       annotations: c1Annotations,
       geojson: buildAnnotationsGeoJSON(c1Annotations, [], null),
@@ -319,18 +571,21 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
     },
     {
       id: 'copia-2-sierra',
-      nombre: 'Copia 2 - Sierra (T62/F10)',
+      nombre: 'Copia 2 - Sector Este Grijalva (T55/F80 Respaldo)',
       carpeta: 'Zonas de Riesgo',
       fechaModificacion: new Date(now - DIA).toISOString(),
       esEditable: true,
-      opacidadSar: 60,
-      centro: [-93.0, 15.95],
-      zoom: 9.4,
+      opacidadSar: 65,
+      centro: [-93.03, 16.75],
+      zoom: 10.4,
       escena: {
         ...ESCENA_CHIAPAS,
-        granuleId: 'NISAR_L2_PR_GCOV_001_062_A_010_4005_DHDH_A_20260618_20261016_P05023',
-        pila: 'T62/F10',
-        direccion: 'ASCENDING',
+        granuleId: RAW_SCENE_IDS.T55_T1_20260618,
+        t1SceneId: RAW_SCENE_IDS.T55_T1_20260618,
+        t2SceneId: RAW_SCENE_IDS.T55_T2_20261016,
+        pila: 'T55/F80',
+        direccion: 'DESCENDING',
+        coberturaRoiPct: '~50.3% este (t1: 50.28%, t2: 50.25%)',
       },
       annotations: c2Annotations,
       geojson: buildAnnotationsGeoJSON(c2Annotations, [], null),

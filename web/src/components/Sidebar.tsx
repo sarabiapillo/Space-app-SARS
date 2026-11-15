@@ -4,6 +4,8 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   Check,
@@ -41,6 +43,23 @@ interface SidebarProps {
   onChangePair?: (t1: string, t2: string) => void
 }
 
+const SIDEBAR_DEFAULT_WIDTH = 360
+const SIDEBAR_MIN_WIDTH = 260
+const SIDEBAR_MAX_WIDTH = 640
+const SIDEBAR_WIDTH_STORAGE_KEY = 'terrapulse:sidebar-width:v1'
+
+function loadInitialSidebarWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+    if (!raw) return SIDEBAR_DEFAULT_WIDTH
+    const parsed = Number(raw)
+    if (!Number.isFinite(parsed)) return SIDEBAR_DEFAULT_WIDTH
+    return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(parsed)))
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH
+  }
+}
+
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -62,6 +81,8 @@ export function Sidebar({
   onSelectStack,
   onChangePair,
 }: SidebarProps) {
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => loadInitialSidebarWidth())
+  const [isResizing, setIsResizing] = useState(false)
   const [folderFilter, setFolderFilter] = useState<Carpeta | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
@@ -76,6 +97,67 @@ export function Sidebar({
   })
   const now = useNow(30_000)
   const sliderId = useId()
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+    } catch {
+      // Ignorar si localStorage no está disponible
+    }
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (e: MouseEvent) => {
+      const nextWidth = Math.min(
+        SIDEBAR_MAX_WIDTH,
+        Math.max(SIDEBAR_MIN_WIDTH, Math.round(e.clientX)),
+      )
+      setSidebarWidth(nextWidth)
+    }
+
+    const onMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [isResizing])
+
+  const handleStartResize = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsResizing(true)
+  }
+
+  const handleResetWidth = () => {
+    setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+  }
+
+  const handleResizerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      setSidebarWidth((w) => Math.min(SIDEBAR_MAX_WIDTH, w + 16))
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      setSidebarWidth((w) => Math.max(SIDEBAR_MIN_WIDTH, w - 16))
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+    }
+  }
 
   const activeT1 = pairDraft.stack === escena.pila ? pairDraft.t1 : escena.t1
   const activeT2 = pairDraft.stack === escena.pila ? pairDraft.t2 : escena.t2
@@ -97,7 +179,11 @@ export function Sidebar({
   }
 
   return (
-    <aside className="sidebar" aria-label="Mis Mapas Guardados">
+    <aside
+      className={`sidebar ${isResizing ? 'is-resizing' : ''}`}
+      style={{ width: `${sidebarWidth}px` }}
+      aria-label="Mis Mapas Guardados"
+    >
       <div className="sidebar__scroll">
         <h2 className="sidebar__title">Mis Mapas Guardados</h2>
 
@@ -265,13 +351,34 @@ export function Sidebar({
 
         <div className="sidebar-trace-box" aria-label="Metadatos de trazabilidad NISAR">
           <div className="sidebar-trace-box__line">
-            {escena.producto} · {escena.pila} · {escena.t1} → {escena.t2} · HH/HV · Unidad:{' '}
-            {escena.unidad} · CRID: {escena.crid}
+            {escena.producto} · {escena.pila} ({escena.direccion}) · {escena.t1} → {escena.t2} ·
+            HH/HV · {escena.unidad} · CRID: {escena.crid} ({escena.madurez}) · Cobertura ROI:{' '}
+            {escena.coberturaRoiPct}
           </div>
-          <div className="sidebar-trace-box__badge">
-            ⚠️ Exploratorio · Datos sintéticos (Mock C4)
+          <div
+            className="sidebar-trace-box__badge"
+            title="data/processed/ aún está vacío a la espera de preprocess.py y change.py (Rol P2)."
+          >
+            ⚠️ Etapa 1 (Inspección GCOV γ⁰/σ⁰ dB) · Δσ⁰ pendiente de Contrato C2
           </div>
         </div>
+      </div>
+
+      <div
+        className={`sidebar__resizer ${isResizing ? 'is-active' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Arrastrar con el puntero para ajustar el ancho del panel izquierdo (doble clic para restablecer)"
+        aria-valuemin={SIDEBAR_MIN_WIDTH}
+        aria-valuemax={SIDEBAR_MAX_WIDTH}
+        aria-valuenow={sidebarWidth}
+        tabIndex={0}
+        onMouseDown={handleStartResize}
+        onDoubleClick={handleResetWidth}
+        onKeyDown={handleResizerKeyDown}
+        title="Arrastra el borde con el puntero para agrandar o reducir el panel (doble clic para restablecer)"
+      >
+        <span className="sidebar__resizer-grip" aria-hidden="true" />
       </div>
     </aside>
   )

@@ -15,7 +15,7 @@ import {
 } from '../types/workspace'
 import { buildAnnotationsGeoJSON } from '../utils/geojson'
 
-export const STORAGE_KEY = 'terrapulse_saved_maps'
+export const STORAGE_KEY = 'terrapulse_saved_maps_c1'
 
 function isNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -109,6 +109,10 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
         typeof escenaRaw?.granuleId === 'string' && !escenaRaw.granuleId.includes('GSLC')
           ? escenaRaw.granuleId
           : ESCENA_CHIAPAS.granuleId,
+      t1SceneId:
+        typeof escenaRaw?.t1SceneId === 'string' ? escenaRaw.t1SceneId : ESCENA_CHIAPAS.t1SceneId,
+      t2SceneId:
+        typeof escenaRaw?.t2SceneId === 'string' ? escenaRaw.t2SceneId : ESCENA_CHIAPAS.t2SceneId,
       producto:
         typeof escenaRaw?.producto === 'string' ? escenaRaw.producto : ESCENA_CHIAPAS.producto,
       descripcionProducto:
@@ -116,6 +120,14 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
           ? escenaRaw.descripcionProducto
           : ESCENA_CHIAPAS.descripcionProducto,
       epsg: isNumber(escenaRaw?.epsg) ? escenaRaw.epsg : ESCENA_CHIAPAS.epsg,
+      resolucionM:
+        typeof escenaRaw?.resolucionM === 'string'
+          ? escenaRaw.resolucionM
+          : ESCENA_CHIAPAS.resolucionM,
+      coberturaRoiPct:
+        typeof escenaRaw?.coberturaRoiPct === 'string'
+          ? escenaRaw.coberturaRoiPct
+          : ESCENA_CHIAPAS.coberturaRoiPct,
       banda:
         typeof escenaRaw?.banda === 'string' && escenaRaw.banda.includes('1.257')
           ? escenaRaw.banda
@@ -135,8 +147,8 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
           ? escenaRaw.cicloRepeticion
           : ESCENA_CHIAPAS.cicloRepeticion,
       pila:
-        escenaRaw?.pila === 'T55/F80' ||
         escenaRaw?.pila === 'T62/F10' ||
+        escenaRaw?.pila === 'T55/F80' ||
         escenaRaw?.pila === 'T156/F80'
           ? escenaRaw.pila
           : ESCENA_CHIAPAS.pila,

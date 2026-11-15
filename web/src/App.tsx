@@ -117,21 +117,19 @@ function App() {
   }
 
   const handleSelectStack = (stack: GcovStackSpec) => {
-    const dirCode = stack.direction === 'DESCENDING' ? 'D' : 'A'
-    const trackStr = String(stack.track).padStart(3, '0')
-    const frameStr = String(stack.frame).padStart(3, '0')
     const nextEscena: EscenaNisar = {
       ...current.escena,
-      granuleId: `NISAR_L2_PR_GCOV_001_${trackStr}_${dirCode}_${frameStr}_4005_DHDH_A_${stack.defaultT1.replace(
-        /-/g,
-        '',
-      )}_${stack.defaultT2.replace(/-/g, '')}_${stack.crid}`,
+      granuleId: stack.t1SceneId,
+      t1SceneId: stack.t1SceneId,
+      t2SceneId: stack.t2SceneId,
       pila: stack.id,
       direccion: stack.direction,
       t1: stack.defaultT1,
       t2: stack.defaultT2,
       crid: stack.crid,
       madurez: stack.maturity,
+      coberturaRoiPct: stack.roiValidPctLabel,
+      resolucionM: stack.gridResolutionLabel,
     }
     if (isEditing && activeCopy) {
       updateMap(activeCopy.id, {
@@ -150,6 +148,9 @@ function App() {
 
     const nextEscena: EscenaNisar = {
       ...current.escena,
+      granuleId: compat.t1SceneId,
+      t1SceneId: compat.t1SceneId,
+      t2SceneId: compat.t2SceneId,
       t1,
       t2,
       crid: compat.cridT1,
