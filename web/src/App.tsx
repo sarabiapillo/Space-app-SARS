@@ -5,6 +5,7 @@ import { MapCanvas } from './components/MapCanvas'
 import { DuplicateMapModal } from './components/DuplicateMapModal'
 import { TeamLandingPage } from './components/TeamLandingPage'
 import { useSavedMaps } from './hooks/useSavedMaps'
+import { useRoiLayers } from './hooks/useRoiLayers'
 import {
   DEFAULT_FLOOD,
   DEFAULT_SOLAR,
@@ -75,6 +76,7 @@ function App() {
         escena: generalEscena,
       }
 
+  const roiLayers = useRoiLayers(current.croppedRegion, current.id)
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 
   // Ventanas acoplables del área central (mapa normal y agua/DG2): solo cambia la vista activa,
@@ -294,6 +296,7 @@ function App() {
   return (
     <div className="app">
       <Header
+        roiLayers={current.croppedRegion ? roiLayers : undefined}
         viewMode={isEditing ? 'editado' : 'general'}
         onViewModeChange={setViewMode}
         canShowEdited={activeCopy !== null}
@@ -304,7 +307,7 @@ function App() {
         onOpacityChange={handleOpacityChange}
         exploreLayerId={exploreLayerId}
         onExploreLayerChange={setExploreLayerId}
-        dateViewMode={dateViewMode}
+        dateViewMode={current.croppedRegion && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
         onDateViewModeChange={setDateViewMode}
         colormapId={colormapId}
         onColormapChange={setColormapId}
@@ -317,12 +320,13 @@ function App() {
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
         onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
-        onOpenFigures={() => setFiguresOpen(true)}
+        onOpenFigures={() => { if (!current.croppedRegion) setFiguresOpen(true) }}
         onOpenTeamPage={() => setTeamPageOpen(true)}
       />
 
       <div className="app__body">
         <Sidebar
+          roiLayers={current.croppedRegion ? roiLayers : undefined}
           maps={maps}
           activeMapId={isEditing && activeCopy ? activeCopy.id : null}
           escena={current.escena}
@@ -336,6 +340,7 @@ function App() {
         />
 
         <MapCanvas
+          roiLayers={roiLayers}
           view={{ centro: current.centro, zoom: current.zoom }}
           viewKey={isEditing && activeCopy ? `copia:${activeCopy.id}` : 'general'}
           opacity={current.opacidadSar}
@@ -347,7 +352,7 @@ function App() {
           solar={current.solar}
           flood={current.flood || generalFlood}
           exploreLayerId={exploreLayerId}
-          dateViewMode={dateViewMode}
+          dateViewMode={current.croppedRegion && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
           colormapId={colormapId}
           activeTool={activeTool}
           onSelectTool={setActiveTool}

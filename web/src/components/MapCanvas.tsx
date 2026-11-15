@@ -56,6 +56,8 @@ import {
   type ExploreWebManifest,
 } from '../mocks/initialWorkspaces'
 import { fetchExploreManifest, verifyExploreScaleMatch } from '../api/client'
+import { useRoiLayers } from '../hooks/useRoiLayers'
+import { rectangleFromCorners } from '../utils/roi'
 import {
   colorizePngWithLut,
   getColormapSpec,
@@ -86,6 +88,7 @@ import {
 import { newId } from '../utils/id'
 
 interface MapCanvasProps {
+  roiLayers: ReturnType<typeof useRoiLayers>
   view: MapView
   viewKey: string
   opacity: number
@@ -262,6 +265,7 @@ function getAnnotationAnchorCoord(ann: MapAnnotation): LngLat {
 }
 
 export function MapCanvas({
+  roiLayers,
   view,
   viewKey,
   opacity,
@@ -333,10 +337,15 @@ export function MapCanvas({
   const [swipePct, setSwipePct] = useState<number>(50)
   const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
   const [isDraggingFloodSwipe, setIsDraggingFloodSwipe] = useState(false)
-  const [manifestT1, setManifestT1] = useState<ExploreWebManifest | null>(null)
-  const [manifestT2, setManifestT2] = useState<ExploreWebManifest | null>(null)
+  const [defaultT1, setManifestT1] = useState<ExploreWebManifest | null>(null)
+  const [defaultT2, setManifestT2] = useState<ExploreWebManifest | null>(null)
+  const manifestT1 = croppedRegion ? roiLayers.manifests[0] ?? null : defaultT1
+  const manifestT2 = croppedRegion ? roiLayers.manifests[1] ?? null : defaultT2
+  const [geometryInput, setGeometryInput] = useState('')
+  const [geometryError, setGeometryError] = useState<string | null>(null)
   const [colorizedT1Url, setColorizedT1Url] = useState<string>(NISAR_IMAGE_URL)
   const [colorizedT2Url, setColorizedT2Url] = useState<string>(NISAR_IMAGE_URL)
+  const [colorizedKey, setColorizedKey] = useState('')
   const [logPanelCollapsed, setLogPanelCollapsed] = useState(false)
   const [logActiveTab, setLogActiveTab] = useState<'trace' | 'layers' | 'warnings'>('trace')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
@@ -573,7 +582,17 @@ export function MapCanvas({
         setSelectedAnnotationId(null)
       } else if (tool === 'poligono') {
         setSelectedAnnotationId(null)
-        setDraftPolygon((prev) => [...prev, coord])
+        setDraftPolygon((prev) => {
+          if (prev.length !== 1) return [coord]
+          try {
+            const rectangle = rectangleFromCorners(prev[0], coord)
+            setGeometryError(null)
+            return rectangle
+          } catch (error) {
+            setGeometryError((error as Error).message)
+            return prev
+          }
+        })
       } else if (tool === 'etiqueta') {
         const clickToleranceKm = radiusKmForScreenPixels(24, coord[1], map.getZoom())
         const hit = [...annotationsRef.current].reverse().find((ann) => {
@@ -936,19 +955,33 @@ export function MapCanvas({
       if (cancelled) return
       setManifestT1(m1)
       setManifestT2(m2)
+    }).catch(() => {
+      if (!cancelled) { setManifestT1(null); setManifestT2(null) }
     })
     return () => {
       cancelled = true
     }
   }, [escena.t1SceneId, escena.t2SceneId])
 
+  const displayScene = croppedRegion ? {
+    ...escena,
+    t1: manifestT1?.escena.fecha_inicio?.slice(0, 10) ?? 'Sin datos',
+    t2: manifestT2?.escena.fecha_inicio?.slice(0, 10) ?? 'Sin segunda fecha',
+    t1SceneId: manifestT1?.escena.granuleId ?? 'Sin datos',
+    t2SceneId: manifestT2?.escena.granuleId ?? 'Sin datos',
+    crid: manifestT1?.escena.crid ?? 'Sin datos',
+    madurez: manifestT1?.escena.madurez_catalogo ?? 'Desconocida',
+  } : escena
+
   const activeLayerOption =
     EXPLORE_LAYER_OPTIONS.find((opt) => opt.id === exploreLayerId) ?? EXPLORE_LAYER_OPTIONS[0]
 
   const layerT1 =
-    manifestT1?.capas.find((c) => c.id === exploreLayerId) ?? manifestT1?.capas[0] ?? null
+    manifestT1?.capas.find((c) => c.id === exploreLayerId) ?? (croppedRegion ? null : manifestT1?.capas[0]) ?? null
   const layerT2 =
-    manifestT2?.capas.find((c) => c.id === exploreLayerId) ?? manifestT2?.capas[0] ?? null
+    manifestT2?.capas.find((c) => c.id === exploreLayerId) ?? (croppedRegion ? null : manifestT2?.capas[0]) ?? null
+  const layerKey = `${layerT1?.png}|${layerT2?.png}|${colormapId}`
+  const imagesReady = colorizedKey === layerKey
 
   const activeManifest = dateViewMode === 't1' ? manifestT1 : manifestT2
   const activeLayerEntry = dateViewMode === 't1' ? layerT1 : layerT2
@@ -972,12 +1005,13 @@ export function MapCanvas({
       if (cancelled) return
       setColorizedT1Url(u1)
       setColorizedT2Url(u2)
+      setColorizedKey(layerKey)
     })
 
     return () => {
       cancelled = true
     }
-  }, [layerT1, layerT2, colormapId])
+  }, [layerT1, layerT2, colormapId, layerKey])
 
   const activeColorizedUrl = dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
 
@@ -987,7 +1021,7 @@ export function MapCanvas({
     if (!map || !mapReady) return
     const alpha = opacity / 100
     // En modo Swipe (t1 ↔ t2) las dos capas coloreadas se dibujan con recorte sincronizado en EPSG:3857
-    const webglOpacity = dateViewMode === 'swipe' ? 0 : alpha
+    const webglOpacity = dateViewMode === 'swipe' || !activeLayerEntry || !imagesReady || (croppedRegion && roiLayers.loading) ? 0 : alpha
 
     if (map.getLayer(NISAR_LAYER)) {
       map.setPaintProperty(NISAR_LAYER, 'raster-opacity', webglOpacity)
@@ -996,12 +1030,12 @@ export function MapCanvas({
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
       map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.03)
     }
-  }, [opacity, dateViewMode, mapReady])
+  }, [opacity, dateViewMode, mapReady, activeLayerEntry, croppedRegion, roiLayers.loading, imagesReady])
 
   // Actualizar fuente `image` de MapLibre con el BlobURL/DataURL coloreado por LUT y `capa.esquinas_lonlat` (EPSG:3857)
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || !activeLayerEntry || !activeColorizedUrl) return
+    if (!map || !mapReady || !activeLayerEntry || !activeColorizedUrl || !imagesReady) return
     const imgSource = map.getSource(NISAR_SOURCE) as ImageSource | undefined
     if (imgSource && typeof imgSource.updateImage === 'function') {
       try {
@@ -1013,7 +1047,7 @@ export function MapCanvas({
         console.warn('No se pudo actualizar la capa raster NISAR coloreada:', err)
       }
     }
-  }, [activeLayerEntry, activeColorizedUrl, mapReady])
+  }, [activeLayerEntry, activeColorizedUrl, mapReady, imagesReady])
 
   // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
@@ -1576,6 +1610,11 @@ export function MapCanvas({
   }, [isDraggingToolbox])
 
   const handleCenterRoi = () => {
+    if (croppedRegion) {
+      const b = getPolygonBoundsAndCentroid(croppedRegion)
+      mapRef.current?.fitBounds([[b.minLng, b.minLat], [b.maxLng, b.maxLat]], { padding: 80 })
+      return
+    }
     mapRef.current?.flyTo({
       center: CHIAPAS_CENTRO,
       zoom: CHIAPAS_ZOOM,
@@ -1732,7 +1771,7 @@ export function MapCanvas({
 
       const defaultFormat = 'png'
       const previewUrl = outCanvas.toDataURL('image/png')
-      const dateTag = dateViewMode === 'swipe' ? `${escena.t1}_vs_${escena.t2}` : dateViewMode === 't1' ? escena.t1 : escena.t2
+      const dateTag = dateViewMode === 'swipe' ? `${displayScene.t1}_vs_${displayScene.t2}` : dateViewMode === 't1' ? displayScene.t1 : displayScene.t2
       setCaptureModal({
         canvas: outCanvas,
         previewUrl,
@@ -1754,8 +1793,8 @@ export function MapCanvas({
       sunFocusX,
       sunFocusY,
       dateViewMode,
-      escena.t1,
-      escena.t2,
+      displayScene.t1,
+      displayScene.t2,
       exploreLayerId,
       onCancelCaptureMode,
     ],
@@ -1901,10 +1940,10 @@ export function MapCanvas({
           <span>·</span>
           <span className="ws-mono">
             {dateViewMode === 'swipe'
-              ? `Swipe t1 (${escena.t1}) ↔ t2 (${escena.t2})`
+              ? `Swipe t1 (${displayScene.t1}) ↔ t2 (${displayScene.t2})`
               : dateViewMode === 't1'
-                ? `t1 = ${escena.t1}`
-                : `t2 = ${escena.t2}`}
+                ? `t1 = ${displayScene.t1}`
+                : `t2 = ${displayScene.t2}`}
           </span>
           <span>·</span>
           <span className="ws-mono">
@@ -1953,7 +1992,7 @@ export function MapCanvas({
                 type="button"
                 className="ws-tool-btn"
                 onClick={handleCenterRoi}
-                title="Centrar vista sobre la ROI oficial de Chiapas"
+                title="Centrar vista sobre la ROI activa"
               >
                 <Crosshair size={13} />
                 <span>Centrar ROI</span>
@@ -2019,7 +2058,7 @@ export function MapCanvas({
           }}
         >
           {/* Deslizador Antes/Después (Swipe t1 ↔ t2) en EPSG:3857 con LUT coloreado */}
-          {dateViewMode === 'swipe' && layerT1 && layerT2 && opacity > 0 && (
+          {dateViewMode === 'swipe' && imagesReady && layerT1 && layerT2 && opacity > 0 && (!croppedRegion || roiLayers.comparable) && (
             <g>
               <defs>
                 <clipPath id="explore-swipe-left">
@@ -2105,7 +2144,7 @@ export function MapCanvas({
 
           {/* Delimitación exacta del polígono ROI oficial de Chiapas (2687 × 5504 px a 10 m en EPSG:32615) */}
           <polygon
-            points={NISAR_FOOTPRINT.map((pt) => projectLngLat(pt, viewport))
+            points={(croppedRegion ?? NISAR_FOOTPRINT).map((pt) => projectLngLat(pt, viewport))
               .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
               .join(' ')}
             fill="rgba(51, 153, 255, 0.02)"
@@ -2430,7 +2469,7 @@ export function MapCanvas({
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Antes/Después (Swipe t1 ↔ t2) */}
-        {dateViewMode === 'swipe' && (
+        {dateViewMode === 'swipe' && imagesReady && (!croppedRegion || roiLayers.comparable) && (
           <div
             className="swipe-handle-overlay"
             style={{
@@ -2451,11 +2490,11 @@ export function MapCanvas({
             title="Arrastra hacia la izquierda o derecha para comparar t1 (2026-06-18) vs t2 (2026-10-16) con escala común -22 a 0 dB"
           >
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--left">
-              ◀ t1 · {escena.t1}
+              ◀ t1 · {displayScene.t1}
             </span>
             <div className="swipe-handle-overlay__knob">↔</div>
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
-              t2 · {escena.t2} ▶
+              t2 · {displayScene.t2} ▶
             </span>
           </div>
         )}
@@ -2611,7 +2650,7 @@ export function MapCanvas({
               className="btn btn--primary btn--sm"
               onClick={handleApplyCropRegion}
             >
-              ✂️ Recortar región
+              Cargar ROI y buscar escenas
             </button>
             <button
               type="button"
@@ -2623,6 +2662,24 @@ export function MapCanvas({
           </div>
         )}
 
+        {croppedRegion && (roiLayers.loading || roiLayers.error || !imagesReady) && (
+          <div className="roi-loading-backdrop">
+            <section className="roi-loading-dialog" role="dialog" aria-modal="true" aria-label="Carga de ROI" aria-busy={roiLayers.loading}>
+              <h3>{roiLayers.error ? 'No se pudo cargar la ROI' : 'Preparando nueva ROI'}</h3>
+              <p role="status" aria-live="polite">{roiLayers.error || (roiLayers.loading || imagesReady ? roiLayers.message : 'Preparando capas de la ROI…')}</p>
+              {roiLayers.loading && <progress aria-label="Carga en curso" />}
+              <p>El servidor consulta ASF y lee por HTTPS los bloques necesarios del H5 con Earthdata.</p>
+              {roiLayers.error && <button className="btn" onClick={roiLayers.retry}>Reintentar</button>}
+              <button className="btn" onClick={handleResetCroppedRegion}>Volver al mapa inicial</button>
+            </section>
+          </div>
+        )}
+        {croppedRegion && !roiLayers.loading && !roiLayers.error && (
+          <div className="roi-result-status" role="status">
+            {roiLayers.message} {roiLayers.manifests.map(m => m.escena.fecha_inicio?.slice(0, 10)).join(' → ')}
+            {!activeLayerEntry && ' La capa seleccionada no está disponible. Elige otra polarización o fecha.'}
+          </div>
+        )}
         {/* Input técnico para crear o editar una etiqueta */}
         {labelEditor && labelEditorScreen && (
           <form
@@ -2704,6 +2761,23 @@ export function MapCanvas({
 
             {!toolboxCollapsed && (
               <div className="ws-floating-toolbox__body">
+                {isEditing && <form className="roi-coordinate-form" onSubmit={event => {
+                  event.preventDefault()
+                  try {
+                    const tokens = geometryInput.trim().split(/[,\s]+/)
+                    if (tokens.length !== 4 || tokens.some(v => v === '')) throw new Error('Escribe oeste, sur, este, norte.')
+                    const values = tokens.map(Number)
+                    setDraftPolygon(rectangleFromCorners([values[0], values[1]], [values[2], values[3]]))
+                    setGeometryError(null)
+                    onSelectTool('poligono')
+                  } catch (error) { setGeometryError((error as Error).message) }
+                }}>
+                  <label htmlFor="roi-coordinates">ROI por geometría: oeste, sur, este, norte</label>
+                  <input id="roi-coordinates" value={geometryInput} onChange={event => setGeometryInput(event.target.value)} placeholder="−93.1, 16.7, −93.0, 16.8" />
+                  <button className="btn btn--sm" type="submit">Dibujar rectángulo</button>
+                  <small>O marca dos esquinas en el mapa. Máximo 0.6° por lado.</small>
+                  {geometryError && <p role="alert">{geometryError}</p>}
+                </form>}
                 {!isEditing && (
                   <div className="ws-floating-toolbox__readonly">
                     Solo lectura: usa <strong>+ Duplicar Mapa</strong> para dibujar.
@@ -2755,10 +2829,10 @@ export function MapCanvas({
                     className={`ws-tool-btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
                     onClick={() => selectTool('poligono')}
                     disabled={!isEditing}
-                    title="Seleccionar y recortar subregión poligonal"
+                    title="Dos clics: esquinas opuestas de una ROI rectangular"
                   >
                     <Pentagon size={13} />
-                    <span>Sel. Región</span>
+                    <span>ROI rectangular · 2 puntos</span>
                   </button>
                   <button
                     type="button"
@@ -3072,7 +3146,7 @@ export function MapCanvas({
           </div>
 
           <div className="workstation-log-panel__actions">
-            {dateViewMode === 'swipe' && (
+            {dateViewMode === 'swipe' && imagesReady && (!croppedRegion || roiLayers.comparable) && (
               <label className="workstation-log-panel__swipe-inline">
                 <span>Swipe t1↔t2: {Math.round(swipePct)}%</span>
                 <input
@@ -3102,30 +3176,30 @@ export function MapCanvas({
               <div className="ws-log-grid">
                 <div className="ws-log-row">
                   <span className="ws-log-tag ws-log-tag--info">GRANULE t1</span>
-                  <code className="ws-mono">{escena.t1SceneId}</code>
+                  <code className="ws-mono">{displayScene.t1SceneId}</code>
                   <span className="ws-log-sep">|</span>
                   <span>
-                    CRID: <strong>{escena.crid}</strong> ({escena.madurez}) · Píxeles válidos ROI:{' '}
+                    CRID: <strong>{displayScene.crid}</strong> ({displayScene.madurez}) · Píxeles válidos ROI:{' '}
                     <strong>
-                      {layerT1 ? `${layerT1.pct_pixeles_validos.toFixed(2)}%` : '99.57%'}
+                      {layerT1 ? `${layerT1.pct_pixeles_validos.toFixed(2)}%` : 'Sin datos'}
                     </strong>{' '}
                     · Rango COG:{' '}
                     <code className="ws-mono">
                       {layerT1
                         ? `[${layerT1.rango_datos_dB[0].toFixed(2)}, +${layerT1.rango_datos_dB[1].toFixed(2)} dB]`
-                        : '[-27.14, +9.95 dB]'}
+                        : 'Sin datos'}
                     </code>
                   </span>
                 </div>
 
                 <div className="ws-log-row">
                   <span className="ws-log-tag ws-log-tag--info">GRANULE t2</span>
-                  <code className="ws-mono">{escena.t2SceneId}</code>
+                  <code className="ws-mono">{displayScene.t2SceneId}</code>
                   <span className="ws-log-sep">|</span>
                   <span>
-                    CRID: <strong>{escena.crid}</strong> ({escena.madurez}) · Píxeles válidos ROI:{' '}
+                    CRID: <strong>{displayScene.crid}</strong> ({displayScene.madurez}) · Píxeles válidos ROI:{' '}
                     <strong>
-                      {layerT2 ? `${layerT2.pct_pixeles_validos.toFixed(2)}%` : '99.61%'}
+                      {layerT2 ? `${layerT2.pct_pixeles_validos.toFixed(2)}%` : 'Sin datos'}
                     </strong>{' '}
                     · Rango COG:{' '}
                     <code className="ws-mono">

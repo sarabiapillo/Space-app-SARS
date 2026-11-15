@@ -26,6 +26,7 @@ import {
 import type { DrawTool, EscenaNisar, SolarSimulationState, ViewMode } from '../types/workspace'
 
 interface HeaderProps {
+  roiLayers?: import('../hooks/useRoiLayers').RoiLayersState
   viewMode: ViewMode
   onViewModeChange: (mode: ViewMode) => void
   canShowEdited: boolean
@@ -131,6 +132,7 @@ const SAR_LAYER_GROUPS: SarLayerGroup[] = [
 ]
 
 export function Header({
+  roiLayers,
   viewMode,
   onViewModeChange,
   canShowEdited,
@@ -263,8 +265,7 @@ export function Header({
         <div className="ws-menubar__title">
           <span className="ws-menubar__app-badge">NISAR L2</span>
           <span>
-            TerraPulse AI — NISAR L2 GCOV Workstation [ROI: Chiapas, EPSG:{escena.epsg} ·{' '}
-            {escena.pila} {escena.direccion === 'ASCENDING' ? 'ASC' : 'DESC'} · CRID: {escena.crid}]
+            {roiLayers ? 'TerraPulse AI — ROI seleccionada · NISAR GCOV' : `TerraPulse AI — Chiapas · ${escena.pila} · ${escena.crid}`}
           </span>
         </div>
 
@@ -272,7 +273,7 @@ export function Header({
           <div className="ws-menubar__status">
             <span>Band L (24 cm · Freq A)</span>
             <span>|</span>
-            <span>Madurez: {escena.madurez}</span>
+            <span>Madurez: {roiLayers ? roiLayers.manifests[0]?.escena.madurez_catalogo ?? 'Pendiente' : escena.madurez}</span>
           </div>
 
           <button
@@ -499,9 +500,9 @@ export function Header({
                 onDockTabChange('map')
                 onDateViewModeChange('t1')
               }}
-              title={`Mostrar escena t1 (${escena.t1}): ${escena.t1SceneId}`}
+              title={roiLayers ? roiLayers.manifests[0]?.escena.granuleId : escena.t1SceneId}
             >
-              <span>t1: {escena.t1}</span>
+              <span>t1: {roiLayers ? roiLayers.manifests[0]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos' : escena.t1}</span>
             </button>
             <button
               type="button"
@@ -510,12 +511,14 @@ export function Header({
                 onDockTabChange('map')
                 onDateViewModeChange('t2')
               }}
-              title={`Mostrar escena t2 (${escena.t2}): ${escena.t2SceneId}`}
+              disabled={Boolean(roiLayers && !roiLayers.manifests[1])}
+              title={roiLayers ? roiLayers.manifests[1]?.escena.granuleId : escena.t2SceneId}
             >
-              <span>t2: {escena.t2}</span>
+              <span>t2: {roiLayers ? roiLayers.manifests[1]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos' : escena.t2}</span>
             </button>
             <button
               type="button"
+              disabled={Boolean(roiLayers && !roiLayers.comparable)}
               className={`ws-ribbon__btn ws-ribbon__btn--swipe ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
               onClick={() => {
                 onDockTabChange('map')

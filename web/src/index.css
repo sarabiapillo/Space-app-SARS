@@ -4920,3 +4920,14 @@ button:disabled {
   font-size: 10.5px;
   color: #64748b;
 }
+/* Selección de ROI y preparación remota. */
+.roi-loading-backdrop { position: fixed; inset: 0; z-index: 1500; display: grid; place-items: center; background: #0f172a88; }
+.roi-loading-dialog { width: min(460px, 90vw); padding: 24px; border-radius: 12px; background: #fff; color: #172033; box-shadow: 0 18px 60px #0005; }
+.roi-loading-dialog progress { width: 100%; accent-color: #059669; }
+.roi-loading-dialog button { margin: 8px 8px 0 0; }
+.roi-coordinate-form { display: grid; gap: 6px; padding: 10px; font-size: 12px; }
+.roi-coordinate-form input { min-width: 0; width: 100%; padding: 7px; border: 1px solid #94a3b8; border-radius: 5px; }
+.roi-coordinate-form [role=alert] { color: #b91c1c; }
+.roi-result-status { position: absolute; top: 64px; left: 15px; right: 15px; z-index: 12; padding: 8px 12px; background: #ecfdf5f2; color: #064e3b; border: 1px solid #6ee7b7; border-radius: 6px; font-size: 12px; pointer-events: none; }
+.roi-scene-details { padding: 14px; font-size: 12px; overflow-wrap: anywhere; }
+.roi-scene-details article { padding: 10px 0; border-bottom: 1px solid #cbd5e1; }

@@ -1,3 +1,4 @@
+import type { useRoiLayers } from '../hooks/useRoiLayers'
 import {
   useEffect,
   useId,
@@ -32,6 +33,7 @@ import { Etapa1ChartsPanel } from './Etapa1ChartsPanel'
 import { formatRelative } from '../utils/time'
 
 interface SidebarProps {
+  roiLayers?: ReturnType<typeof useRoiLayers>
   maps: WorkspaceMap[]
   /** Id de la copia activa en "Mapa Editado"; `null` si se está viendo el Mapa General. */
   activeMapId: string | null
@@ -72,6 +74,7 @@ function useNow(intervalMs: number): number {
 }
 
 export function Sidebar({
+  roiLayers,
   maps,
   activeMapId,
   escena,
@@ -216,7 +219,7 @@ export function Sidebar({
         {/* Raíz del árbol del proyecto */}
         <div className="tree-root-label">
           <span className="tree-root-label__icon">▣</span>
-          <span>Chiapas_GCOV_Workstation.mph (ROI EPSG:{escena.epsg})</span>
+          <span>{roiLayers ? 'ROI seleccionada ? NISAR GCOV' : `Chiapas ? EPSG:${escena.epsg}`} </span>
         </div>
 
         {/* Nodo 1: Mis Mapas Guardados */}
@@ -356,6 +359,21 @@ export function Sidebar({
           )}
         </div>
 
+        {roiLayers ? <section className="roi-scene-details">
+          <h3>Escenas de la ROI seleccionada</h3>
+          <p role="status">{roiLayers.error || roiLayers.message}</p>
+          {roiLayers.manifests.map((manifest, i) => <article key={manifest.escena.granuleId}>
+            <h4>t{i + 1}: {manifest.escena.fecha_inicio.slice(0, 10)}</h4>
+            <p>T{manifest.escena.trayectoria}/F{manifest.escena.marco} · {manifest.escena.direccion}</p>
+            <p>{manifest.escena.crid} · {manifest.escena.madurez_catalogo}</p>
+            <p>Polarizaciones: {manifest.escena.polarizaciones.join(', ')}</p>
+            <code>{manifest.escena.granuleId}</code>
+            {manifest.capas.map(layer => <p key={layer.id}>
+              {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% de píxeles válidos en el recorte · {layer.pixel_m} m
+            </p>)}
+          </article>)}
+          <p>Los resultados se conservan por región. Duplica el mapa para guardar otra ROI.</p>
+        </section> : <>
         {/* Nodo 2: Catálogo ASF (3 Pilas GCOV Chiapas) + Capas Contrato C1 (data/raw) */}
         <div className="tree-node">
           <button
@@ -482,6 +500,7 @@ export function Sidebar({
             </div>
           )}
         </div>
+        </>}
       </div>
 
       <div className="sidebar__footer">
@@ -508,8 +527,7 @@ export function Sidebar({
 
         <div className="sidebar-trace-box" aria-label="Metadatos de trazabilidad NISAR">
           <div className="sidebar-trace-box__line">
-            {escena.producto} · {escena.pila} ({escena.direccion}) · {escena.t1} → {escena.t2} ·
-            HH/HV · {escena.unidad} · CRID: {escena.crid} ({escena.madurez})
+            {roiLayers ? 'ROI personalizada · inspección exploratoria' : `${escena.producto} · ${escena.pila} · ${escena.t1} → ${escena.t2} · ${escena.crid}`}
           </div>
           <div
             className="sidebar-trace-box__badge"
