@@ -1,6 +1,6 @@
 # P1 — Inspección de escenas (Etapa 1) en remoto y capas para la web
 
-> Responsable: P1. Código: `pipeline/etapa1.py`, `pipeline/web_export.py`, `pipeline/etapa1_figuras.py`.
+> Responsable: P1. Código: `pipeline/etapa1.py`, `pipeline/web_export.py`, `pipeline/etapa1_figuras.py`, `pipeline/graficas_datos.py`.
 > Pruebas: `pipeline/tests/test_etapa1.py`. Documento general de P1: [p1-datos.md](p1-datos.md).
 
 ## 1. Qué resuelve
@@ -14,6 +14,8 @@ Además genera una carpeta `web/` con lo que necesita la interfaz web para mostr
 - un COG por capa (para TiTiler);
 - un PNG ya proyectado a Web Mercator (para la fuente `image` de MapLibre);
 - un manifiesto `capas.json` con las esquinas, la escala de color y la procedencia.
+
+Desde el 2026-11-15 también escribe **`graficas.json`**: los números de las gráficas que son series (histogramas, máscara e incidencia por altura), para dibujarlas en la web con Chart.js y cargarlas en la base de datos. Las figuras PNG se siguen haciendo con matplotlib (§4.2).
 
 ## 2. Uso
 
@@ -45,7 +47,7 @@ Cómo decide el modo: si el argumento es un archivo existente o termina en `.h5`
 | `--sin-web` | No genera la carpeta `web/` |
 | `--sin-vista` | Omite la figura A (vista general) |
 | `--vista-remota` | En remoto, genera la figura A de todos modos (ver §6) |
-| `--sin-figuras` | Solo datos: GeoTIFF, CSV, JSON y `web/` (sin matplotlib) |
+| `--sin-figuras` | Solo datos: GeoTIFF, CSV, JSON (incluido `graficas.json`) y `web/` (sin matplotlib) |
 | `--multilook N` | Multilook N×N (default 2 en GCOV) |
 | `--salida RUTA` | Carpeta de salida (default `data/explore/`) |
 
@@ -64,11 +66,12 @@ Como el código posterior a la apertura es el mismo, los valores son idénticos 
 
 ```
 data/explore/<granuleId>/
-├── metadatos.json        + "procedencia" (local/remoto, URL, catálogo, identidad verificada) y "web"
+├── metadatos.json        + "procedencia" (local/remoto, URL, catálogo, identidad verificada), "web" y "graficas"
+├── graficas.json         NUEVO (2026-11-15): datos de las gráficas para Chart.js y la base (§4.2)
 ├── LEEME_validacion.txt
 ├── geotiff/              igual que antes (lineal y dB, máscara, factor, looks)
-├── figuras/              B, B2, C, D, E (y A en local)
-├── control/
+├── figuras/              B, B2, C, D, E (y A en local), con matplotlib
+├── control/              valores para revisar a mano (no son datos de gráficas)
 └── web/                  NUEVO: para la interfaz web
     ├── capas.json                          manifiesto (§4.1)
     ├── gamma0_HHHH_ml2_dB.tif / .png       γ⁰ HH en dB, multilook 2×2 (píxel de 20 m)
@@ -82,6 +85,7 @@ data/explore/<granuleId>/
 | `*.tif` | **COG** float32, dB, NaN = sin dato, UTM (EPSG del producto), DEFLATE, bloques de 512, vistas reducidas por vecino más cercano | Lo sirve TiTiler (contrato C5). Es la fuente de **valores**: consultas de píxel, histogramas |
 | `*.png` | RGBA 8 bits, **EPSG:3857**, gris lineal entre `vmin_dB` y `vmax_dB`, alfa 0 donde no hay dato | Fuente `image` de MapLibre con `esquinas_lonlat`. **Solo para ver** |
 | `capas.json` | JSON | Dice qué capas hay, dónde están, sus esquinas, su escala y de qué escena salen |
+| `../graficas.json` | JSON | Series de las gráficas (no mapas) con unidades, escena y versión del código (§4.2) |
 
 El COG contiene exactamente los mismos valores que `geotiff/<magnitud>_<capa>_ml2_dB.tif` (la prueba `test_local_run_writes_web_layers` lo verifica).
 
@@ -124,12 +128,29 @@ El COG contiene exactamente los mismos valores que `geotiff/<magnitud>_<capa>_ml
     }
   ],
   "figuras": ["data/explore/<granuleId>/figuras/B_roi_gamma0_dB.png", "…"],
+  "graficas": "data/explore/<granuleId>/graficas.json",   // desde 2026-11-15 (§4.2)
   "metadatos": "data/explore/<granuleId>/metadatos.json",
   "advertencias": ["Una sola fecha: …", "Los PNG son solo para ver; …", "Para comparar dos fechas …"]
 }
 ```
 
 Las rutas son relativas a la raíz del repo, con `/`.
+
+### 4.2 Datos de las gráficas: `graficas.json` (versión `graficas-etapa1-1`)
+
+Lo escribe `pipeline/graficas_datos.py` en cada corrida, con o sin `--sin-figuras` y con o sin `--sin-web`. Guarda **los mismos números** que usa la figura PNG, sin recalcularlos:
+
+| `id` | Figura PNG | Tipo sugerido | Contenido |
+|---|---|---|---|
+| `histograma_gamma0_dB` | C | barras | Conteo de píxeles por bin de 0.1 dB, por polarización, a resolución completa; estadísticas para anotar (media, mediana, dB de la media, p5, p95) |
+| `mascara_roi` | D | barras | % de la ventana de la ROI en cada categoría de la máscara y % de válidos en el polígono |
+| `incidencia_por_altura` | E | línea | Ángulo de incidencia medio en la ROI por capa de altura del cubo |
+
+- Los mapas (A, B, D, E) no van en `graficas.json`: en la web se muestran como capas (`web/`).
+- En el histograma se quitan los bins vacíos de los extremos sin perder conteos: `sum(conteos) == total_en_rango`. Los píxeles válidos fuera de −60…30 dB se cuentan en `fuera_de_rango`. Como la figura PNG usa el mismo rango, tampoco aparecen en ella.
+- No lleva colores ni opciones de Chart.js: la presentación la decide el frontend.
+
+Formato completo, ejemplo de Chart.js y propuesta de modelo en la base (P4) y librería (P5/P6): [p1-graficas-chartjs.md](p1-graficas-chartjs.md).
 
 ## 5. Cómo la consume la interfaz web
 
@@ -159,17 +180,20 @@ Con TiTiler también se pueden pedir valores por punto (`/cog/point/{lon},{lat}`
 
 **Ficha de la escena.** El bloque `escena` del manifiesto tiene los campos del tipo `EscenaNisar` del frontend (`granuleId`, `producto`, `crid`, dirección, madurez), leídos del `.h5` y del catálogo, no escritos a mano. `procedencia` y `version_codigo` sirven para mostrar de dónde sale cada imagen (AGENTS.md §2.3). Las `advertencias` deben mostrarse junto a la capa.
 
+**Gráficas.** Leer la ruta `graficas` del manifiesto y dibujar cada entrada con Chart.js (ejemplo en [p1-graficas-chartjs.md](p1-graficas-chartjs.md) §4). Mostrar unidad, fecha y escena en cada gráfica.
+
 **Relación con los contratos.** El manifiesto es una **propuesta de P1** para la vista de inspección; no reemplaza a C2 (resultados de cambio) ni a C4 (API). Cuando P4 defina la API, puede exponerlo tal cual (por ejemplo, `GET /api/scenes/{id}/explore`) o cargarlo en el modelo `Scene`. Si P4/P5 piden otro formato, se cambia aquí y se sube la `version`.
 
 ## 6. Tiempos y límites
 
-- Remoto, sin vista general: ~3 min 45 s por escena (medido, §7). Salida: ~500 MB por escena (`geotiff/` ~410 MB, `web/` ~86 MB, figuras ~1 MB).
+- Remoto, sin vista general: ~3 min 45 s por escena (medido, §7). Salida: ~500 MB por escena (`geotiff/` ~410 MB, `web/` ~86 MB, figuras ~1 MB, `graficas.json` ~30 KB).
 - **Vista general (figura A) en remoto:** toma 1 de cada 50 píxeles de toda la escena, pero esos píxeles caen en casi todos los bloques del archivo, así que obligaría a bajar casi toda la capa (varios GB). Por eso se omite salvo con `--vista-remota`.
 - Cada ejecución remota vuelve a bajar los bloques de la ROI; no reutiliza `data/raw/` porque también necesita el cubo de incidencia y los metadatos del `.h5`.
 - La escala por defecto (percentiles 2–98) es **de cada escena**: sirve para ver una fecha, no para comparar dos (usar `--escala-web`).
 - Las vistas reducidas del COG usan vecino más cercano: no promedian dB. Para estadísticas, usar la resolución completa.
 - En modo local, `madurez_catalogo` queda en `null`: el `.h5` no la trae y no se deduce del CRID (AGENTS.md §5).
 - `data/` no va a git: cada quien genera `data/explore/` con los comandos de §2, o se comparte por fuera.
+- Las carpetas generadas antes del 2026-11-15 no tienen `graficas.json`: el histograma no se guardaba, solo se dibujaba. Hay que volver a correr `etapa1`, que sobrescribe los archivos con el mismo nombre de esa carpeta.
 
 ## 7. Verificación
 
@@ -182,6 +206,8 @@ Con TiTiler también se pueden pedir valores por punto (`/cog/point/{lon},{lat}`
 | `test_remote_run_by_scene_id` | El `scene_id` se resuelve en el catálogo y se abre su URL con caché de bloques; la procedencia queda en `metadatos.json`; los valores son idénticos a los del modo local |
 | `test_remote_identity_mismatch_stops` | Si el archivo no es la escena del catálogo, se detiene |
 | `test_missing_h5_path_is_an_error` | Una ruta `.h5` inexistente da error claro (no se confunde con un `scene_id`) |
+| `test_chart_data_matches_figure_inputs` | `graficas.json` tiene las 3 gráficas; los conteos del histograma más `fuera_de_rango` suman los píxeles válidos; máscara, incidencia y estadísticas coinciden con `metadatos.json`; `capas.json` apunta al archivo |
+| `test_histogram_chart_keeps_out_of_range_and_trims` | El recorte de bins vacíos no pierde conteos; una serie sin datos en el rango queda vacía |
 
 **Con datos reales (2026-11-14), escena t1 del par T62 (2026-06-18), en remoto:**
 
@@ -191,3 +217,5 @@ Con TiTiler también se pueden pedir valores por punto (`/cog/point/{lon},{lat}`
 - PNG web: 2750 × 1352 px; esquinas de lon −93.3924 a −92.8757 y lat 16.6536 a 16.8968, que coinciden con la ROI.
 - Percentiles 2–98 en dB: γ⁰ HH −13.7 a −1.0, γ⁰ HV −19.9 a −7.6, σ⁰ HH −15.3 a −2.5, σ⁰ HV −21.3 a −9.4. De ahí la escala común recomendada `--escala-web -22 0`.
 - Guía para el equipo: [guia-capas-web.md](guia-capas-web.md).
+
+**`graficas.json` con datos reales (2026-11-15), misma escena, en remoto:** 221 s. `estadisticas_roi`, `roi` e `incidencia` de `metadatos.json` salen idénticos a los de la corrida del 2026-11-14. Histograma de γ⁰: HH con 646 bins desde −34.6 dB y 936 píxeles por encima de 30 dB; HV con 710 bins desde −41.0 dB y 50 píxeles por encima de 30 dB. En ambos, los conteos más `fuera_de_rango` suman los 14 694 370 píxeles válidos.

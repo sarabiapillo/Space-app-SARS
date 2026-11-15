@@ -19,7 +19,9 @@ No modifica el .h5. Escribe en data/explore/<granuleId>/:
     LEEME_validacion.txt  comprobaciones para hacer a mano, con los valores a comparar
     geotiff/              potencia lineal (resolución del producto) y dB tras multilook; máscara;
                           en GCOV también σ⁰, el factor γ⁰→σ⁰ y el número de looks
-    figuras/              vista general, ROI en dB, histogramas, máscara, ángulo de incidencia
+    figuras/              vista general, ROI en dB, histogramas, máscara, ángulo de incidencia (matplotlib)
+    graficas.json         números de las gráficas que son series (histogramas, máscara, incidencia por
+                          altura) para dibujarlas en la web con Chart.js. Ver pipeline/graficas_datos.py
     control/              píxeles al azar y un bloque de multilook, para recalcular a mano
     web/                  capas para la interfaz web: COG (TiTiler), PNG en EPSG:3857 (MapLibre)
                           y capas.json (manifiesto). Ver pipeline/web_export.py
@@ -41,6 +43,7 @@ import rasterio
 import yaml
 from rasterio.features import geometry_mask
 
+from . import graficas_datos as gd
 from . import nisar_h5 as nh
 from . import web_export as web
 from .catalog import code_version
@@ -250,7 +253,7 @@ def main(argv=None) -> Path:
 
         # 4. Por capa: potencia, dB, multilook, estadísticas ---------------------------------
         quantities = [q, "sigma0"] if is_gcov else [q]
-        stats, hist, ml_db, ctrl, block_rows, attrs_check = {}, {}, {}, {}, {}, {}
+        stats, hist, hist_out, ml_db, ctrl, block_rows, attrs_check = {}, {}, {}, {}, {}, {}, {}
         for layer in grid.layers:
             t0 = time.time()
             ds = g[layer]
@@ -274,8 +277,10 @@ def main(argv=None) -> Path:
                                          {**tags, "escala": f"10*log10(promedio lineal {n}x{n})"}))
                 if name == q:
                     db_full = nh.to_db(arr)
-                    hist[layer] = np.histogram(db_full[np.isfinite(db_full)], bins=HIST_EDGES)[0]
-                    del db_full
+                    db_ok = db_full[np.isfinite(db_full)]
+                    hist[layer] = np.histogram(db_ok, bins=HIST_EDGES)[0]
+                    hist_out[layer] = int(db_ok.size - hist[layer].sum())   # válidos fuera de HIST_EDGES
+                    del db_full, db_ok
                     if block:
                         i, j = block
                         block_rows[layer] = {"valores": arr[i * n:(i + 1) * n, j * n:(j + 1) * n],
@@ -447,6 +452,8 @@ def main(argv=None) -> Path:
         "duracion_s": round(time.time() - t_start, 1),
         "advertencias": warnings,
     }
+    meta["graficas"] = write_charts(out, ident, grid, q, sym, hist, hist_out, stats, mask_counts,
+                                    valid_in_polygon, inc, origen)
     (out / "metadatos.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=json_default),
                                         encoding="utf-8")
     write_readme(out, meta, grid)
@@ -454,6 +461,24 @@ def main(argv=None) -> Path:
     return out
 
 
+
+
+def write_charts(out: Path, ident: dict, grid: nh.Grid, q: str, sym: str, hist: dict, hist_out: dict,
+                 stats: dict, mask_counts: dict, valid_in_polygon: float, inc: dict, origen: dict) -> str:
+    """graficas.json: los números de las gráficas que son series (para Chart.js y la base de datos)."""
+    charts = [
+        gd.histogram_chart(q, sym, hist, HIST_EDGES, {k: v[q] for k, v in stats.items()}, hist_out),
+        gd.mask_chart(mask_counts, valid_in_polygon),
+        gd.incidence_chart(inc["media_por_altura"], inc["unidades"], inc["altura_m"]),
+    ]
+    cat = origen.get("catalogo_escena", {})
+    scene = {"granuleId": ident.get("granuleId"), "producto": grid.product,
+             "fecha_inicio": ident.get("zeroDopplerStartTime"), "trayectoria": ident.get("trackNumber"),
+             "marco": ident.get("frameNumber"), "direccion": ident.get("orbitPassDirection"),
+             "crid": ident.get("compositeReleaseId"), "madurez_catalogo": cat.get("madurez"),
+             "frecuencia": grid.frequency, "polarizaciones": list(grid.polarizations)}
+    data = gd.build(scene, code_version(), charts, {"metadatos": _rel(out / "metadatos.json")})
+    return _rel(gd.write(out / "graficas.json", data))
 
 
 def export_web(out: Path, ident: dict, grid: nh.Grid, win: nh.Window, n: int, ml_db: dict, q: str, is_gcov: bool,
@@ -503,6 +528,7 @@ def export_web(out: Path, ident: dict, grid: nh.Grid, win: nh.Window, n: int, ml
         "procedencia": {k: v for k, v in origen.items() if k != "catalogo_escena"},
         "capas": layers,
         "figuras": sorted(_rel(p) for p in (out / "figuras").glob("*.png")),
+        "graficas": _rel(out / "graficas.json"),
         "metadatos": _rel(out / "metadatos.json"),
         "advertencias": [
             "Una sola fecha: sirve para ver la escena, no es un mapa de cambio.",

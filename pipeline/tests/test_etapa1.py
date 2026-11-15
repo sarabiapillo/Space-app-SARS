@@ -132,3 +132,55 @@ def test_missing_h5_path_is_an_error(gcov, tmp_path):
     _, cfg = gcov
     with pytest.raises(FileNotFoundError):
         run(tmp_path / "no_existe.h5", cfg, tmp_path)
+
+
+def test_chart_data_matches_figure_inputs(gcov, tmp_path):
+    """graficas.json guarda los mismos números que usan las figuras, sin perder conteos."""
+    path, cfg = gcov
+    out = run(path, cfg, tmp_path)
+    meta = json.loads((out / "metadatos.json").read_text(encoding="utf-8"))
+    data = json.loads((out / "graficas.json").read_text(encoding="utf-8"))
+    assert meta["graficas"].endswith("graficas.json")
+    assert data["escena"]["granuleId"] == meta["identificacion"]["granuleId"]
+    assert data["version_codigo"] == meta["version_codigo"]
+    charts = {c["id"]: c for c in data["graficas"]}
+    assert set(charts) == {"histograma_gamma0_dB", "mascara_roi", "incidencia_por_altura"}
+
+    h = charts["histograma_gamma0_dB"]
+    assert h["eje_x"]["unidad"] == "dB" and h["eje_x"]["ancho_bin"] == pytest.approx(0.1)
+    for s in h["series"]:
+        st = meta["estadisticas_roi"][s["nombre"]]["gamma0"]
+        # cada píxel válido con γ⁰ > 0 cae en un bin o en fuera_de_rango
+        assert sum(s["conteos"]) == s["total_en_rango"]
+        assert s["total_en_rango"] + s["fuera_de_rango"] == st["n_validos"] - st["n_ceros"]
+        if s["total_en_rango"]:
+            assert s["conteos"][0] > 0 and s["conteos"][-1] > 0      # recortado a bins con datos
+        else:
+            assert s["conteos"] == []                                 # el GCOV sintético queda > 30 dB
+        assert s["estadisticas"]["media_dB"] == st["media_dB"]
+
+    m = charts["mascara_roi"]
+    pct = meta["roi"]["pct_mascara_en_ventana"]
+    assert dict(zip(m["categorias"], m["series"][0]["valores"])) == pct
+    assert sum(m["series"][0]["valores"]) == pytest.approx(100)
+
+    inc = charts["incidencia_por_altura"]
+    by_h = meta["incidencia"]["media_en_roi_por_altura"]
+    assert inc["x"] == [0.0, 500.0, 1000.0]
+    assert inc["series"][0]["valores"] == [by_h[str(h)] if str(h) in by_h else by_h[h] for h in inc["x"]]
+    assert inc["eje_y"]["unidad"] == "degrees"
+
+    man = json.loads((out / "web" / "capas.json").read_text(encoding="utf-8"))
+    assert man["graficas"] == meta["graficas"]
+
+
+def test_histogram_chart_keeps_out_of_range_and_trims():
+    from pipeline import graficas_datos as gd
+    edges = np.arange(-2.0, 2.0 + 0.5, 0.5)                     # 8 bins
+    counts = np.array([0, 0, 3, 0, 5, 1, 0, 0])
+    c = gd.histogram_chart("gamma0", "γ⁰", {"HHHH": counts}, edges, {"HHHH": {"media_dB": -1.0}}, {"HHHH": 2})
+    s = c["series"][0]
+    assert s["bin_inicio_dB"] == -1.0 and s["conteos"] == [3, 0, 5, 1]
+    assert s["total_en_rango"] == 9 and s["fuera_de_rango"] == 2
+    vacio = gd.histogram_chart("gamma0", "γ⁰", {"HHHH": np.zeros(8, int)}, edges, {"HHHH": {}}, {"HHHH": 4})
+    assert vacio["series"][0]["conteos"] == [] and vacio["series"][0]["fuera_de_rango"] == 4
