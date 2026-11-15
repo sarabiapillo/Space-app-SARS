@@ -23,12 +23,14 @@ import {
   CircleDot,
   Crosshair,
   Download,
+  Droplets,
   GripHorizontal,
   Hand,
   Monitor,
   Pencil,
   PencilRuler,
   Pentagon,
+  Plus,
   Tag,
   Terminal,
   Trash,
@@ -47,7 +49,6 @@ import {
   WARN_CIRCLE_DEFAULT_LABEL,
   WARN_CIRCLE_TOOLTIP,
   buildDg2EligibilityGeoJSON,
-  type CenterDockTab,
   type Dg2SectorId,
   type ExploreDateViewMode,
   type ExploreLayerId,
@@ -62,6 +63,8 @@ import {
 import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
 import type {
+  DockWindow,
+  DockWindowKind,
   DrawTool,
   EscenaNisar,
   LngLat,
@@ -99,8 +102,12 @@ interface MapCanvasProps {
   onAnnotationsChange: (next: MapAnnotation[]) => void
   onCropRegionChange: (polygon: LngLat[] | null) => void
   onSolarChange: (next: SolarSimulationState) => void
-  activeDockTab: CenterDockTab
-  onDockTabChange: (tab: CenterDockTab) => void
+  /** Ventanas acoplables del área central (mapa o agua/DG2) y su ventana activa. */
+  dockWindows: DockWindow[]
+  activeDockWindowId: string
+  onActivateDockWindow: (id: string) => void
+  onCloseDockWindow: (id: string) => void
+  onOpenDockWindow: (kind: DockWindowKind) => void
   floatingToolsOpen: boolean
   onToggleFloatingTools: () => void
   isCaptureMode: boolean
@@ -269,8 +276,11 @@ export function MapCanvas({
   onAnnotationsChange,
   onCropRegionChange,
   onSolarChange,
-  activeDockTab,
-  onDockTabChange,
+  dockWindows,
+  activeDockWindowId,
+  onActivateDockWindow,
+  onCloseDockWindow,
+  onOpenDockWindow,
   floatingToolsOpen,
   onToggleFloatingTools,
   isCaptureMode,
@@ -292,6 +302,8 @@ export function MapCanvas({
   // Estado del cuadro flotante arrastrable de herramientas de dibujo
   const [toolboxPos, setToolboxPos] = useState<{ x: number; y: number }>({ x: 14, y: 14 })
   const [toolboxCollapsed, setToolboxCollapsed] = useState(false)
+  // Menú del botón «+» para agregar ventanas al área central
+  const [newWindowMenuOpen, setNewWindowMenuOpen] = useState(false)
   const toolboxDragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
   const [isDraggingToolbox, setIsDraggingToolbox] = useState(false)
 
@@ -1343,11 +1355,37 @@ export function MapCanvas({
     })
   }
 
-  // Sincronizar polígonos vectoriales de elegibilidad no urbana cuando está activa la pestaña Simulación Lluvia / DG2
+  // Ventana activa del área central: define la vista y la etiqueta de la pestaña.
+  const activeDockWindow = dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
+  const isDg2 = activeDockWindow?.kind === 'agua'
+  const activeDockLabel = activeDockWindow
+    ? activeDockWindow.kind === 'agua'
+      ? `Agua / DG2 ${activeDockWindow.index}`
+      : `Graphics / Map Plot ${activeDockWindow.index}`
+    : 'Graphics / Map Plot 1'
+
+  // Cerrar el menú de «+» al hacer clic fuera o con Escape.
+  useEffect(() => {
+    if (!newWindowMenuOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target?.closest('.ws-panel-tab-add-wrap')) setNewWindowMenuOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNewWindowMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [newWindowMenuOpen])
+
+  // Sincronizar polígonos vectoriales de elegibilidad no urbana cuando está activa la ventana de agua/DG2
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-    const isDg2 = activeDockTab === 'rain-dg2'
     const visibility = isDg2 ? 'visible' : 'none'
     try {
       if (map.getLayer(DG2_FILL_LAYER)) {
@@ -1363,7 +1401,7 @@ export function MapCanvas({
     } catch {
       // Ignorar si el estilo aún no termina de cargar
     }
-  }, [mapReady, activeDockTab, dg2SectorId])
+  }, [mapReady, isDg2, dg2SectorId])
 
   // Sombreado direccional de radiación solar con los stops exactos de Inferno
   const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
@@ -1524,19 +1562,104 @@ export function MapCanvas({
 
   return (
     <main className="ws-center-dock" aria-label="Área Central de Estación de Trabajo">
-      {/* 1. Cabecera de pestañas acopladas (SAR Map Plot | Gráficas Etapa 1 | Lluvia / DG2) */}
-      <div className="ws-panel-tabbar" role="tablist" aria-label="Vistas del área central">
+      {/* 1. Cabecera de ventanas acopladas (Map Plots y ventanas de agua/DG2) + botón «+» */}
+      <div className="ws-panel-tabbar" role="tablist" aria-label="Ventanas del área central">
         <div className="ws-panel-tabbar__tabs">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeDockTab === 'map'}
-            className={`ws-panel-tab ${activeDockTab === 'map' ? 'is-active' : ''}`}
-            onClick={() => onDockTabChange('map')}
-          >
-            <Monitor size={13} aria-hidden="true" />
-            <span>Graphics / Map Plot 1</span>
-          </button>
+          {dockWindows.map((win) => {
+            const isActive = win.id === activeDockWindow?.id
+            const isAgua = win.kind === 'agua'
+            const label = isAgua
+              ? `Agua / DG2 ${win.index}`
+              : `Graphics / Map Plot ${win.index}`
+            return (
+              <div
+                key={win.id}
+                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${
+                  isActive ? ' is-active' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${
+                    isActive ? ' is-active' : ''
+                  }`}
+                  title={label}
+                  onClick={() => onActivateDockWindow(win.id)}
+                >
+                  {isAgua ? (
+                    <Droplets size={13} aria-hidden="true" />
+                  ) : (
+                    <Monitor size={13} aria-hidden="true" />
+                  )}
+                  <span>{label}</span>
+                </button>
+                <button
+                  type="button"
+                  className="ws-panel-tab__close"
+                  aria-label={`Cerrar ${label}`}
+                  title={
+                    dockWindows.length <= 1
+                      ? 'Debe quedar al menos una ventana'
+                      : `Cerrar ${label}`
+                  }
+                  disabled={dockWindows.length <= 1}
+                  onClick={() => onCloseDockWindow(win.id)}
+                >
+                  <X size={11} aria-hidden="true" />
+                </button>
+              </div>
+            )
+          })}
+
+          <div className="ws-panel-tab-add-wrap">
+            <button
+              type="button"
+              className="ws-panel-tab-add"
+              aria-label="Agregar ventana"
+              aria-haspopup="menu"
+              aria-expanded={newWindowMenuOpen}
+              title="Agregar ventana"
+              onClick={() => setNewWindowMenuOpen((prev) => !prev)}
+            >
+              <Plus size={13} aria-hidden="true" />
+            </button>
+            {newWindowMenuOpen && (
+              <div className="ws-window-menu" role="menu" aria-label="Tipo de ventana">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ws-window-menu__item"
+                  onClick={() => {
+                    onOpenDockWindow('map')
+                    setNewWindowMenuOpen(false)
+                  }}
+                >
+                  <Monitor size={13} aria-hidden="true" />
+                  <span>
+                    Mapa normal
+                    <em>Graphics / Map Plot</em>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ws-window-menu__item"
+                  onClick={() => {
+                    onOpenDockWindow('agua')
+                    setNewWindowMenuOpen(false)
+                  }}
+                >
+                  <Droplets size={13} aria-hidden="true" />
+                  <span>
+                    Ventana de agua
+                    <em>Agua / DG2</em>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="ws-panel-tabbar__summary">
@@ -1575,7 +1698,7 @@ export function MapCanvas({
           <div
             className="ws-graphics-toolbar"
             role="toolbar"
-            aria-label="Barra de acciones del lienzo Graphics / Map Plot 1"
+            aria-label={`Barra de acciones del lienzo ${activeDockLabel}`}
           >
             <div className="ws-graphics-toolbar__group">
               <button
@@ -2570,7 +2693,7 @@ export function MapCanvas({
         )}
 
         {/* Panel superpuesto compacto y colapsable de Simulación Lluvia / DG2 sobre el mapa */}
-        {activeDockTab === 'rain-dg2' && (
+        {isDg2 && (
           <RainDg2Panel
             escena={escena}
             selectedSectorId={dg2SectorId}
@@ -2579,7 +2702,7 @@ export function MapCanvas({
         )}
 
         {/* Panel derecho acoplable/flotante de Simulación Solar */}
-        {solar.enabled && activeDockTab === 'map' && (
+        {solar.enabled && !isDg2 && (
           <RightPanel
             solar={solar}
             onSolarChange={onSolarChange}
