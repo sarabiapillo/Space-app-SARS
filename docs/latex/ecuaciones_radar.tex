@@ -17,7 +17,8 @@ electromagnética (ecuaciones de Maxwell, propagación y dispersión de microond
 reúne las ecuaciones que intervienen en el flujo de TerraPulse AI: la ecuación del radar, la
 normalización de la retrodispersión, la conversión a decibeles y el cambio entre fechas. También
 incluye los modelos de dispersión que sirven para \emph{interpretar} un cambio y la relación
-interferométrica que solo aplicaría si el caso de estudio fuera deformación.
+interferométrica que solo aplicaría si el caso de estudio fuera deformación. La sección~\ref{sec:figuras} explica, figura por
+figura, qué ecuaciones producen las imágenes de la Etapa 1 (\path{data/explore/.../figuras/}).
 \end{abstract}
 
 \section{Ecuación del radar}
@@ -124,6 +125,227 @@ vista $\Delta R$:
 \end{equation}
 El signo depende de la convención del producto (GUNW). El resultado es un desplazamiento en línea
 de vista, no vertical.
+
+\section{Ecuaciones de las figuras de la Etapa 1}
+\label{sec:figuras}
+
+Las figuras están en
+\path{data/explore/NISAR_L2_PR_GCOV_034_062_A_010_4005_DHDH_A_20261028T114006_20261028T114041_P05036_N_F_J_001/figuras/}.
+Son de la escena GCOV T62/F10 ASCENDING del 2026-10-28 (P05036), la que se inspeccionó en la Etapa 1 y no tiene pareja. Las genera
+\path{python -m pipeline.etapa1} con las funciones de \path{pipeline/etapa1_figuras.py}. Las fórmulas están en
+\path{pipeline/nisar_h5.py} y \path{pipeline/etapa1.py}.
+
+\paragraph{Trazabilidad.} Los valores numéricos de esta sección se copiaron de \path{metadatos.json} de esa misma carpeta (creado el
+2026-11-13, \texttt{version\_codigo = 98f7e07-dirty}). El sufijo \texttt{-dirty} indica que había cambios sin commit cuando se generó;
+para citar estas cifras conviene regenerar la carpeta con el árbol de git limpio.
+
+\paragraph{Regla.} Las figuras son para \emph{ver}. Ningún número se calcula sobre los PNG (\texttt{AGENTS.md} §5): todo sale del
+\texttt{.h5} y queda en \path{metadatos.json} y \path{control/*.csv}.
+
+\subsection{Pasos comunes a todas las figuras}
+
+\paragraph{Potencia del producto.} En GCOV las capas \texttt{HHHH} y \texttt{HVHV} ya son potencia lineal en la convención que declara
+el archivo (\path{rtc/outputBackscatterNormalizationConvention = gamma0}). El programa no la transforma:
+\begin{equation}
+  \gamma^0_{pq}(x,y) = \texttt{capa}_{pqpq}(x,y), \qquad pq \in \{\text{HH}, \text{HV}\}.
+\end{equation}
+
+\paragraph{De \gz{} a \sz.} Con la capa \path{rtcGammaToSigmaFactor} ($F$) que trae el producto, píxel a píxel:
+\begin{equation}
+  \sigma^0(x,y) = \gamma^0(x,y)\, F(x,y).
+  \label{eq:gamma-sigma}
+\end{equation}
+En terreno plano, por la sección 2, se esperaría $F \approx \cos\theta_i$. El producto calcula $F$ con el modelo de elevación, por lo
+que en relieve no es exactamente $\cos\theta_i$.
+
+\paragraph{Píxeles válidos.} Un píxel entra al análisis si su máscara no es 0 (no válido) ni 255 (fuera de la adquisición) y si cae
+dentro del polígono de la ROI:
+\begin{equation}
+  \text{válido}(x,y) \iff \texttt{mask}(x,y) \notin \{0, 255\} \;\wedge\; (x,y) \in \text{ROI}.
+\end{equation}
+Los demás se ponen en NaN.
+
+\paragraph{Decibeles.} Se usa la ecuación~\eqref{eq:db}. Si $X \le 0$ o es NaN, el resultado es NaN (no se toma el logaritmo de
+cero).
+
+\paragraph{Multilook $n\times n$.} Se promedia en \emph{lineal} y después se pasa a dB. Para el bloque $B$ de $n\times n$ píxeles, con
+$N_v$ píxeles válidos:
+\begin{equation}
+  \bar{P}_B = \frac{1}{N_v}\sum_{k \in B,\ \text{válido}} P_k,
+  \qquad
+  \bar{P}_{B,\text{dB}} = 10\log_{10}\bar{P}_B,
+  \qquad
+  \bar{P}_B = \text{NaN si } N_v < 0.5\,n^2 .
+  \label{eq:multilook}
+\end{equation}
+\textbf{En qué se basa:} el moteado (\emph{speckle}) del radar es multiplicativo. Promediar potencias reduce su varianza sin sesgo,
+mientras que promediar dB da un valor sistemáticamente menor (ver la figura C). En la Etapa 1, $n = 2$ para GCOV.
+
+\subsection{\texttt{A\_vista\_general\_HHHH.png}: vista general de la escena}
+
+\textbf{Qué muestra:} \gz{} HH en \emph{lineal} sobre toda la escena (33\,480\,\por\,34\,128 píxeles de 10\,m), con el contorno de la
+ROI en rojo. Azul = sin dato. Función: \path{overview()}.
+
+\textbf{Submuestreo.} Se toma 1 de cada $s = 50$ píxeles en filas y columnas, sin promediar (cada punto de la vista representa 500\,m):
+\begin{equation}
+  v_{ij} = \gamma^0_{\text{HH}}(s\,i,\ s\,j).
+\end{equation}
+Por eso la vista conserva el moteado: es una muestra, no un promedio.
+
+\textbf{Normalización del color (\texttt{PowerNorm}).} Con los percentiles 5 y 95 de la vista, $p_b$ y $p_a$, y $\gamma_v = 0.5$:
+\begin{equation}
+  t = \left[\operatorname{clip}\!\left(\frac{v - p_b}{p_a - p_b},\, 0,\, 1\right)\right]^{\gamma_v},
+\end{equation}
+donde $t\in[0,1]$ es el tono de gris (0 negro, 1 blanco). Las marcas de la barra de color están equiespaciadas en $t$, por eso valen
+\begin{equation}
+  v(t) = p_b + (p_a - p_b)\, t^{1/\gamma_v}, \qquad t = 0,\ 0.2,\ \ldots,\ 1 .
+\end{equation}
+
+\textbf{Valores de esta figura:} $p_b = 0.0306$, $p_a = 0.5458$; marcas 0.031, 0.051, 0.113, 0.216, 0.360, 0.546. Comprobación:
+$v(0.2) = 0.0306 + 0.5152\cdot 0.2^{2} = 0.0512$.
+
+\textbf{En qué se basa:} $\gamma_v < 1$ aclara los valores bajos para que se distingan las zonas oscuras. Es solo visualización: este
+$\gamma_v$ no es la $\gamma$ de \gz.
+
+\subsection{\texttt{B\_roi\_gamma0\_dB.png}: ROI en dB (\gz)}
+
+\textbf{Qué muestra:} \gz{} HH y HV dentro de la ventana de la ROI, en dB tras multilook $2\times2$ (píxel de 20\,m). Función:
+\path{roi_db()}.
+
+\textbf{Ecuaciones:} multilook~\eqref{eq:multilook} con $n = 2$ y después dB~\eqref{eq:db}.
+
+\textbf{Escala común.} Ambas polarizaciones usan el mismo rango de color, los percentiles 2 y 98 de los valores en dB de \emph{las dos}
+juntas, para que sus tonos sean comparables. En esta figura: $-19.36$ a $-3.10$\,dB.
+
+\textbf{Lectura:} HV se ve más oscura que HH porque la retrodispersión con polarización cruzada suele ser menor. En la ROI, la media de
+los dB es $-8.06$\,dB en HH y $-13.50$\,dB en HV (tabla de la figura C).
+
+\subsection{\texttt{B2\_roi\_sigma0\_dB.png}: ROI en dB (\sz)}
+
+\textbf{Qué muestra:} lo mismo que la figura B, pero con \sz{} calculada con~\eqref{eq:gamma-sigma} antes del multilook. Escala común:
+$-20.91$ a $-4.54$\,dB.
+
+\textbf{Relación con B:} en dB, la conversión es una suma,
+\begin{equation}
+  \sigma^0_{\text{dB}} = \gamma^0_{\text{dB}} + 10\log_{10} F .
+\end{equation}
+\textbf{Comprobación de orden de magnitud:} en la ROI la media de los dB de HH pasa de $-8.06$ (\gz) a $-9.79$ (\sz), una diferencia de
+$-1.73$\,dB. Con el ángulo de incidencia medio de la ROI (figura E, $43.9^\circ$), terreno plano daría
+$10\log_{10}\cos 43.9^\circ \approx -1.43$\,dB. Son del mismo orden; la diferencia es esperable porque $F$ incluye el relieve.
+
+\subsection{\texttt{C\_histogramas\_gamma0\_dB.png}: histogramas de \gz{} en dB}
+
+\textbf{Qué muestra:} la distribución de \gz{} en dB en la \emph{resolución completa} del producto (sin multilook), para todos los
+píxeles válidos de la ROI ($n = 14\,699\,442$ por polarización). Función: \path{histograms()}; estadísticas: \path{power_stats()}.
+
+\textbf{Histograma.} Clases de 0.1\,dB entre $-60$ y $30$\,dB. El eje vertical es el porcentaje de píxeles en cada clase:
+\begin{equation}
+  h_k = 100\,\frac{\#\{\,i : \gamma^0_{\text{dB},i} \in [a_k, a_k + 0.1)\,\}}{n}\ \%.
+\end{equation}
+El eje horizontal se recorta a los percentiles 0.2 y 99.8 de la distribución acumulada, solo para verla mejor.
+
+\textbf{Líneas y franja.} Con $P_i$ la potencia lineal y $D_i = 10\log_{10}P_i$:
+\begin{align}
+  \text{media de los dB} &= \frac{1}{n}\sum_i D_i, \\
+  \text{dB de la media lineal} &= 10\log_{10}\!\left(\frac{1}{n}\sum_i P_i\right), \\
+  \text{mediana} &= \operatorname{mediana}(D_i), \qquad \text{franja azul} = [\,p_5(D),\ p_{95}(D)\,].
+\end{align}
+
+\textbf{En qué se basa: desigualdad de Jensen.} Como el logaritmo es cóncavo,
+\begin{equation}
+  \frac{1}{n}\sum_i 10\log_{10}P_i \;\le\; 10\log_{10}\!\left(\frac{1}{n}\sum_i P_i\right).
+\end{equation}
+Por eso la línea punteada (dB de la media) siempre queda a la derecha de la continua (media de los dB). Como referencia teórica, si
+$P$ siguiera una distribución exponencial (moteado completamente desarrollado, un solo look, superficie homogénea), la diferencia
+sería exactamente $10\log_{10}(e)\cdot\gamma_E \approx 2.51$\,dB, con $\gamma_E \approx 0.5772$ la constante de Euler--Mascheroni.
+Con varios looks esa diferencia es menor.
+
+\textbf{Valores de esta figura:}
+
+\begin{longtable}{lrr}
+\toprule
+ & \textbf{HH} & \textbf{HV} \\
+\midrule
+Media de los dB & $-8.055$ & $-13.503$ \\
+Mediana (dB) & $-7.880$ & $-13.173$ \\
+dB de la media lineal & $-3.786$ & $-9.226$ \\
+Diferencia (dB de la media $-$ media de los dB) & $4.27$ & $4.28$ \\
+$p_5$ a $p_{95}$ (dB) & $-14.07$ a $-2.85$ & $-20.00$ a $-8.11$ \\
+Desviación estándar (dB) & $3.59$ & $3.73$ \\
+\bottomrule
+\end{longtable}
+
+\textbf{Lectura (inferencia, no medición):} la diferencia observada ($\approx 4.3$\,dB) es mayor que la del moteado puro (2.51\,dB).
+Lo esperable es que se deba a que la ROI mezcla coberturas distintas y tiene algunos píxeles muy brillantes que elevan la media lineal
+(el máximo de HH en la escena completa es 7418, según los atributos del \texttt{.h5}). No se ha verificado cuál de los dos efectos
+domina.
+
+\subsection{\texttt{D\_mascara.png}: máscara del producto}
+
+\textbf{Qué muestra:} las categorías de la capa \texttt{mask} en la ventana rectangular de la ROI. Función: \path{mask_map()}.
+
+\begin{longtable}{p{0.40\linewidth}p{0.20\linewidth}p{0.28\linewidth}}
+\toprule
+\textbf{Categoría} & \textbf{Regla} & \textbf{\% de la ventana} \\
+\midrule
+No válido (rojo) & $\texttt{mask} = 0$ & 0.391 \\
+Válido, subfranja (verde) & $\texttt{mask} \notin \{0,255\}$ & 99.393 \\
+Fuera de la adquisición (azul) & $\texttt{mask} = 255$ & 0.000 \\
+Fuera del polígono ROI (gris) & fuera del polígono & 0.217 \\
+\bottomrule
+\end{longtable}
+
+\textbf{Porcentajes.} Se calculan con \emph{todos} los píxeles de la ventana ($N = 2687 \times 5504$), aunque la imagen muestre solo 1
+de cada $s$ píxeles, con $s = \lceil \max(\text{forma}) / 2000 \rceil = \lceil 5504/2000 \rceil = 3$:
+\begin{equation}
+  \%_c = 100\,\frac{N_c}{N}.
+\end{equation}
+
+\textbf{Relación con la cobertura de la ROI.} La cobertura que se reporta en otros documentos (99.61\,\%) se mide sobre el
+\emph{polígono}, no sobre el rectángulo:
+\begin{equation}
+  \text{cobertura} = 100\,\frac{N_{\text{válido}}}{N_{\text{polígono}}}
+  = \frac{99.393}{100 - 0.217}\times 100 \approx 99.61\,\%.
+\end{equation}
+
+\textbf{Precaución:} la máscara indica \emph{dónde} no hay dato válido, no \emph{por qué}. En esta escena el producto no aplica
+máscara de sombra/layover (\path{shadowMaskingApplied = False}), así que esas zonas no están necesariamente en rojo.
+
+\subsection{\texttt{E\_incidencia.png}: ángulo de incidencia}
+
+\textbf{Qué muestra:} el ángulo de incidencia $\theta_i$ sobre la ROI, leído del cubo \path{metadata/radarGrid/incidenceAngle} del
+producto (malla de 500\,m). Función: \path{incidence()}; lectura: \path{read_incidence()} en \path{nisar_h5.py}.
+
+\textbf{Cálculo.} El programa no calcula el ángulo: lo lee del producto. El cubo trae una capa por altura sobre el elipsoide; se elige
+la capa más cercana a la altura pedida ($h_0 = 500$\,m, opción \path{--altura-incidencia}):
+\begin{equation}
+  k^\ast = \arg\min_k \lvert h_k - h_0 \rvert .
+\end{equation}
+
+\textbf{Valores:} $\theta_i$ va de $42.34^\circ$ a $45.41^\circ$ en la ROI y aumenta hacia el oeste (hacia el alcance lejano). La media
+en la ROI cambia muy poco con la altura de la capa: $43.87^\circ$ a 0\,m y $43.89^\circ$ a 500\,m.
+
+\textbf{Para qué sirve:} $\theta_i$ es la variable de las secciones 2 y 5. Relaciona \gz{} con \sz{} en terreno plano y entra en el
+criterio de Rayleigh. Con $\lambda \approx 24$\,cm y $\theta_i \approx 44^\circ$, una superficie se comporta como lisa si
+$h < 0.24/(8\cos 44^\circ) \approx 4$\,cm.
+
+\subsection{Resumen: qué ecuación usa cada figura}
+
+\begin{longtable}{p{0.30\linewidth}p{0.62\linewidth}}
+\toprule
+\textbf{Figura} & \textbf{Ecuaciones} \\
+\midrule
+\endhead
+\texttt{A\_vista\_general\_HHHH} & Submuestreo 1 de cada 50; \texttt{PowerNorm} con percentiles 5--95 y $\gamma_v = 0.5$ (solo color). Sin dB. \\
+\texttt{B\_roi\_gamma0\_dB} & Multilook $2\times2$ en lineal~\eqref{eq:multilook} \flecha{} dB~\eqref{eq:db}; escala común percentiles 2--98. \\
+\texttt{B2\_roi\_sigma0\_dB} & $\sigma^0 = \gamma^0 F$~\eqref{eq:gamma-sigma} \flecha{} multilook \flecha{} dB. \\
+\texttt{C\_histogramas\_gamma0\_dB} & dB por píxel; histograma de 0.1\,dB; media, mediana, dB de la media, $p_5$--$p_{95}$; desigualdad de Jensen. \\
+\texttt{D\_mascara} & Clasificación por valor de \texttt{mask}; porcentajes sobre la ventana y cobertura sobre el polígono. \\
+\texttt{E\_incidencia} & Lectura de $\theta_i$ del producto en la capa de altura más cercana a 500\,m. \\
+\bottomrule
+\end{longtable}
+
+Ninguna figura usa ecuaciones de fluidos.
 
 \section{¿Dónde entrarían ecuaciones de fluidos?}
 
