@@ -130,6 +130,30 @@ def test_compare_grids_detects_shifted_grid(tmp_path):
     assert any("transform" in d for d in compare_grids(metas[0], metas[2]))
 
 
+def test_env_credentials_take_priority(monkeypatch):
+    from pipeline.sources.asf import login_strategies
+
+    monkeypatch.setenv("EARTHDATA_USERNAME", "usuario_prueba")
+    monkeypatch.setenv("EARTHDATA_PASSWORD", "x")
+    assert login_strategies() == ("environment", "netrc")
+    monkeypatch.delenv("EARTHDATA_PASSWORD")
+    assert login_strategies() == ("netrc", "environment")
+
+
+def test_env_file_does_not_override_system_env(tmp_path, monkeypatch):
+    from pipeline.sources.asf import load_env_file
+
+    env = tmp_path / ".env"
+    env.write_text("EARTHDATA_USERNAME=del_archivo\nEARTHDATA_PASSWORD='a@b.'\n", encoding="utf-8")
+    monkeypatch.setenv("EARTHDATA_USERNAME", "del_sistema")
+    monkeypatch.delenv("EARTHDATA_PASSWORD", raising=False)
+    assert load_env_file(env)
+    import os
+    assert os.environ["EARTHDATA_USERNAME"] == "del_sistema"   # el sistema gana
+    assert os.environ["EARTHDATA_PASSWORD"] == "a@b."           # comillas quitadas, @ y . intactos
+    assert load_env_file(tmp_path / "no_existe.env") is False
+
+
 def test_asf_local_h5_path(tmp_path):
     path, _ = make_gcov(tmp_path / "a.h5")
     out = ASFSource().fetch_subsets(scene(), ROI, ["HHHH"], tmp_path / "raw", local_h5=path)

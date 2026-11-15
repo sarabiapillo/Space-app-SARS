@@ -111,17 +111,43 @@ class ASFSource(DataSource):
 
 
 REMOTE_BLOCK_SIZE = 8 * 1024 * 1024   # 8 MiB por petición HTTP: menos viajes que el default de fsspec
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def load_env_file(path: Path = ENV_FILE) -> bool:
+    """Carga el .env de la raíz del repo sin pisar variables ya definidas en el sistema.
+
+    En un servidor, las variables de entorno reales (Docker, systemd, panel del hosting)
+    tienen prioridad sobre el archivo.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+    return load_dotenv(path, override=False) if Path(path).exists() else False
+
+
+def login_strategies() -> tuple[str, ...]:
+    """Orden de credenciales: variables EARTHDATA_* (si están las dos) y luego .netrc."""
+    import os
+
+    if os.environ.get("EARTHDATA_USERNAME") and os.environ.get("EARTHDATA_PASSWORD"):
+        return ("environment", "netrc")
+    return ("netrc", "environment")
 
 
 def earthdata_https_fs():
     """Sistema de archivos HTTPS autenticado con Earthdata.
 
-    Credenciales, en este orden: ~/.netrc (o %USERPROFILE%\\.netrc) y luego las variables
-    EARTHDATA_USERNAME / EARTHDATA_PASSWORD. Nunca se piden por consola ni se escriben.
+    Credenciales: EARTHDATA_USERNAME / EARTHDATA_PASSWORD (variables de entorno o el .env de
+    la raíz del repo) y, si no están, ~/.netrc (o %USERPROFILE%\\.netrc). Nunca se piden por
+    consola ni se imprimen.
     """
     import os
 
     import earthaccess
+
+    load_env_file()
 
     # En Windows earthaccess busca ~/_netrc, mientras que GDAL, asf_search y el README usan
     # ~/.netrc. Si solo existe .netrc, se le indica con NETRC (solo para este proceso).
@@ -130,7 +156,7 @@ def earthdata_https_fs():
         os.environ["NETRC"] = str(home / ".netrc")
 
     errors = []
-    for strategy in ("netrc", "environment"):
+    for strategy in login_strategies():
         try:
             auth = earthaccess.login(strategy=strategy)
         except Exception as err:   # el mensaje de earthaccess no incluye la contraseña
@@ -140,6 +166,6 @@ def earthdata_https_fs():
             return earthaccess.get_fsspec_https_session()
         errors.append(f"{strategy}: Earthdata rechazó el inicio de sesión (¿usuario o contraseña?)")
     raise RuntimeError(
-        "No se pudo iniciar sesión en Earthdata. Revisa %USERPROFILE%\\.netrc (README §7) "
-        "o define EARTHDATA_USERNAME y EARTHDATA_PASSWORD.\n  " + "\n  ".join(errors)
+        "No se pudo iniciar sesión en Earthdata. Define EARTHDATA_USERNAME y EARTHDATA_PASSWORD "
+        "en .env o en el entorno, o revisa %USERPROFILE%\\.netrc (README §7).\n  " + "\n  ".join(errors)
     )

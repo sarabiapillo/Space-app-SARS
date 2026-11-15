@@ -8,7 +8,7 @@ Proyecto para NASA Space Apps 2026 (*Be an Earth System Trend Detective*). Caso 
 
 > **Estado (2026-11-14):** hay un par GCOV comparable recortado a la ROI (T62/F10, 2026-06-18 → 2026-10-16, ~99.6 % de cobertura). Todavía no hay mapa de cambio ni validación. Detalle en [docs/metodologia.md](docs/metodologia.md).
 
-Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md).
+Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md). Adquisición de datos (P1), cómo correr los scripts y formato de los recortes: [docs/p1-datos.md](docs/p1-datos.md).
 
 Antes de contribuir, lee [AGENTS.md](AGENTS.md). Ahí están las reglas científicas y de trabajo del proyecto, que aplican a personas y a agentes de IA por igual.
 
@@ -130,11 +130,19 @@ Una sola cuenta **NASA Earthdata Login** da acceso a todo lo que usa el proyecto
 
 Recursos de agencias socias del reto (**opcionales**, no se usan hoy; ver [docs/metodologia.md](docs/metodologia.md)): **SAOCOM** (CONAE) requiere registrarse en su catálogo con un perfil *ONE CLICK*; **RCM** y **RADARSAT-1** (CSA) tienen sus propias condiciones de acceso. Son sitios no estadounidenses: cada uno tiene sus condiciones de uso de datos y hay que respetarlas.
 
-GDAL, `asf_search` y `earthaccess` se autentican con un archivo `.netrc` que vive en tu carpeta personal, **fuera del repositorio**.
+El pipeline acepta las credenciales de dos formas. Si están las dos, **gana `.env`**:
+
+- **`.env` (recomendado en servidor):** agrega a tu `.env` (ver paso 4)
+  ```
+  EARTHDATA_USERNAME=tu_usuario
+  EARTHDATA_PASSWORD='tu_contraseña'
+  ```
+  Usa comillas simples si la contraseña tiene caracteres especiales. En un servidor (Docker, EC2) es mejor definirlas como variables de entorno del sistema: las variables del sistema tienen prioridad y el archivo no las sobrescribe.
+- **`.netrc` (cómodo en tu computadora):** un archivo en tu carpeta personal, **fuera del repositorio**:
 
 1. Crea una cuenta en https://urs.earthdata.nasa.gov/ si aún no tienes una.
 2. Haz las autorizaciones de la tabla anterior (como mínimo, la de ASF).
-3. Crea el archivo con este contenido, usando tus datos:
+3. Si usas `.netrc`, créalo con este contenido, usando tus datos:
 
    ```
    machine urs.earthdata.nasa.gov login TU_USUARIO password TU_CONTRASEÑA

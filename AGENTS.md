@@ -211,6 +211,7 @@ Escribe `data/raw/<scene_id>/<capa>.tif` + `scene.json` (contrato C1) e imprime 
 ## 12. Seguridad
 
 - **Nunca** escribir en el repo ni en la salida credenciales de Earthdata, `.netrc`, tokens o contraseñas. Están en `.gitignore`.
+- Credenciales de Earthdata: `EARTHDATA_USERNAME` / `EARTHDATA_PASSWORD` en `.env` o como variables del sistema (tienen prioridad sobre `.netrc`). En el servidor, como variables del hosting, no en un archivo dentro de la imagen.
 - `.env` y `data/` no se suben a git.
 - Las credenciales de la base de datos en `docker-compose.yml` son solo para desarrollo local; en producción usar variables de entorno.
 - Respetar licencias y condiciones de acceso de los datos NISAR al exportar o publicar.
