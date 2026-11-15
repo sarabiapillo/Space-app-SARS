@@ -1,11 +1,17 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   GeoJSONSource,
   ImageSource,
   Map as MapLibreMap,
   MapMouseEvent,
-  Marker,
   NavigationControl,
   ScaleControl,
   type StyleSpecification,
@@ -17,6 +23,7 @@ import {
   Pentagon,
   Sun,
   Tag,
+  Trash,
   Undo2,
 } from 'lucide-react'
 import {
@@ -37,6 +44,7 @@ import {
   buildAnnotationsGeoJSON,
   buildDraftPolygonGeoJSON,
   buildInverseCropMaskGeoJSON,
+  createCirclePolygonCoords,
   distanceKm,
   getPolygonBoundsAndCentroid,
   interpolateThermalHighlight,
@@ -91,11 +99,6 @@ const DRAFT_POLY_FILL_LAYER = 'draft-polygon-fill'
 const DRAFT_POLY_LINE_LAYER = 'draft-polygon-line'
 const DRAFT_POLY_VERTEX_LAYER = 'draft-polygon-vertex'
 
-/**
- * 2. Estilo base seguro: únicamente `version: 8`, `glyphs`, la fuente `esri-satellite`
- * y su capa `raster` base. Todas las demás fuentes/capas se agregan en `map.on('load')`
- * dentro de bloques `try/catch` independientes.
- */
 const BASE_STYLE: StyleSpecification = {
   version: 8,
   glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -146,6 +149,12 @@ function projectLngLat(coord: LngLat, vp: ViewportMetrics): [number, number] {
   return [x, y]
 }
 
+function radiusKmForScreenPixels(targetRadiusPx: number, latDeg: number, zoom: number): number {
+  const latRad = (latDeg * Math.PI) / 180
+  const kmPerPixel = (40075.017 * Math.max(0.2, Math.cos(latRad))) / (512 * Math.pow(2, zoom))
+  return Number(Math.max(0.015, targetRadiusPx * kmPerPixel).toFixed(4))
+}
+
 function preloadImage(url: string): Promise<boolean> {
   return new Promise((resolve) => {
     const img = new Image()
@@ -162,11 +171,6 @@ function preloadImage(url: string): Promise<boolean> {
   })
 }
 
-/**
- * 3. Genera dinámicamente un DataURL en `<canvas>` con el patrón compuesto SAR
- * verde/magenta semitransparente para que la fuente `image` de MapLibre siempre
- * cargue al instante aunque no exista `/nisar_chiapas.jpg` en `public/`.
- */
 function createFallbackSarDataUrl(): string {
   const canvas = document.createElement('canvas')
   canvas.width = 512
@@ -174,7 +178,6 @@ function createFallbackSarDataUrl(): string {
   const ctx = canvas.getContext('2d')
   if (!ctx) return ''
 
-  // Base semitransparente SAR (banda L HH/HV)
   const baseGrad = ctx.createLinearGradient(0, 0, 512, 512)
   baseGrad.addColorStop(0, 'rgba(6, 78, 59, 0.48)')
   baseGrad.addColorStop(0.45, 'rgba(16, 185, 129, 0.36)')
@@ -183,7 +186,6 @@ function createFallbackSarDataUrl(): string {
   ctx.fillStyle = baseGrad
   ctx.fillRect(0, 0, 512, 512)
 
-  // Dispersión volumétrica verde (vegetación / relieve) y magenta (doble rebote HH)
   for (let i = 0; i < 32; i++) {
     const cx = (i * 79) % 512
     const cy = (i * 131) % 512
@@ -202,7 +204,6 @@ function createFallbackSarDataUrl(): string {
     ctx.fill()
   }
 
-  // Cuerpos de agua en calma (baja retrodispersión)
   ctx.fillStyle = 'rgba(2, 6, 23, 0.68)'
   ctx.beginPath()
   ctx.moveTo(95, 130)
@@ -242,6 +243,18 @@ function computeHillshadeParams(solar: SolarSimulationState): {
   return { direction, exaggeration, highlightColor }
 }
 
+/** Obtiene la coordenada representativa de una anotación para anclar su menú de acciones. */
+function getAnnotationAnchorCoord(ann: MapAnnotation): LngLat {
+  if (ann.kind === 'lapiz') {
+    const midIdx = Math.floor(ann.points.length / 2)
+    return ann.points[midIdx] ?? ann.points[0] ?? CHIAPAS_CENTRO
+  }
+  if (ann.kind === 'etiqueta') {
+    return ann.position
+  }
+  return [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
+}
+
 export function MapCanvas({
   view,
   viewKey,
@@ -258,7 +271,6 @@ export function MapCanvas({
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
-  const markersRef = useRef<Marker[]>([])
   const [mapReady, setMapReady] = useState(false)
   const [viewport, setViewport] = useState<ViewportMetrics>({
     centro: view.centro,
@@ -268,6 +280,7 @@ export function MapCanvas({
   })
 
   const [activeTool, setActiveTool] = useState<DrawTool>('mover')
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [draftFreehand, setDraftFreehand] = useState<LngLat[]>([])
   const [draftCircle, setDraftCircle] = useState<{
     kind: 'peligro' | 'advertencia'
@@ -281,6 +294,12 @@ export function MapCanvas({
     text: string
     targetAnnotationId: string | null
   } | null>(null)
+
+  // Anotación seleccionada activa (si fue borrada o se cambió de mapa, es `null`)
+  const selectedAnnotation =
+    isEditing && selectedAnnotationId
+      ? (annotations.find((a) => a.id === selectedAnnotationId) ?? null)
+      : null
 
   const viewRef = useRef(view)
   const opacityRef = useRef(opacity)
@@ -312,7 +331,42 @@ export function MapCanvas({
     onAnnotationsChangeRef.current = onAnnotationsChange
   })
 
-  // Inicialización de MapLibre GL, ResizeObserver y capas protegidas con try/catch
+  // Eliminar una anotación por su ID y limpiar selección
+  const handleDeleteAnnotation = useCallback(
+    (id: string) => {
+      onAnnotationsChange(annotations.filter((a) => a.id !== id))
+      setSelectedAnnotationId((prev) => (prev === id ? null : prev))
+      setLabelEditor((prev) => (prev?.targetAnnotationId === id ? null : prev))
+    },
+    [annotations, onAnnotationsChange],
+  )
+
+  // 2b & 2c. Atajos de teclado: Delete / Backspace para eliminar el seleccionado, Escape para deseleccionar
+  useEffect(() => {
+    if (!isEditing || !selectedAnnotation) return
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        handleDeleteAnnotation(selectedAnnotation.id)
+      } else if (e.key === 'Escape') {
+        setSelectedAnnotationId(null)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isEditing, selectedAnnotation, handleDeleteAnnotation])
+
+  // Inicialización de MapLibre GL
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -341,7 +395,6 @@ export function MapCanvas({
       })
     }
 
-    // 1. Garantizar que el canvas de WebGL tome el ancho y alto reales
     const rafId = window.requestAnimationFrame(() => {
       map.resize()
       syncViewport()
@@ -354,6 +407,9 @@ export function MapCanvas({
     resizeObserver.observe(container)
 
     map.on('move', syncViewport)
+    map.on('zoom', syncViewport)
+    map.on('rotate', syncViewport)
+    map.on('pitch', syncViewport)
     map.on('resize', syncViewport)
 
     let lastView: MapView = initial
@@ -373,16 +429,16 @@ export function MapCanvas({
 
       if (tool === 'lapiz') {
         e.preventDefault()
+        setSelectedAnnotationId(null)
         isPointerDownRef.current = true
         draftFreehandRef.current = [coord]
         setDraftFreehand([coord])
       } else if (tool === 'peligro' || tool === 'advertencia') {
         e.preventDefault()
+        setSelectedAnnotationId(null)
         isPointerDownRef.current = true
-        const defaultRadiusKm = Number(
-          Math.max(1.2, 48 / Math.pow(2, map.getZoom() - 7)).toFixed(2),
-        )
-        const circle = { kind: tool, center: coord, radiusKm: defaultRadiusKm }
+        const smartRadiusKm = radiusKmForScreenPixels(70, coord[1], map.getZoom())
+        const circle = { kind: tool, center: coord, radiusKm: smartRadiusKm }
         draftCircleRef.current = circle
         setDraftCircle(circle)
       }
@@ -399,10 +455,15 @@ export function MapCanvas({
         setDraftFreehand(nextPts)
       } else if ((tool === 'peligro' || tool === 'advertencia') && draftCircleRef.current) {
         const dist = distanceKm(draftCircleRef.current.center, coord)
-        if (dist > 0.4) {
+        const minDragKm = radiusKmForScreenPixels(
+          12,
+          draftCircleRef.current.center[1],
+          map.getZoom(),
+        )
+        if (dist > minDragKm) {
           const updated = {
             ...draftCircleRef.current,
-            radiusKm: Number(dist.toFixed(2)),
+            radiusKm: Number(dist.toFixed(4)),
           }
           draftCircleRef.current = updated
           setDraftCircle(updated)
@@ -422,6 +483,7 @@ export function MapCanvas({
           points: draftFreehandRef.current,
         }
         onAnnotationsChangeRef.current([...annotationsRef.current, nextAnn])
+        setSelectedAnnotationId(nextAnn.id)
       } else if ((tool === 'peligro' || tool === 'advertencia') && draftCircleRef.current) {
         const c = draftCircleRef.current
         const nextAnn: MapAnnotation = {
@@ -432,6 +494,7 @@ export function MapCanvas({
           label: c.kind === 'peligro' ? 'Zona de Peligro' : 'Zona de Advertencia',
         }
         onAnnotationsChangeRef.current([...annotationsRef.current, nextAnn])
+        setSelectedAnnotationId(nextAnn.id)
       }
 
       draftFreehandRef.current = []
@@ -445,26 +508,33 @@ export function MapCanvas({
       const tool = activeToolRef.current
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
 
-      if (tool === 'poligono') {
+      if (tool === 'mover') {
+        // Clic en parte vacía del mapa deselecciona la figura actual
+        setSelectedAnnotationId(null)
+      } else if (tool === 'poligono') {
+        setSelectedAnnotationId(null)
         setDraftPolygon((prev) => [...prev, coord])
       } else if (tool === 'etiqueta') {
+        const clickToleranceKm = radiusKmForScreenPixels(24, coord[1], map.getZoom())
         const hit = [...annotationsRef.current].reverse().find((ann) => {
           if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
-            return distanceKm(coord, ann.center) <= Math.max(ann.radiusKm, 2.0)
+            return distanceKm(coord, ann.center) <= Math.max(ann.radiusKm, clickToleranceKm)
           }
           if (ann.kind === 'etiqueta') {
-            return distanceKm(coord, ann.position) <= 2.5
+            return distanceKm(coord, ann.position) <= clickToleranceKm
           }
           return false
         })
 
         if (hit && (hit.kind === 'peligro' || hit.kind === 'advertencia')) {
+          setSelectedAnnotationId(hit.id)
           setLabelEditor({
             coord: hit.center,
             text: hit.label,
             targetAnnotationId: hit.id,
           })
         } else if (hit && hit.kind === 'etiqueta') {
+          setSelectedAnnotationId(hit.id)
           setLabelEditor({
             coord: hit.position,
             text: hit.text,
@@ -486,40 +556,44 @@ export function MapCanvas({
     map.on('click', onMapClick)
 
     let cancelled = false
+    let layersInitialized = false
 
-    map.on('load', () => {
-      if (cancelled) return
+    const initMapLayers = () => {
+      if (cancelled || layersInitialized) return
+      layersInitialized = true
       map.resize()
       syncViewport()
 
       const alpha = opacityRef.current / 100
 
-      // A. Huella GeoJSON de respaldo + Fuente `nisar-radar` con DataURL inmediato
+      // A. Huella GeoJSON + Fuente `nisar-radar`
       try {
-        map.addSource(FOOTPRINT_SOURCE, { type: 'geojson', data: FOOTPRINT_GEOJSON })
-        map.addLayer({
-          id: FOOTPRINT_FILL_LAYER,
-          type: 'fill',
-          source: FOOTPRINT_SOURCE,
-          paint: {
-            'fill-color': '#10B981',
-            'fill-opacity': alpha * 0.12,
-          },
-        })
-        map.addLayer({
-          id: FOOTPRINT_LINE_LAYER,
-          type: 'line',
-          source: FOOTPRINT_SOURCE,
-          paint: {
-            'line-color': '#10B981',
-            'line-width': 1.8,
-            'line-opacity': 0.85,
-            'line-dasharray': [3, 2],
-          },
-        })
+        if (!map.getSource(FOOTPRINT_SOURCE)) {
+          map.addSource(FOOTPRINT_SOURCE, { type: 'geojson', data: FOOTPRINT_GEOJSON })
+          map.addLayer({
+            id: FOOTPRINT_FILL_LAYER,
+            type: 'fill',
+            source: FOOTPRINT_SOURCE,
+            paint: {
+              'fill-color': '#10B981',
+              'fill-opacity': alpha * 0.12,
+            },
+          })
+          map.addLayer({
+            id: FOOTPRINT_LINE_LAYER,
+            type: 'line',
+            source: FOOTPRINT_SOURCE,
+            paint: {
+              'line-color': '#10B981',
+              'line-width': 1.8,
+              'line-opacity': 0.85,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
 
         const fallbackDataUrl = createFallbackSarDataUrl()
-        if (fallbackDataUrl) {
+        if (fallbackDataUrl && !map.getSource(NISAR_SOURCE)) {
           map.addSource(NISAR_SOURCE, {
             type: 'image',
             url: fallbackDataUrl,
@@ -535,14 +609,13 @@ export function MapCanvas({
             },
           })
 
-          // Si `/nisar_chiapas.jpg` existe en `public/`, actualiza la textura sin bloquear el mapa
           preloadImage(NISAR_IMAGE_URL).then((ok) => {
             if (cancelled || !ok) return
             try {
               const src = map.getSource(NISAR_SOURCE) as ImageSource | undefined
               src?.updateImage({ url: NISAR_IMAGE_URL, coordinates: NISAR_FOOTPRINT })
             } catch {
-              // Mantiene el patrón SAR en `<canvas>`
+              // Conserva la textura SAR en `<canvas>`
             }
           })
         }
@@ -552,190 +625,199 @@ export function MapCanvas({
 
       // B. Fuente `terrain-dem` y capa `solar-thermal-layer`
       try {
-        const hs = computeHillshadeParams(solarRef.current)
-        map.addSource(DEM_SOURCE, {
-          type: 'raster-dem',
-          tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-          encoding: 'terrarium',
-          tileSize: 256,
-          maxzoom: 15,
-        })
-        map.addLayer({
-          id: SOLAR_THERMAL_LAYER,
-          type: 'hillshade',
-          source: DEM_SOURCE,
-          paint: {
-            'hillshade-illumination-anchor': 'map',
-            'hillshade-illumination-direction': hs.direction,
-            'hillshade-exaggeration': hs.exaggeration,
-            'hillshade-highlight-color': hs.highlightColor,
-            'hillshade-accent-color': '#EA580C',
-            'hillshade-shadow-color': '#1E3A8A',
-          },
-        })
+        if (!map.getSource(DEM_SOURCE)) {
+          const hs = computeHillshadeParams(solarRef.current)
+          map.addSource(DEM_SOURCE, {
+            type: 'raster-dem',
+            tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+            encoding: 'terrarium',
+            tileSize: 256,
+            maxzoom: 15,
+          })
+          map.addLayer({
+            id: SOLAR_THERMAL_LAYER,
+            type: 'hillshade',
+            source: DEM_SOURCE,
+            paint: {
+              'hillshade-illumination-anchor': 'map',
+              'hillshade-illumination-direction': hs.direction,
+              'hillshade-exaggeration': hs.exaggeration,
+              'hillshade-highlight-color': hs.highlightColor,
+              'hillshade-accent-color': '#EA580C',
+              'hillshade-shadow-color': '#1E3A8A',
+            },
+          })
+        }
       } catch (err) {
         console.warn('No se pudo inicializar la capa DEM solar:', err)
       }
 
       // C. Fuente y capas de MÁSCARA INVERSA (`crop-mask-fill`)
       try {
-        const initialCrop = croppedRegionRef.current
-        const hasCrop = Array.isArray(initialCrop) && initialCrop.length >= 3
-        map.addSource(CROP_MASK_SOURCE, {
-          type: 'geojson',
-          data: buildInverseCropMaskGeoJSON(hasCrop ? initialCrop : null) as never,
-        })
-        map.addLayer({
-          id: CROP_MASK_FILL_LAYER,
-          type: 'fill',
-          source: CROP_MASK_SOURCE,
-          filter: ['==', ['get', 'role'], 'mask'],
-          paint: {
-            'fill-color': '#0F172A',
-            'fill-opacity': hasCrop ? 0.72 : 0,
-          },
-        })
-        map.addLayer({
-          id: CROP_MASK_LINE_LAYER,
-          type: 'line',
-          source: CROP_MASK_SOURCE,
-          filter: ['==', ['get', 'role'], 'border'],
-          paint: {
-            'line-color': '#10B981',
-            'line-width': 2.2,
-            'line-dasharray': [3, 2],
-          },
-        })
+        if (!map.getSource(CROP_MASK_SOURCE)) {
+          const initialCrop = croppedRegionRef.current
+          const hasCrop = Array.isArray(initialCrop) && initialCrop.length >= 3
+          map.addSource(CROP_MASK_SOURCE, {
+            type: 'geojson',
+            data: buildInverseCropMaskGeoJSON(hasCrop ? initialCrop : null) as never,
+          })
+          map.addLayer({
+            id: CROP_MASK_FILL_LAYER,
+            type: 'fill',
+            source: CROP_MASK_SOURCE,
+            filter: ['==', ['get', 'role'], 'mask'],
+            paint: {
+              'fill-color': '#0F172A',
+              'fill-opacity': hasCrop ? 0.72 : 0,
+            },
+          })
+          map.addLayer({
+            id: CROP_MASK_LINE_LAYER,
+            type: 'line',
+            source: CROP_MASK_SOURCE,
+            filter: ['==', ['get', 'role'], 'border'],
+            paint: {
+              'line-color': '#10B981',
+              'line-width': 2.2,
+              'line-dasharray': [3, 2],
+            },
+          })
+        }
       } catch (err) {
         console.warn('No se pudo inicializar la máscara de recorte:', err)
       }
 
-      // D. Fuente y capas vectoriales de dibujo (`annotations-source`)
+      // D. Fuente y capas GeoJSON al tope (`annotations-source`)
       try {
-        map.addSource(ANNOTATIONS_SOURCE, {
-          type: 'geojson',
-          data: buildAnnotationsGeoJSON(annotationsRef.current, [], null) as never,
-        })
+        if (!map.getSource(ANNOTATIONS_SOURCE)) {
+          map.addSource(ANNOTATIONS_SOURCE, {
+            type: 'geojson',
+            data: buildAnnotationsGeoJSON(annotationsRef.current, [], null) as never,
+          })
 
-        map.addLayer({
-          id: ANN_DANGER_FILL_LAYER,
-          type: 'fill',
-          source: ANNOTATIONS_SOURCE,
-          filter: ['==', ['get', 'kind'], 'peligro'],
-          paint: {
-            'fill-color': '#EF4444',
-            'fill-opacity': 0.25,
-          },
-        })
-        map.addLayer({
-          id: ANN_DANGER_LINE_LAYER,
-          type: 'line',
-          source: ANNOTATIONS_SOURCE,
-          filter: ['==', ['get', 'kind'], 'peligro'],
-          paint: {
-            'line-color': '#EF4444',
-            'line-width': 2.5,
-          },
-        })
+          map.addLayer({
+            id: ANN_DANGER_FILL_LAYER,
+            type: 'fill',
+            source: ANNOTATIONS_SOURCE,
+            filter: ['==', ['get', 'kind'], 'peligro'],
+            paint: {
+              'fill-color': '#EF4444',
+              'fill-opacity': 0.25,
+            },
+          })
+          map.addLayer({
+            id: ANN_DANGER_LINE_LAYER,
+            type: 'line',
+            source: ANNOTATIONS_SOURCE,
+            filter: ['==', ['get', 'kind'], 'peligro'],
+            paint: {
+              'line-color': '#EF4444',
+              'line-width': 2.5,
+            },
+          })
 
-        map.addLayer({
-          id: ANN_WARN_FILL_LAYER,
-          type: 'fill',
-          source: ANNOTATIONS_SOURCE,
-          filter: ['==', ['get', 'kind'], 'advertencia'],
-          paint: {
-            'fill-color': '#F59E0B',
-            'fill-opacity': 0.18,
-          },
-        })
-        map.addLayer({
-          id: ANN_WARN_LINE_LAYER,
-          type: 'line',
-          source: ANNOTATIONS_SOURCE,
-          filter: ['==', ['get', 'kind'], 'advertencia'],
-          paint: {
-            'line-color': '#F59E0B',
-            'line-width': 2.5,
-            'line-dasharray': [3, 2],
-          },
-        })
+          map.addLayer({
+            id: ANN_WARN_FILL_LAYER,
+            type: 'fill',
+            source: ANNOTATIONS_SOURCE,
+            filter: ['==', ['get', 'kind'], 'advertencia'],
+            paint: {
+              'fill-color': '#F59E0B',
+              'fill-opacity': 0.18,
+            },
+          })
+          map.addLayer({
+            id: ANN_WARN_LINE_LAYER,
+            type: 'line',
+            source: ANNOTATIONS_SOURCE,
+            filter: ['==', ['get', 'kind'], 'advertencia'],
+            paint: {
+              'line-color': '#F59E0B',
+              'line-width': 2.5,
+              'line-dasharray': [3, 2],
+            },
+          })
 
-        map.addLayer({
-          id: ANN_FREEHAND_LINE_LAYER,
-          type: 'line',
-          source: ANNOTATIONS_SOURCE,
-          filter: ['==', ['get', 'kind'], 'lapiz'],
-          layout: {
-            'line-cap': 'round',
-            'line-join': 'round',
-          },
-          paint: {
-            'line-color': '#10B981',
-            'line-width': 3.2,
-          },
-        })
+          map.addLayer({
+            id: ANN_FREEHAND_LINE_LAYER,
+            type: 'line',
+            source: ANNOTATIONS_SOURCE,
+            filter: ['==', ['get', 'kind'], 'lapiz'],
+            layout: {
+              'line-cap': 'round',
+              'line-join': 'round',
+            },
+            paint: {
+              'line-color': '#38BDF8',
+              'line-width': 3.5,
+            },
+          })
+        }
       } catch (err) {
         console.warn('No se pudieron inicializar las capas de anotación:', err)
       }
 
       // E. Fuente y capas para polígono en construcción ("Seleccionar Región")
       try {
-        map.addSource(DRAFT_POLY_SOURCE, {
-          type: 'geojson',
-          data: buildDraftPolygonGeoJSON([]) as never,
-        })
-        map.addLayer({
-          id: DRAFT_POLY_FILL_LAYER,
-          type: 'fill',
-          source: DRAFT_POLY_SOURCE,
-          filter: ['==', ['get', 'featureType'], 'fill'],
-          paint: {
-            'fill-color': '#10B981',
-            'fill-opacity': 0.16,
-          },
-        })
-        map.addLayer({
-          id: DRAFT_POLY_LINE_LAYER,
-          type: 'line',
-          source: DRAFT_POLY_SOURCE,
-          filter: ['==', ['get', 'featureType'], 'line'],
-          paint: {
-            'line-color': '#10B981',
-            'line-width': 2.2,
-            'line-dasharray': [3, 2],
-          },
-        })
-        map.addLayer({
-          id: DRAFT_POLY_VERTEX_LAYER,
-          type: 'circle',
-          source: DRAFT_POLY_SOURCE,
-          filter: ['==', ['get', 'featureType'], 'vertex'],
-          paint: {
-            'circle-radius': 5.5,
-            'circle-color': '#FFFFFF',
-            'circle-stroke-color': '#10B981',
-            'circle-stroke-width': 2.2,
-          },
-        })
+        if (!map.getSource(DRAFT_POLY_SOURCE)) {
+          map.addSource(DRAFT_POLY_SOURCE, {
+            type: 'geojson',
+            data: buildDraftPolygonGeoJSON([]) as never,
+          })
+          map.addLayer({
+            id: DRAFT_POLY_FILL_LAYER,
+            type: 'fill',
+            source: DRAFT_POLY_SOURCE,
+            filter: ['==', ['get', 'featureType'], 'fill'],
+            paint: {
+              'fill-color': '#10B981',
+              'fill-opacity': 0.16,
+            },
+          })
+          map.addLayer({
+            id: DRAFT_POLY_LINE_LAYER,
+            type: 'line',
+            source: DRAFT_POLY_SOURCE,
+            filter: ['==', ['get', 'featureType'], 'line'],
+            paint: {
+              'line-color': '#10B981',
+              'line-width': 2.2,
+              'line-dasharray': [3, 2],
+            },
+          })
+          map.addLayer({
+            id: DRAFT_POLY_VERTEX_LAYER,
+            type: 'circle',
+            source: DRAFT_POLY_SOURCE,
+            filter: ['==', ['get', 'featureType'], 'vertex'],
+            paint: {
+              'circle-radius': 5.5,
+              'circle-color': '#FFFFFF',
+              'circle-stroke-color': '#10B981',
+              'circle-stroke-width': 2.2,
+            },
+          })
+        }
       } catch (err) {
         console.warn('No se pudo inicializar el borrador de polígono:', err)
       }
 
       setMapReady(true)
-    })
+    }
+
+    map.once('style.load', initMapLayers)
+    map.once('load', initMapLayers)
 
     return () => {
       cancelled = true
       window.cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
-      for (const m of markersRef.current) m.remove()
-      markersRef.current = []
       map.remove()
       mapRef.current = null
     }
   }, [])
 
-  // 1. Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
+  // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
@@ -748,7 +830,7 @@ export function MapCanvas({
     }
   }, [opacity, mapReady])
 
-  // 2. Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
+  // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -785,38 +867,6 @@ export function MapCanvas({
     }
   }, [annotations, draftFreehand, draftCircle, mapReady])
 
-  // 2. Renderizar las etiquetas de texto usando `maplibregl.Marker` con elementos HTML limpios
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !mapReady) return
-
-    for (const m of markersRef.current) m.remove()
-    markersRef.current = []
-
-    for (const ann of annotations) {
-      if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
-        const el = document.createElement('div')
-        el.className = `map-marker-tag ${
-          ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
-        }`
-        el.textContent = ann.label
-        const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
-        const marker = new Marker({ element: el, anchor: 'bottom', offset: [0, -6] })
-          .setLngLat(topEdgeCoord)
-          .addTo(map)
-        markersRef.current.push(marker)
-      } else if (ann.kind === 'etiqueta') {
-        const el = document.createElement('div')
-        el.className = 'map-marker-tag map-marker-tag--custom'
-        el.textContent = ann.text
-        const marker = new Marker({ element: el, anchor: 'left', offset: [8, 0] })
-          .setLngLat(ann.position)
-          .addTo(map)
-        markersRef.current.push(marker)
-      }
-    }
-  }, [annotations, mapReady])
-
   // Sincronizar fuente GeoJSON `draft-polygon-source`
   useEffect(() => {
     const map = mapRef.current
@@ -827,7 +877,7 @@ export function MapCanvas({
     }
   }, [draftPolygon, mapReady])
 
-  // 4. Sincronizar fuente GeoJSON `crop-mask-source` (vacío y opacidad 0 cuando `croppedRegion` es `null`)
+  // Sincronizar fuente GeoJSON `crop-mask-source`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
@@ -871,6 +921,54 @@ export function MapCanvas({
     if (tool !== 'etiqueta') setLabelEditor(null)
     setDraftCircle(null)
     setDraftFreehand([])
+  }
+
+  // Seleccionar una figura haciendo clic sobre ella o su etiqueta
+  const handleSelectElement = (e: ReactMouseEvent, ann: MapAnnotation) => {
+    if (!isEditing) return
+    e.stopPropagation()
+    setSelectedAnnotationId(ann.id)
+
+    if (activeTool === 'etiqueta') {
+      if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+        setLabelEditor({
+          coord: ann.center,
+          text: ann.label,
+          targetAnnotationId: ann.id,
+        })
+      } else if (ann.kind === 'etiqueta') {
+        setLabelEditor({
+          coord: ann.position,
+          text: ann.text,
+          targetAnnotationId: ann.id,
+        })
+      }
+    }
+  }
+
+  // Abrir el editor de texto desde la píldora de acción rápida del elemento seleccionado
+  const handleEditSelectedText = () => {
+    if (!selectedAnnotation) return
+    if (selectedAnnotation.kind === 'peligro' || selectedAnnotation.kind === 'advertencia') {
+      setLabelEditor({
+        coord: selectedAnnotation.center,
+        text: selectedAnnotation.label,
+        targetAnnotationId: selectedAnnotation.id,
+      })
+    } else if (selectedAnnotation.kind === 'etiqueta') {
+      setLabelEditor({
+        coord: selectedAnnotation.position,
+        text: selectedAnnotation.text,
+        targetAnnotationId: selectedAnnotation.id,
+      })
+    } else {
+      const anchor = getAnnotationAnchorCoord(selectedAnnotation)
+      setLabelEditor({
+        coord: anchor,
+        text: 'Trazo marcado',
+        targetAnnotationId: null,
+      })
+    }
   }
 
   const handleApplyCropRegion = () => {
@@ -925,15 +1023,14 @@ export function MapCanvas({
         }),
       )
     } else {
-      onAnnotationsChange([
-        ...annotations,
-        {
-          id: newId(),
-          kind: 'etiqueta',
-          position: labelEditor.coord,
-          text,
-        },
-      ])
+      const created: MapAnnotation = {
+        id: newId(),
+        kind: 'etiqueta',
+        position: labelEditor.coord,
+        text,
+      }
+      onAnnotationsChange([...annotations, created])
+      setSelectedAnnotationId(created.id)
     }
     setLabelEditor(null)
     setActiveTool('mover')
@@ -945,9 +1042,37 @@ export function MapCanvas({
       return
     }
     if (annotations.length > 0) {
+      const removed = annotations[annotations.length - 1]
+      if (removed && removed.id === selectedAnnotationId) {
+        setSelectedAnnotationId(null)
+      }
       onAnnotationsChange(annotations.slice(0, -1))
     }
   }
+
+  // 3. Limpiar todas las anotaciones y recortes de la copia activa
+  const handleClearAllDrawings = () => {
+    onAnnotationsChange([])
+    onCropRegionChange(null)
+    setDraftPolygon([])
+    setDraftFreehand([])
+    setDraftCircle(null)
+    setSelectedAnnotationId(null)
+    setLabelEditor(null)
+  }
+
+  const hasActiveCrop = Array.isArray(croppedRegion) && croppedRegion.length >= 3
+  const croppedScreenPts = hasActiveCrop
+    ? croppedRegion.map((pt) => projectLngLat(pt, viewport))
+    : null
+  const croppedPolygonPointsAttr = croppedScreenPts
+    ? croppedScreenPts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
+    : ''
+  const croppedInversePathAttr = croppedScreenPts
+    ? `M 0 0 L ${viewport.width} 0 L ${viewport.width} ${viewport.height} L 0 ${viewport.height} Z M ${croppedScreenPts
+        .map(([x, y], i) => `${i === 0 ? '' : 'L '}${x.toFixed(1)} ${y.toFixed(1)}`)
+        .join(' ')} Z`
+    : ''
 
   const draftPolyCentroidScreen =
     draftPolygon.length >= 3
@@ -955,6 +1080,22 @@ export function MapCanvas({
       : null
 
   const labelEditorScreen = labelEditor ? projectLngLat(labelEditor.coord, viewport) : null
+
+  const selectedAnchorScreen = selectedAnnotation
+    ? projectLngLat(getAnnotationAnchorCoord(selectedAnnotation), viewport)
+    : null
+
+  const canSelectInSvg = isEditing && (activeTool === 'mover' || activeTool === 'etiqueta')
+  const svgElementInteractionStyle = {
+    pointerEvents: canSelectInSvg ? ('auto' as const) : ('none' as const),
+    cursor: canSelectInSvg ? ('pointer' as const) : ('inherit' as const),
+  }
+
+  const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
+  const radRatio = solar.radiationIntensity / 100
+  const sunFocusX = 85 - (solar.sunAngle / 180) * 70
+  const sunFocusY = 54 - Math.sin((solar.sunAngle * Math.PI) / 180) * 20
+  const shadowSideX = 100 - sunFocusX
 
   return (
     <main
@@ -975,6 +1116,356 @@ export function MapCanvas({
         }}
       />
 
+      {/* Efecto térmico direccional del Simulador Solar */}
+      {showSolarOverlay && (
+        <div
+          className="solar-thermal-overlay"
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            zIndex: 4,
+            background: `
+              radial-gradient(circle at ${sunFocusX.toFixed(1)}% ${sunFocusY.toFixed(1)}%, rgba(239, 68, 68, ${(radRatio * 0.44).toFixed(2)}) 0%, rgba(249, 115, 22, ${(radRatio * 0.34).toFixed(2)}) 32%, rgba(253, 224, 71, ${(radRatio * 0.22).toFixed(2)}) 58%, rgba(15, 23, 42, 0) 82%),
+              radial-gradient(circle at ${shadowSideX.toFixed(1)}% ${(100 - sunFocusY).toFixed(1)}%, rgba(30, 58, 138, ${(radRatio * 0.38).toFixed(2)}) 0%, rgba(15, 23, 42, 0) 65%)
+            `,
+          }}
+        />
+      )}
+
+      {/* 1. OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
+      <svg
+        className="synchronized-vector-svg"
+        width={viewport.width}
+        height={viewport.height}
+        viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      >
+        {/* Máscara inversa de recorte (`croppedRegion`) */}
+        {croppedScreenPts && (
+          <g>
+            <path
+              d={croppedInversePathAttr}
+              fill="#090D16"
+              fillOpacity={0.78}
+              fillRule="evenodd"
+            />
+            <polygon
+              points={croppedPolygonPointsAttr}
+              fill="none"
+              stroke="#10B981"
+              strokeWidth={2.5}
+              strokeDasharray="8 5"
+            />
+          </g>
+        )}
+
+        {/* Figuras guardadas seleccionables (Círculos, Trazos de Lápiz y Nodos de Etiqueta) */}
+        {annotations.map((ann) => {
+          const isSelected = selectedAnnotation?.id === ann.id
+
+          if (ann.kind === 'lapiz' && ann.points.length >= 2) {
+            const pts = ann.points
+              .map((pt) => projectLngLat(pt, viewport))
+              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+              .join(' ')
+            return (
+              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                {/* Resaltado exterior brillante cuando está seleccionado */}
+                {isSelected && (
+                  <polyline
+                    points={pts}
+                    fill="none"
+                    stroke="#FFFFFF"
+                    strokeWidth={7}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
+                  />
+                )}
+                {/* Área de clic ampliada transparente para facilitar seleccionar el trazo */}
+                <polyline
+                  points={pts}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth={14}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={svgElementInteractionStyle}
+                />
+                <polyline
+                  points={pts}
+                  fill="none"
+                  stroke="#38BDF8"
+                  strokeWidth={isSelected ? 5 : 3.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={svgElementInteractionStyle}
+                />
+              </g>
+            )
+          }
+
+          if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+            const ringPts = createCirclePolygonCoords(ann.center, ann.radiusKm, 64)
+              .map((pt) => projectLngLat(pt, viewport))
+              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+              .join(' ')
+            const [cx, cy] = projectLngLat(ann.center, viewport)
+            const isDanger = ann.kind === 'peligro'
+
+            return (
+              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                {/* Resaltado exterior brillante blanco/cian cuando está seleccionado */}
+                {isSelected && (
+                  <polygon
+                    points={ringPts}
+                    fill="none"
+                    stroke="#FFFFFF"
+                    strokeWidth={6}
+                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
+                  />
+                )}
+                <polygon
+                  points={ringPts}
+                  fill={isDanger ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.22)'}
+                  stroke={isDanger ? '#EF4444' : '#F59E0B'}
+                  strokeWidth={isSelected ? 4.5 : 3}
+                  strokeDasharray={isDanger ? undefined : '8 6'}
+                  style={svgElementInteractionStyle}
+                />
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={isSelected ? 5.5 : 4}
+                  fill={isDanger ? '#EF4444' : '#F59E0B'}
+                  stroke="#FFFFFF"
+                  strokeWidth={1.5}
+                  style={svgElementInteractionStyle}
+                />
+              </g>
+            )
+          }
+
+          if (ann.kind === 'etiqueta') {
+            const [x, y] = projectLngLat(ann.position, viewport)
+            return (
+              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                {isSelected && (
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={9}
+                    fill="none"
+                    stroke="#FFFFFF"
+                    strokeWidth={2.5}
+                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
+                  />
+                )}
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={isSelected ? 6 : 5}
+                  fill="#10B981"
+                  stroke="#FFFFFF"
+                  strokeWidth={2}
+                  style={svgElementInteractionStyle}
+                />
+              </g>
+            )
+          }
+
+          return null
+        })}
+
+        {/* Círculo en curso mientras el usuario arrastra */}
+        {draftCircle &&
+          (() => {
+            const ringPts = createCirclePolygonCoords(
+              draftCircle.center,
+              draftCircle.radiusKm,
+              64,
+            )
+              .map((pt) => projectLngLat(pt, viewport))
+              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+              .join(' ')
+            const [cx, cy] = projectLngLat(draftCircle.center, viewport)
+            const isDanger = draftCircle.kind === 'peligro'
+            return (
+              <g>
+                <polygon
+                  points={ringPts}
+                  fill={isDanger ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.22)'}
+                  stroke={isDanger ? '#EF4444' : '#F59E0B'}
+                  strokeWidth={3}
+                  strokeDasharray={isDanger ? undefined : '8 6'}
+                />
+                <circle cx={cx} cy={cy} r={4} fill={isDanger ? '#EF4444' : '#F59E0B'} />
+              </g>
+            )
+          })()}
+
+        {/* Trazo de lápiz en curso mientras el usuario arrastra */}
+        {draftFreehand.length >= 2 && (
+          <polyline
+            points={draftFreehand
+              .map((pt) => projectLngLat(pt, viewport))
+              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+              .join(' ')}
+            fill="none"
+            stroke="#38BDF8"
+            strokeWidth={3.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+
+        {/* Polígono en construcción (`Seleccionar Región`) */}
+        {draftPolygon.length > 0 && (
+          <g>
+            {draftPolygon.length >= 3 && (
+              <polygon
+                points={draftPolygon
+                  .map((pt) => projectLngLat(pt, viewport))
+                  .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                  .join(' ')}
+                fill="rgba(16, 185, 129, 0.18)"
+              />
+            )}
+            {draftPolygon.length >= 2 && (
+              <polyline
+                points={(draftPolygon.length >= 3
+                  ? [...draftPolygon, draftPolygon[0]]
+                  : draftPolygon
+                )
+                  .map((pt) => projectLngLat(pt, viewport))
+                  .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                  .join(' ')}
+                fill="none"
+                stroke="#10B981"
+                strokeWidth={2.5}
+                strokeDasharray="6 4"
+              />
+            )}
+            {draftPolygon.map((pt, idx) => {
+              const [x, y] = projectLngLat(pt, viewport)
+              return (
+                <circle
+                  key={idx}
+                  cx={x}
+                  cy={y}
+                  r={6}
+                  fill="#FFFFFF"
+                  stroke="#10B981"
+                  strokeWidth={2.5}
+                />
+              )
+            })}
+          </g>
+        )}
+      </svg>
+
+      {/* Marcadores HTML seleccionables encima del SVG (z-index: 10) */}
+      <div
+        className="map-markers-layer"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          overflow: 'hidden',
+          zIndex: 10,
+        }}
+      >
+        {annotations.map((ann) => {
+          const isSelected = selectedAnnotation?.id === ann.id
+
+          if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+            const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
+            const [x, y] = projectLngLat(topEdgeCoord, viewport)
+            return (
+              <div
+                key={ann.id}
+                onClick={(e) => handleSelectElement(e, ann)}
+                className={`map-marker-tag ${
+                  ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
+                } ${isSelected ? 'is-selected' : ''}`}
+                style={{
+                  position: 'absolute',
+                  left: `${x.toFixed(1)}px`,
+                  top: `${(y - 8).toFixed(1)}px`,
+                  transform: 'translate(-50%, -100%)',
+                  pointerEvents: canSelectInSvg ? 'auto' : 'none',
+                  cursor: canSelectInSvg ? 'pointer' : 'inherit',
+                }}
+              >
+                {ann.label}
+              </div>
+            )
+          }
+
+          if (ann.kind === 'etiqueta') {
+            const [x, y] = projectLngLat(ann.position, viewport)
+            return (
+              <div
+                key={ann.id}
+                onClick={(e) => handleSelectElement(e, ann)}
+                className={`map-marker-tag map-marker-tag--custom ${
+                  isSelected ? 'is-selected' : ''
+                }`}
+                style={{
+                  position: 'absolute',
+                  left: `${(x + 10).toFixed(1)}px`,
+                  top: `${y.toFixed(1)}px`,
+                  transform: 'translate(0, -50%)',
+                  pointerEvents: canSelectInSvg ? 'auto' : 'none',
+                  cursor: canSelectInSvg ? 'pointer' : 'inherit',
+                }}
+              >
+                {ann.text}
+              </div>
+            )
+          }
+
+          return null
+        })}
+      </div>
+
+      {/* 2a. Píldora flotante de acción rápida junto al elemento seleccionado */}
+      {isEditing && selectedAnnotation && selectedAnchorScreen && !labelEditor && (
+        <div
+          className="selection-action-pill"
+          style={{
+            left: `${Math.min(Math.max(115, selectedAnchorScreen[0]), viewport.width - 115)}px`,
+            top: `${Math.min(Math.max(54, selectedAnchorScreen[1] - 42), viewport.height - 96)}px`,
+          }}
+        >
+          <button
+            type="button"
+            className="selection-action-pill__btn"
+            onClick={handleEditSelectedText}
+          >
+            ✏️ Editar texto
+          </button>
+          <span className="selection-action-pill__sep" aria-hidden="true" />
+          <button
+            type="button"
+            className="selection-action-pill__btn selection-action-pill__btn--danger"
+            onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
+          >
+            🗑️ Eliminar
+          </button>
+        </div>
+      )}
+
       {/* Etiqueta de ubicación y copia activa */}
       <div className="map-badge">
         <span className="map-badge__location">📍 Chiapas, México</span>
@@ -984,7 +1475,7 @@ export function MapCanvas({
       </div>
 
       {/* Chip flotante arriba del mapa cuando hay una región recortada activa */}
-      {croppedRegion && croppedRegion.length >= 3 && (
+      {hasActiveCrop && (
         <div className="crop-active-chip" role="status">
           <span className="crop-active-chip__dot" aria-hidden="true" />
           <span>Región recortada activa —</span>
@@ -1133,15 +1624,40 @@ export function MapCanvas({
             <span>Simulador Solar</span>
           </button>
 
+          <div className="bottom-toolbar__divider" aria-hidden="true" />
+
           <button
             type="button"
             className="dock-undo-btn"
             onClick={handleUndoLastDrawing}
             disabled={annotations.length === 0 && draftPolygon.length === 0}
-            title="Borrar último dibujo"
+            title="Borrar último dibujo (Deshacer)"
             aria-label="Borrar último dibujo"
           >
             <Undo2 size={15} />
+          </button>
+
+          {selectedAnnotation && (
+            <button
+              type="button"
+              className="dock-action-btn dock-action-btn--danger"
+              onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
+              title="Eliminar elemento seleccionado (Supr)"
+            >
+              <Trash size={14} aria-hidden="true" />
+              <span>Eliminar seleccionado</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="dock-action-btn"
+            onClick={handleClearAllDrawings}
+            disabled={annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0}
+            title="Limpiar todos los dibujos de esta copia"
+          >
+            <Trash size={14} aria-hidden="true" />
+            <span>Limpiar todo</span>
           </button>
         </div>
       )}
