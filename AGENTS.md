@@ -25,9 +25,12 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 - Proyecto Django creado en `backend/` (`config`, apps `scenes` y `analyses`).
 - PostGIS en Docker funcionando; migraciones base aplicadas. Configuración sensible en `.env` (ver `.env.example`).
 - `pipeline/sources/` (fuente intercambiable, hoy ASF), `pipeline/compat.py` y `pipeline/catalog.py` implementados y con pruebas.
-- **Catálogo consultado (2026-11-12 UTC):** hay pilas GCOV comparables *a nivel de metadatos* sobre la ROI (ver §4). Aún **no** se ha descargado ningún recorte ni hay mapa de cambio.
+- `pipeline/nisar_h5.py` + `pipeline/etapa1.py`: lectura por ventanas de los `.h5` e inspección de una escena (Etapa 1).
+- `pipeline/sources/subset.py` + `pipeline/download.py`: recorte a la ROI (local o remoto por HTTPS, solo los bloques de la ROI), con verificación de identidad contra el catálogo, cobertura de la ROI y comparación de malla.
+- **Par de trabajo recortado (2026-11-14):** GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, en `data/raw/` (ver §4). Comparable y con malla idéntica. Aún **no** hay mapa de cambio ni validación.
+- El fenómeno sigue **sin decidir**. Las fuentes auxiliares candidatas están en `docs/metodologia.md`.
 
-**Lo más importante que falta:** elegir un par de la pila candidata, verificar en el archivo que cubre la ROI y que coincide en resolución, y descargar el recorte (pasos 2 y 4 del plan; requiere `.netrc`).
+**Lo más importante que falta:** `preprocess.py` y `change.py` sobre el par de trabajo (paso 5 del plan) y decidir el fenómeno para elegir la fuente de validación (paso 6).
 
 ## 4. Caso de estudio
 
@@ -50,19 +53,35 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 | 156 / 80 | DESCENDING | HH+HV | P05023 | PROVISIONAL | 8 fechas, 2026-06-25 → 2026-10-11 (2026-09-05 tiene dos productos: contador 001 y 002) |
 | 55 / 80 | DESCENDING | HH+HV | X05009 / X05010 | BETA | 2025-11 → 2026-01 (dos pilas separadas por CRID) |
 
+### Par de trabajo y cobertura real de la ROI (verificado en el `.h5`, 2026-11-14)
+
+| Pila (P05023 PROVISIONAL) | Píxeles válidos en el polígono ROI | Uso |
+|---|---|---|
+| **T62 / F10 ASCENDING** | **99.57 % (t1) y 99.61 % (t2)** | **Par de trabajo:** 2026-06-18 → 2026-10-16 |
+| T55 / F80 DESCENDING | ~50 %: el marco solo cubre al este de lon ≈ −93.14 | Respaldo (mismas fechas, también en `data/raw/`) |
+| T156 / F80 DESCENDING | Sin verificar | — |
+
+- Escenas del par: `NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001` y `NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001` (también en `pipeline/config.yaml → pair`).
+- Malla idéntica en ambas fechas: EPSG:32615, 10 × 10 m, recorte de 2687 × 5504 px. Polarizaciones HH y HV leídas del `.h5`.
+- La escena T62/F10 2026-10-28 (P05036, VALIDATED) se inspeccionó en la Etapa 1, pero **no tiene pareja**: es la única fecha P05036 de su pila.
+
 Hallazgos que cambian lo que se creía antes:
 
 - **El CRID cambió a P05036 (madurez VALIDATED en el catálogo) a partir del 2026-10-23.** Por eso el par T55 2026-10-16 / 2026-10-28 que se había anotado **no es comparable** (P05023 vs P05036). Por ahora cada pila P05036 tiene una sola fecha.
 - 2026-07-24 T55 tiene un segundo producto con órbita FOE y sin madurez en el catálogo. Usar el MOE.
 - 2025-10-21 T55 es de cobertura parcial y solo HV.
-- La resolución y la cobertura real de la ROI **no** vienen en el catálogo: verificarlas en el `.h5` antes de analizar.
+- La resolución y la cobertura real de la ROI **no** vienen en el catálogo: verificarlas en el `.h5` antes de analizar (`python -m pipeline.download` lo hace y lo guarda en `scene.json`).
+- Que una pila intersecte la ROI en el catálogo no significa que la cubra: T55 solo cubre la mitad.
 
 Visto en Vertex sin verificar con `catalog.py`: GSLC T62/F10 2026-10-28 (P05036, ~22.5 GB) y GUNW 2026-10-04 (solo útil si el caso fuera deformación).
 
 ## 5. Reglas de datos NISAR
 
 - Fuente central: productos públicos NISAR vía ASF (https://search.asf.alaska.edu/) y NASA Earthdata. Documentación: https://nisar-docs.asf.alaska.edu/
-- **La fuente cambiará en el hackatón:** los organizadores darán sus propios recursos. Todo acceso a datos pasa por `pipeline/sources/` (interfaz `DataSource`, que devuelve `SceneMeta`). El resto del pipeline no importa `asf_search` ni conoce la fuente. Para la fuente del evento se agrega `sources/event.py` y se cambia `source:` en `config.yaml`.
+- **Recursos del reto:** la lista oficial de Space Apps 2026 da como fuentes NASA **Earthdata Search y ASF Vertex**, las mismas que ya usa `ASFSource`. Por eso `sources/event.py` **no hace falta** para NISAR. Aun así, todo acceso a datos sigue pasando por `pipeline/sources/` (interfaz `DataSource`, que devuelve `SceneMeta`); el resto del pipeline no importa `asf_search` ni conoce la fuente. Si se agrega otra fuente, se crea un módulo en `sources/` y se cambia `source:` en `config.yaml`.
+- **Otros sensores del reto** (RCM y RADARSAT-1 de la CSA, banda C; SAOCOM de CONAE, banda L): **nunca se mezclan con NISAR en un Δσ⁰** (otro sensor, geometría y calibración). RADARSAT-1 no tiene datos de 2026. SAOCOM solo como posible contraste, si P3 lo decide. Ver `docs/metodologia.md`.
+- **Fuentes auxiliares** (validación y contexto) vía Earthdata, con la misma cuenta: GPM IMERG (GES DISC; requiere autorizar la aplicación en el perfil), HLS, OPERA DSWx y OPERA DIST (LP DAAC / PO.DAAC). OPERA es otro producto derivado: compararse con él mide **acuerdo**, no exactitud.
+- **Lectura de los `.h5`:** el GDAL del entorno (3.12) no trae los drivers NISAR ni HDF5. Los `.h5` se leen con `h5py` (`nisar_h5.py`, `sources/subset.py`), locales o remotos.
 - **Preferir GCOV** para retrodispersión (σ⁰/γ⁰) y mapas de cambio. GSLC es complejo y requiere calcular `10*log10(|z|²)`. GUNW solo para deformación (desplazamiento en línea de vista, no vertical). **SME2** (humedad del suelo a escala de parcela) es candidato si el caso fuera humedales o inundación.
 - **Madurez:** leerla del catálogo (filtro `dataMaturity`), no deducirla de la letra del CRID. Si no se conoce, la escena no es comparable.
 - **No procesar datos crudos (L0, RRSD).**
@@ -70,7 +89,7 @@ Visto en Vertex sin verificar con `catalog.py`: GSLC T62/F10 2026-10-28 (P05036,
 - **No asumir polarizaciones.** Leer de los metadatos y del nombre del producto qué polarizaciones tiene cada escena.
 - Los productos L-band PROVISIONAL (desde 2026-06-17) están calibrados y parcialmente validados; no describirlos como completamente validados.
 - Los PNG de "Visualizaciones" son solo para inspección visual. **Nunca calcular diferencias sobre ellos.**
-- No descargar escenas completas (~22 GB). Recortar a la ROI con `gdalwarp` (ver sección 8).
+- No descargar escenas completas (GCOV ~7 GB, GSLC ~22 GB). Recortar a la ROI con `python -m pipeline.download` (ver §9).
 - Disponibilidad y especificaciones pueden cambiar: consultar la documentación vigente.
 
 ## 6. Metodología
@@ -114,15 +133,17 @@ terrapulse/
 │   ├── raw/                    # recortes descargados
 │   └── processed/              # GeoTIFF/COG de dB y cambio
 ├── pipeline/                   # Python puro, independiente de Django
-│   ├── sources/                # fuentes intercambiables: base.py (contrato), asf.py; luego event.py
+│   ├── sources/                # fuentes intercambiables: base.py (contrato), asf.py, subset.py (recorte .h5 → C1)
 │   ├── catalog.py              # consulta la fuente, agrupa pilas, guarda JSON en data/catalog/
 │   ├── tests/                  # pytest (pytest.ini en la raíz)
-│   ├── download.py             # recorte GDAL a la ROI
+│   ├── download.py             # recorte a la ROI (h5py, local o remoto) → data/raw/<scene_id>/
+│   ├── nisar_h5.py             # lectura por ventanas de los .h5 NISAR
+│   ├── etapa1.py               # inspección de una escena (figuras, control) → data/explore/
 │   ├── preprocess.py           # complejo -> dB, máscaras
 │   ├── compat.py               # control de comparabilidad
 │   ├── change.py               # Δσ⁰, z-score, umbral
 │   ├── validate.py             # precisión, recall, F1, IoU
-│   └── config.yaml             # ROI, fechas, trayectoria, polarización, madurez
+│   └── config.yaml             # ROI, comparabilidad y par de trabajo (pair)
 ├── backend/                    # Django
 │   ├── manage.py
 │   ├── config/                 # settings, urls
@@ -133,7 +154,7 @@ terrapulse/
 
 **Regla de arquitectura:** `pipeline/` no depende de Django. Django solo lo llama (idealmente desde tareas Celery). Así el procesamiento SAR se prueba desde la terminal sin levantar el servidor.
 
-Desde la raíz del repo: `python -m pipeline.catalog` (consulta del catálogo) y `pytest` (pruebas).
+Desde la raíz del repo: `python -m pipeline.catalog` (consulta del catálogo), `python -m pipeline.download <scene_id> ...` (recorte a la ROI) y `pytest` (pruebas).
 
 ### Modelos base
 
@@ -152,27 +173,25 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Recorte remoto con GDAL (la autenticación Earthdata va en `%USERPROFILE%\.netrc`):
+Recorte a la ROI (la autenticación Earthdata va en `%USERPROFILE%\.netrc`; en Windows el pipeline lo usa aunque earthaccess busque `_netrc`):
 
 ```
-gdalwarp HDF5:"/vsicurl/<URL_H5>"://science/LSAR/<PRODUCTO>/grids/frequencyA/HH ^
-  -of GTiff salida.tif ^
-  -cutline "<WKT_ROI>" -cutline_srs WGS84 -crop_to_cutline -dstalpha ^
-  --config GDAL_HTTP_NETRC YES ^
-  --config GDAL_HTTP_COOKIEFILE %TEMP%/gdal_cookies.txt ^
-  --config GDAL_HTTP_COOKIEJAR %TEMP%/gdal_cookies.txt
+python -m pipeline.catalog                                # actualiza data/catalog/
+python -m pipeline.download <scene_id_t1> <scene_id_t2>   # recorta, verifica y compara el par
+python -m pipeline.download <scene_id> --capas HHHH mask  # solo algunas capas
+python -m pipeline.download <scene_id> --h5-local "ruta\archivo.h5"   # desde un .h5 ya descargado
 ```
 
-El fragmento completo (con todas las opciones de rendimiento) se genera desde el ícono de recorte en ASF Vertex. Usar solo **Frequency A** (banda L).
+Escribe `data/raw/<scene_id>/<capa>.tif` + `scene.json` (contrato C1) e imprime si el par es `COMPARABLE`. Usa solo **Frequency A** (banda L). El fragmento `gdalwarp` que genera ASF Vertex **no funciona** con el GDAL del entorno (3.12, sin drivers HDF5/NISAR).
 
 ## 10. Plan de trabajo (orden obligatorio)
 
-1. Verificar entorno (`gdalinfo --version`, imports) y que PostGIS corra.
-2. Crear `.netrc` y probar un recorte HH.
-3. Correr `pipeline/catalog.py` y **confirmar un par comparable** sobre la ROI.
-4. Descargar el mismo recorte de ambas fechas a `data/raw/`.
+1. ✅ Verificar entorno (`gdalinfo --version`, imports) y que PostGIS corra.
+2. ✅ Crear `.netrc` y probar un recorte.
+3. ✅ Correr `pipeline/catalog.py` y **confirmar un par comparable** sobre la ROI (T62/F10, 2026-11-14).
+4. ✅ Descargar el mismo recorte de ambas fechas a `data/raw/`.
 5. `preprocess.py` y `change.py`: dB, diferencia, z-score, GeoTIFF de cambio con metadatos.
-6. `validate.py` con una fuente auxiliar pertinente.
+6. `validate.py` con una fuente auxiliar pertinente (candidatas en `docs/metodologia.md`; depende del fenómeno).
 7. Cargar escenas y resultado en Django; endpoints DRF (`/api/scenes`, `/api/changes`).
 8. Frontend (MapLibre: ROI, deslizador antes/después, capa de diferencias, panel de métricas).
 9. ~~Asistente IA restringido a evidencia.~~ Fuera de alcance por ahora (ver §7).
@@ -206,5 +225,6 @@ El fragmento completo (con todas las opciones de rendimiento) se genera desde el
 - ISCE3: https://github.com/isce-framework/isce3
 - HyP3: https://hyp3-docs.asf.alaska.edu/
 - OpenSARLab: https://asf.alaska.edu/asf-services-opensarlab/
-- Earthdata Search: https://search.earthdata.nasa.gov/
+- Earthdata Search: https://search.earthdata.nasa.gov/ (también GPM IMERG, HLS y OPERA)
+- Perfil de Earthdata (autorizar aplicaciones como GES DISC): https://urs.earthdata.nasa.gov/
 - Reto Space Apps 2026: https://www.spaceappschallenge.org/2026/challenges/earth-system-trend-detective/
