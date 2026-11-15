@@ -12,6 +12,7 @@ import {
   Title,
   Tooltip,
   type ChartOptions,
+  type Plugin,
 } from 'chart.js'
 import { Bar, Doughnut, Line } from 'react-chartjs-2'
 import { AlertTriangle, BarChart3, CheckCircle2, FileJson, Info } from 'lucide-react'
@@ -46,6 +47,148 @@ type MaskChartMode = 'bar' | 'doughnut'
 
 function formatInt(n: number): string {
   return n.toLocaleString('es-MX')
+}
+
+/** Mismo formato que la figura C (`f"{n:,}"`): 14,699,508. */
+function formatIntEn(n: number): string {
+  return n.toLocaleString('en-US')
+}
+
+/** Colores de la figura D (`etapa1_figuras.mask`: tab:red, tab:green, blue, lightgray). */
+function maskColor(etiqueta: string): string {
+  const e = etiqueta.toLowerCase()
+  if (e.startsWith('no válido')) return '#D62728'
+  if (e.startsWith('válido')) return '#2CA02C'
+  if (e.includes('adquisición')) return '#0000FF'
+  if (e.includes('polígono')) return '#D3D3D3'
+  return '#94A3B8'
+}
+
+/**
+ * Ventana de dibujo del histograma: p0.2–p99.8 de la CDF, la MISMA regla que usa la figura C
+ * (`pipeline/etapa1_figuras.histograms`: `ax.set_xlim(cdf 0.002, cdf 0.998)`), una por panel.
+ *
+ * Sin esto el eje abarca todos los bins con ≥1 píxel (−38 a +30 dB en el par T62) y el 90 % de la
+ * masa queda comprimido en ~16 % del ancho: la distribución se ve como una aguja.
+ */
+function plotWindow(series: ExploreHistogramChart['series'], anchoBin: number): [number, number] {
+  let lo = Number.POSITIVE_INFINITY
+  let hi = Number.NEGATIVE_INFINITY
+
+  for (const serie of series) {
+    const total = serie.conteos.reduce((acc, c) => acc + c, 0)
+    if (total <= 0) continue
+    let acc = 0
+    const cdf = serie.conteos.map((c) => (acc += c) / total)
+    const iLo = Math.max(0, cdf.findIndex((v) => v >= 0.002))
+    const iHi = Math.max(iLo, cdf.findIndex((v) => v >= 0.998))
+    lo = Math.min(lo, serie.bin_inicio_dB + (iLo + 0.5) * anchoBin)
+    hi = Math.max(hi, serie.bin_inicio_dB + (iHi + 0.5) * anchoBin)
+  }
+
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+    const inicio = series[0]?.bin_inicio_dB ?? -20
+    return [Number((inicio - anchoBin / 2).toFixed(2)), Number((inicio + 20).toFixed(2))]
+  }
+  // medio bin de margen para que el primer y el último escalón entren completos
+  return [
+    Number((lo - anchoBin / 2).toFixed(2)),
+    Number((hi + anchoBin / 2).toFixed(2)),
+  ]
+}
+
+// Colores y trazos de la figura C (matplotlib): curva negra, referencias rojas, franja azul claro.
+const HIST_STYLE = {
+  curve: '#000000',
+  ref: '#D62728',
+  band: 'rgba(31, 119, 180, 0.09)',
+  dash: {
+    media: [] as number[],
+    mediana: [5, 3],
+    mediaLineal: [1.5, 2.5],
+  },
+}
+
+interface HistRef {
+  p5: number
+  p95: number
+  media: number
+  mediana: number
+  mediaLineal: number
+}
+
+/**
+ * Franja p5–p95 y líneas de media de los dB (sólida), mediana (discontinua) y dB de la media
+ * lineal (punteada), igual que anota la figura C. Se dibuja sobre el área del gráfico, sin añadir
+ * datasets que ensucien el tooltip.
+ */
+function referencePlugin(ref: HistRef): Plugin<'line'> {
+  const paint = (chart: ChartJS<'line'>, lines: boolean) => {
+    const { ctx, chartArea, scales } = chart
+    const x = scales.x
+    if (!x) return
+    if (!lines) {
+      const p0 = x.getPixelForValue(ref.p5)
+      const p1 = x.getPixelForValue(ref.p95)
+      const left = Math.max(chartArea.left, Math.min(p0, p1))
+      const right = Math.min(chartArea.right, Math.max(p0, p1))
+      if (right <= left) return
+      ctx.save()
+      ctx.fillStyle = HIST_STYLE.band
+      ctx.fillRect(left, chartArea.top, right - left, chartArea.bottom - chartArea.top)
+      ctx.restore()
+      return
+    }
+    for (const [valor, dash] of [
+      [ref.media, HIST_STYLE.dash.media],
+      [ref.mediana, HIST_STYLE.dash.mediana],
+      [ref.mediaLineal, HIST_STYLE.dash.mediaLineal],
+    ] as Array<[number, number[]]>) {
+      const px = x.getPixelForValue(valor)
+      if (!Number.isFinite(px) || px < chartArea.left || px > chartArea.right) continue
+      ctx.save()
+      ctx.strokeStyle = HIST_STYLE.ref
+      ctx.lineWidth = 1.2
+      ctx.setLineDash(dash)
+      ctx.beginPath()
+      ctx.moveTo(px, chartArea.top)
+      ctx.lineTo(px, chartArea.bottom)
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
+  return {
+    id: 'referencias-estadisticas',
+    beforeDatasetsDraw: (chart) => paint(chart, false),
+    afterDatasetsDraw: (chart) => paint(chart, true),
+  }
+}
+
+/**
+ * Etiquetas con el valor encima de cada barra. La máscara va de 0 a 100 % porque "válido" es
+ * 99.39 %: sin el número, las categorías de 0.39 %, 0.22 % y 0.00 % son invisibles.
+ */
+const maskValueLabels: Plugin<'bar'> = {
+  id: 'valores-sobre-barras',
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart
+    const values = chart.data.datasets[0]?.data as Array<number | null> | undefined
+    const meta = chart.getDatasetMeta(0)
+    if (!values || !meta) return
+    ctx.save()
+    ctx.fillStyle = '#0f172a'
+    ctx.font = '10px "Segoe UI", Inter, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    meta.data.forEach((element, i) => {
+      const value = values[i]
+      if (typeof value !== 'number') return
+      const y = Math.max(chart.chartArea.top + 11, element.y - 3)
+      ctx.fillText(`${value.toFixed(3)} %`, element.x, y)
+    })
+    ctx.restore()
+  },
 }
 
 export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
@@ -98,122 +241,130 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
     [manifest],
   )
 
-  // Reconstruir centros de bin exactos y porcentajes en una malla común de ancho_bin (0.1 dB)
-  const histogramData = useMemo(() => {
-    if (!histogramChart || histogramChart.series.length === 0) return null
+  // Histograma: un panel por polarización, como la figura C. Cada panel con su ventana
+  // p0.2–p99.8 y % = 100 · conteo / total_en_rango.
+  const histogramPanels = useMemo(() => {
+    if (!histogramChart || histogramChart.series.length === 0) return []
     const anchoBin = histogramChart.eje_x.ancho_bin || 0.1
+    const etiqueta = histogramChart.eje_x.etiqueta || 'γ⁰'
+    const unidad = histogramChart.eje_x.unidad || 'dB'
     const activeSeries =
       polFilter === 'both'
         ? histogramChart.series
         : histogramChart.series.filter((s) => s.nombre === polFilter)
 
-    if (activeSeries.length === 0) return null
-
-    const minStart = Math.min(...activeSeries.map((s) => s.bin_inicio_dB))
-    const maxEnd = Math.max(
-      ...activeSeries.map((s) => s.bin_inicio_dB + s.conteos.length * anchoBin),
-    )
-    const totalBins = Math.max(1, Math.round((maxEnd - minStart) / anchoBin))
-    const labels = Array.from({ length: totalBins }, (_, i) =>
-      Number((minStart + (i + 0.5) * anchoBin).toFixed(2)),
-    )
-
-    const palette: Record<string, { bg: string; border: string }> = {
-      HHHH: { bg: 'rgba(51, 153, 255, 0.55)', border: '#1D4ED8' },
-      HVHV: { bg: 'rgba(234, 88, 12, 0.50)', border: '#C2410C' },
-    }
-
-    const datasets = activeSeries.map((serie) => {
-      const aligned = new Array<number | null>(totalBins).fill(null)
+    return activeSeries.map((serie) => {
+      const [xMin, xMax] = plotWindow([serie], anchoBin)
       const denom = serie.total_en_rango > 0 ? serie.total_en_rango : 1
-      for (let k = 0; k < serie.conteos.length; k += 1) {
-        const centroK = serie.bin_inicio_dB + (k + 0.5) * anchoBin
-        const idx = Math.round((centroK - (minStart + 0.5 * anchoBin)) / anchoBin)
-        if (idx >= 0 && idx < totalBins) {
-          aligned[idx] = Number(((100 * serie.conteos[k]) / denom).toFixed(5))
-        }
+      const st = serie.estadisticas
+
+      const data = {
+        datasets: [
+          {
+            label: `${serie.nombre} · % de píxeles`,
+            // Un punto por bin en su centro exacto, dibujado en escalón (ax.step where='mid').
+            data: serie.conteos.map((conteo, k) => ({
+              x: Number((serie.bin_inicio_dB + (k + 0.5) * anchoBin).toFixed(3)),
+              y: Number(((100 * conteo) / denom).toFixed(5)),
+            })),
+            stepped: 'middle' as const,
+            fill: false,
+            borderColor: HIST_STYLE.curve,
+            borderWidth: 1,
+            pointRadius: 0,
+            pointHoverRadius: 3,
+            tension: 0,
+          },
+        ],
       }
-      const colors = palette[serie.nombre] ?? {
-        bg: 'rgba(15, 118, 110, 0.5)',
-        border: '#0F766E',
+
+      const options: ChartOptions<'line'> = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) =>
+                `${etiqueta} ${serie.nombre} ≈ ${Number(items[0]?.parsed.x ?? 0).toFixed(2)} ${unidad}`,
+              label: (ctx) =>
+                `${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(3) : '0'} % de píxeles`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: 'linear',
+            min: xMin,
+            max: xMax,
+            title: {
+              display: true,
+              text: `${etiqueta} ${serie.nombre} [${unidad}]`,
+              font: { size: 11 },
+            },
+            ticks: { font: { size: 10 } },
+            // Solo ticks redondos (cada 5 dB), sin los extremos de la ventana (−18.7, 7.5).
+            afterBuildTicks: (scale) => {
+              const first = Math.ceil(xMin / 5) * 5
+              const ticks = []
+              for (let v = first; v <= xMax; v += 5) ticks.push({ value: v })
+              scale.ticks = ticks
+            },
+            grid: { display: false },
+          },
+          y: {
+            beginAtZero: true,
+            grace: '5%',
+            title: {
+              display: true,
+              text: `% de píxeles (bin ${anchoBin} dB)`,
+              font: { size: 11 },
+            },
+            ticks: { font: { size: 10 } },
+            grid: { display: false },
+          },
+        },
       }
+
+      // % de píxeles de la serie que queda fuera de la ventana (colas): se declara, no se esconde.
+      const fuera = serie.conteos.reduce((suma, conteo, k) => {
+        const centro = serie.bin_inicio_dB + (k + 0.5) * anchoBin
+        return centro < xMin || centro > xMax ? suma + conteo : suma
+      }, 0)
+
       return {
-        label: `${serie.nombre} (${histogramChart.eje_x.unidad})`,
-        data: aligned,
-        backgroundColor: colors.bg,
-        borderColor: colors.border,
-        borderWidth: 0.75,
-        barPercentage: 1,
-        categoryPercentage: 1,
+        serie,
+        data,
+        options,
+        plugins: [
+          referencePlugin({
+            p5: st.p5_dB,
+            p95: st.p95_dB,
+            media: st.media_dB,
+            mediana: st.mediana_dB,
+            mediaLineal: st.dB_de_la_media,
+          }),
+        ],
+        xMin,
+        xMax,
+        recortado: (100 * fuera) / denom,
       }
     })
-
-    return { labels, datasets, anchoBin }
   }, [histogramChart, polFilter])
-
-  const histogramOptions: ChartOptions<'bar'> = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: { duration: 180 },
-      plugins: {
-        legend: {
-          position: 'top',
-          labels: { boxWidth: 12, font: { size: 11, family: 'Segoe UI, Inter, sans-serif' } },
-        },
-        tooltip: {
-          callbacks: {
-            title: (items) => {
-              const xVal = items[0]?.label ?? ''
-              return `γ⁰ centro de bin: ${xVal} ${histogramChart?.eje_x.unidad ?? 'dB'}`
-            },
-            label: (ctx) =>
-              `${ctx.dataset.label}: ${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(3) : '0'} %`,
-          },
-        },
-      },
-      scales: {
-        x: {
-          title: {
-            display: true,
-            text: `${histogramChart?.eje_x.etiqueta ?? 'γ⁰'} [${histogramChart?.eje_x.unidad ?? 'dB'}] (bin ${histogramChart?.eje_x.ancho_bin ?? 0.1} dB)`,
-            font: { size: 11, weight: 'bold' },
-          },
-          ticks: {
-            maxTicksLimit: 16,
-            font: { size: 10 },
-          },
-          grid: { color: '#E2E8F0' },
-        },
-        y: {
-          title: {
-            display: true,
-            text: `% de píxeles (total en rango · bin ${histogramChart?.eje_x.ancho_bin ?? 0.1} dB)`,
-            font: { size: 11, weight: 'bold' },
-          },
-          ticks: {
-            font: { size: 10 },
-            callback: (val) => `${val}%`,
-          },
-          grid: { color: '#E2E8F0' },
-        },
-      },
-    }),
-    [histogramChart],
-  )
 
   const maskChartData = useMemo(() => {
     if (!maskChart || !maskChart.series[0]) return null
     const values = maskChart.series[0].valores
-    const colors = ['#16A34A', '#DC2626', '#64748B', '#F59E0B']
     return {
       labels: maskChart.etiquetas,
       datasets: [
         {
           label: `${maskChart.series[0].nombre} (${maskChart.eje_y.unidad})`,
           data: values,
-          backgroundColor: colors.slice(0, values.length),
-          borderColor: '#FFFFFF',
+          backgroundColor: maskChart.etiquetas.map(maskColor),
+          borderColor: '#94A3B8',
           borderWidth: 1,
         },
       ],
@@ -295,6 +446,16 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
     }
   }, [incidenceChart])
 
+  // El span real es ~0.40° en 10 000 m: con el eje arrancando en 0 la curva parece plana y engaña.
+  const incidenceRange = useMemo(() => {
+    const valores = incidenceChart?.series[0]?.valores ?? []
+    if (valores.length === 0) return null
+    const min = Math.min(...valores)
+    const max = Math.max(...valores)
+    const pad = Math.max((max - min) * 0.15, 0.05)
+    return { min: Number((min - pad).toFixed(3)), max: Number((max + pad).toFixed(3)), span: max - min }
+  }, [incidenceChart])
+
   const incidenceOptions: ChartOptions<'line'> = useMemo(
     () => ({
       responsive: true,
@@ -318,16 +479,21 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
           ticks: { font: { size: 10 }, maxTicksLimit: 11 },
         },
         y: {
+          min: incidenceRange?.min,
+          max: incidenceRange?.max,
           title: {
             display: true,
             text: `${incidenceChart?.eje_y.etiqueta ?? 'Ángulo de incidencia'} [${incidenceChart?.eje_y.unidad ?? 'degrees'}]`,
             font: { size: 11, weight: 'bold' },
           },
-          ticks: { font: { size: 10 } },
+          ticks: {
+            font: { size: 10 },
+            callback: (v) => `${Number(v).toFixed(2)}°`,
+          },
         },
       },
     }),
-    [incidenceChart],
+    [incidenceChart, incidenceRange],
   )
 
   const highlightIdx = incidenceChart
@@ -435,7 +601,7 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
           </div>
 
           {/* Gráfica 1: Histograma γ⁰ [dB] */}
-          {histogramChart && histogramData && (
+          {histogramChart && histogramPanels.length > 0 && (
             <section className="ws-chart-card">
               <div className="ws-chart-card__header">
                 <div>
@@ -471,8 +637,43 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
                 </div>
               </div>
 
-              <div className="ws-chart-card__canvas-lg">
-                <Bar data={histogramData} options={histogramOptions} />
+              <div className="ws-hist-panels">
+                {histogramPanels.map((panel) => {
+                  const st = panel.serie.estadisticas
+                  return (
+                    <figure key={panel.serie.nombre} className="ws-hist-panel">
+                      <figcaption className="ws-hist-panel__title">
+                        {panel.serie.nombre} · n = {formatIntEn(st.n_validos)} píxeles válidos en la ROI
+                      </figcaption>
+                      <div className="ws-hist-panel__plot">
+                        <ul className="ws-hist-legend">
+                          <li>
+                            <i className="ws-hist-legend__line" /> media de los dB: {st.media_dB.toFixed(3)}
+                          </li>
+                          <li>
+                            <i className="ws-hist-legend__line ws-hist-legend__line--dashed" /> mediana:{' '}
+                            {st.mediana_dB.toFixed(3)}
+                          </li>
+                          <li>
+                            <i className="ws-hist-legend__line ws-hist-legend__line--dotted" /> dB de la media
+                            lineal: {st.dB_de_la_media.toFixed(3)}
+                          </li>
+                          <li>
+                            <i className="ws-hist-legend__band" /> p5–p95: {st.p5_dB.toFixed(2)} a{' '}
+                            {st.p95_dB.toFixed(2)}
+                          </li>
+                        </ul>
+                        <div className="ws-chart-card__canvas-lg">
+                          <Line data={panel.data} options={panel.options} plugins={panel.plugins} />
+                        </div>
+                      </div>
+                      <p className="ws-chart-card__meta">
+                        Ventana <code>{panel.xMin.toFixed(2)} a {panel.xMax.toFixed(2)} dB</code> (p0.2–p99.8,
+                        igual que la figura C) · fuera de la ventana: <code>{panel.recortado.toFixed(3)} %</code>
+                      </p>
+                    </figure>
+                  )
+                })}
               </div>
 
               <div className="ws-chart-stats-grid">
@@ -553,11 +754,17 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
 
                 <div className="ws-chart-card__canvas-md">
                   {maskMode === 'bar' ? (
-                    <Bar data={maskChartData} options={maskBarOptions} />
+                    <Bar data={maskChartData} options={maskBarOptions} plugins={[maskValueLabels]} />
                   ) : (
                     <Doughnut data={maskChartData} options={maskDoughnutOptions} />
                   )}
                 </div>
+                <p className="ws-chart-card__meta">
+                  Eje de 0 a 100 % porque «válido» es casi toda la ventana: el valor exacto de cada
+                  categoría está escrito sobre su barra. «Fuera de la adquisición» vale 0.000 % de
+                  verdad (no hay píxeles con máscara 255 en esta escena). <code>graficas.json</code> solo
+                  trae estos 4 porcentajes, no la distribución espacial de la figura D.
+                </p>
 
                 <div className="ws-chart-pill-row">
                   <span className="ws-chart-pill">
@@ -577,6 +784,12 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
                       Fecha: <code>{manifest.escena.fecha_inicio}</code> · Unidades:{' '}
                       <code>{incidenceChart.eje_x.unidad}</code> vs{' '}
                       <code>{incidenceChart.eje_y.unidad}</code>
+                      {incidenceRange && (
+                        <>
+                          {' '}
+                          · span real: <code>{incidenceRange.span.toFixed(4)}°</code> en 10 000 m
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -584,6 +797,11 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
                 <div className="ws-chart-card__canvas-md">
                   <Line data={incidenceData} options={incidenceOptions} />
                 </div>
+                <p className="ws-chart-card__meta">
+                  Media de la incidencia en la ROI para cada capa de altura del cubo. No es el mapa de la
+                  figura E: la media borra la variación oeste–este del mapa y por eso el rango es de solo
+                  0.40°. <code>graficas.json</code> no trae la malla 2-D del mapa.
+                </p>
 
                 <div className="ws-chart-pill-row">
                   <span className="ws-chart-pill ws-chart-pill--accent">

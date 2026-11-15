@@ -1,13 +1,12 @@
+import { useState } from 'react'
 import {
   Camera,
-  CloudRain,
   Columns,
   Download,
   Layers,
   PencilRuler,
   Plus,
   Sliders,
-  Sun,
 } from 'lucide-react'
 import {
   EXPLORE_LAYER_OPTIONS,
@@ -45,13 +44,15 @@ interface HeaderProps {
   onToggleFloatingTools: () => void
   isCaptureMode: boolean
   onStartCaptureMode: () => void
+  /** Abre la landing institucional del equipo (MonitosCH) sin perder el estado del mapa. */
+  onOpenTeamPage: () => void
 }
 
 const TOOL_LABELS: Record<DrawTool, string> = {
   mover: 'Mover',
   lapiz: 'Lápiz',
-  peligro: 'Anomalía',
-  advertencia: 'Observación',
+  peligro: 'Círculo rojo',
+  advertencia: 'Círculo ámbar',
   poligono: 'Recortar ROI',
   etiqueta: 'Etiqueta',
 }
@@ -72,16 +73,15 @@ export function Header({
   colormapId,
   onColormapChange,
   activeTool,
-  solar,
-  onSolarChange,
-  activeDockTab,
   onDockTabChange,
   floatingToolsOpen,
   onToggleFloatingTools,
   isCaptureMode,
   onStartCaptureMode,
+  onOpenTeamPage,
 }: HeaderProps) {
   const isEditing = viewMode === 'editado' && canShowEdited
+  const [logoFailed, setLogoFailed] = useState(false)
 
   return (
     <header className="ws-header" role="banner">
@@ -129,8 +129,8 @@ export function Header({
             type="button"
             role="menuitem"
             className="ws-menubar__item"
-            onClick={() => onDockTabChange('rain-dg2')}
-            title="Abrir pestaña Simulación Lluvia / DG2"
+            disabled
+            title="Pendiente: no hay validación todavía (validate.py, Contrato C3)"
           >
             Validación
           </button>
@@ -162,10 +162,33 @@ export function Header({
           </span>
         </div>
 
-        <div className="ws-menubar__status">
-          <span>Band L (24 cm · Freq A)</span>
-          <span>|</span>
-          <span>Madurez: {escena.madurez}</span>
+        <div className="ws-menubar__right">
+          <div className="ws-menubar__status">
+            <span>Band L (24 cm · Freq A)</span>
+            <span>|</span>
+            <span>Madurez: {escena.madurez}</span>
+          </div>
+
+          <button
+            type="button"
+            className="ws-menubar__team"
+            onClick={onOpenTeamPage}
+            title="Abrir la landing institucional del equipo MonitosCH (NASA Space Apps Challenge 2026)"
+            aria-label="Abrir la landing institucional del equipo MonitosCH"
+          >
+            <span className="team-logo-slot" aria-hidden="true">
+              {logoFailed ? (
+                <span className="team-logo-slot__fallback">MCH</span>
+              ) : (
+                <img
+                  src="/monitosch-logo.png"
+                  alt=""
+                  onError={() => setLogoFailed(true)}
+                />
+              )}
+            </span>
+            <span className="ws-menubar__team-label">MonitosCH</span>
+          </button>
         </div>
       </div>
 
@@ -326,28 +349,6 @@ export function Header({
               </span>
             </button>
 
-            <button
-              type="button"
-              className={`ws-ribbon__btn ${solar.enabled ? 'is-active' : ''}`}
-              onClick={() => {
-                onDockTabChange('map')
-                onSolarChange({ ...solar, enabled: !solar.enabled })
-              }}
-              title="Activar/desactivar Simulador Solar con mapa de calor de radiación (Inferno)"
-            >
-              <Sun size={14} className="icon-sun" />
-              <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : 'Simulador Solar'}</span>
-            </button>
-
-            <button
-              type="button"
-              className={`ws-ribbon__btn ws-ribbon__btn--hydro ${activeDockTab === 'rain-dg2' ? 'is-active' : ''}`}
-              onClick={() => onDockTabChange(activeDockTab === 'rain-dg2' ? 'map' : 'rain-dg2')}
-              title="Alternar vista de Simulación Lluvia / Hidrodinámica DG2 sobre el mapa"
-            >
-              <CloudRain size={14} />
-              <span>Lluvia / DG2</span>
-            </button>
           </div>
           <span className="ws-ribbon__label">Herramientas y Módulos</span>
         </div>

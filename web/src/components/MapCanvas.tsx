@@ -21,7 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
   CircleDot,
-  CloudRain,
   Crosshair,
   Download,
   GripHorizontal,
@@ -1538,17 +1537,6 @@ export function MapCanvas({
             <Monitor size={13} aria-hidden="true" />
             <span>Graphics / Map Plot 1</span>
           </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeDockTab === 'rain-dg2'}
-            className={`ws-panel-tab ws-panel-tab--hydro ${activeDockTab === 'rain-dg2' ? 'is-active' : ''}`}
-            onClick={() => onDockTabChange('rain-dg2')}
-          >
-            <CloudRain size={13} aria-hidden="true" />
-            <span>Simulación Lluvia / DG2</span>
-          </button>
         </div>
 
         <div className="ws-panel-tabbar__summary">
@@ -2325,7 +2313,7 @@ export function MapCanvas({
                     title={DANGER_CIRCLE_TOOLTIP}
                   >
                     <CircleDot size={13} className="icon-danger" />
-                    <span>Círculo Peligro</span>
+                    <span>Círculo rojo</span>
                   </button>
                   <button
                     type="button"
@@ -2335,7 +2323,7 @@ export function MapCanvas({
                     title={WARN_CIRCLE_TOOLTIP}
                   >
                     <CircleDot size={13} className="icon-warn" />
-                    <span>Círculo Adv.</span>
+                    <span>Círculo ámbar</span>
                   </button>
                   <button
                     type="button"
