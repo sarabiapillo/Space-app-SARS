@@ -1,0 +1,262 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{geometry}
+\geometry{margin=2.1cm}
+\usepackage{amsmath,amssymb,booktabs,longtable,array,tabularx}
+\setlength{\tabcolsep}{3pt}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{pdflscape,xurl}
+\usetikzlibrary{babel,arrows.meta,positioning,shapes.geometric}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlist[itemize,enumerate]{nosep,leftmargin=*}
+\setlist[description]{nosep}
+\newcommand{\pend}{\textbf{PENDIENTE}}
+\newcommand{\prop}{\textbf{Propuesta condicionada}}
+\newcommand{\hecho}{\textbf{Hecho verificado en el estado documentado}}
+\title{Flujo de implementación de una simulación de inundación\\\large TerraPulse AI: propuesta científica y plan técnico}
+\author{Documento de diseño para revisión; no constituye aprobación del modelo}
+\date{Estado: stack propuesto; evento, formulación y solver pendientes de aprobación}
+\begin{document}
+\maketitle
+\begin{abstract}
+Este documento separa deliberadamente (I) la revisión científica de la formulación y (II) el desarrollo técnico reproducible. Propone un stack y un solver candidato para evaluación, pero no los considera aprobados ni implementados. La propuesta de ecuaciones se condiciona a que se verifiquen la versión, el esquema y las opciones concretas del ejecutable. Las incógnitas se conservan como tales; no se incluyen resultados ni parámetros inventados.
+\end{abstract}
+\tableofcontents\newpage
+
+\section{Alcance, estado y vocabulario de evidencia}
+El objetivo futuro es estimar evolución espacio-temporal de profundidad y extensión de agua para un evento de inundación aún por seleccionar, y contrastarla con observaciones independientes. Región de interés de visualización: Chiapas, México; el dominio hidráulico deberá incluir el área contribuyente y fronteras relevantes, no limitarse automáticamente a la ROI. No está aprobado que inundación sea el fenómeno final.
+
+\begin{description}
+\item[Hechos del estado actual.] No hay simulación hidráulica implementada; el backend esqueleto, la interfaz usa mocks y almacenamiento local. La guía local documenta C1--C6; los artefactos de adquisición de \texttt{origin/ETAPA-1} no deben suponerse integrados en la rama actual. Las pruebas existentes reportadas (20) no validan hidráulica.
+\item[Propuesta.] Priorizar adaptador reproducible a solver externo documentado antes de escribir solver propio. La familia LISFLOOD-FP contiene esquemas físicamente distintos; ATS es difusivo, ACC conserva aceleración local y omite la advectiva, FV1/DG2 representan SWE 2D completo bajo hipótesis de aguas someras.
+\item[Datos faltantes.] Evento, DEM y datum vertical, geometría y batimetría, forzamientos, frontera, estado inicial, infiltración, rugosidad, malla, solver y versión, licencia del artefacto y datos y tolerancias de validación.
+\item[Decisión pendiente.] Equipo de hidrología/física aprueba fenómeno, régimen, formulación y condiciones; responsables de datos, plataforma y publicación verifican entradas, versión y licencia.
+\end{description}
+
+\section{I. Flujo científico/físico --- revisión previa a programar}
+\subsection{Pregunta y dominio físico}
+\begin{center}
+\begin{tikzpicture}[node distance=3mm and 3mm, every node/.style={draw,rounded corners,align=center,font=\scriptsize,text width=2.35cm,minimum height=8mm}, >=Stealth]
+\node (a) {Evento, régimen\\y dominio};
+\node[right=of a] (b) {Hipótesis físicas\\y ecuaciones};
+\node[right=of b] (c) {Entradas, estado\\y fronteras};
+\node[right=of c] (d) {Método numérico\\y balance};
+\node[below=of d] (e) {Benchmarks\\y observaciones};
+\node[left=of e] (f) {Incertidumbre\\y aceptación física};
+\draw[->] (a)--(b); \draw[->] (b)--(c); \draw[->] (c)--(d); \draw[->] (d)--(e); \draw[->] (e)--(f);
+\end{tikzpicture}
+\end{center}
+La variable objetivo propuesta es profundidad de agua somera promediada verticalmente $h(x,y,t)$ y, si el esquema elegido la proporciona, velocidad media. Deben especificarse proceso dominante (fluvial, pluvial, costero/estuarino u otro), escalas espaciales y temporales, régimen subcrítico/supercrítico esperado, propagación gradual o frente rápido y papel de cauces/estructuras. Sin evento ni relieve no cabe afirmar cuál régimen domina. La aproximación de aguas someras presupone escala horizontal mayor que profundidad, presión aproximadamente hidrostática y una representación adecuada de fuerzas y geometría; no resuelve flujo 3D local en puentes, turbulencia detallada ni rotura estructural por sí sola.
+
+\subsection{Formulaciones y métodos: relación con SWE 2D}
+SWE 2D son las ecuaciones bidimensionales de aguas someras. ATS y ACC son \emph{aproximaciones físicas} de esa descripción, mientras que FV1 y DG2 son \emph{métodos numéricos} para resolver el sistema SWE 2D completo. No son cuatro familias de ecuaciones independientes ni cuatro métodos equivalentes: pertenecen a distintos niveles de simplificación dentro de las opciones de LISFLOOD-FP.
+El recorrido compartido de datos es ROI $\rightarrow$ dominio y datos físicos $\rightarrow$ solver externo $\rightarrow$ profundidad/extensión $\rightarrow$ balance y evaluación $\rightarrow$ C6. Las rutas siguientes \emph{no se mezclan}: cada una define qué ecuaciones considera, qué trabajo realiza, qué podría representar, sus límites y el stack específico. Las fuentes areales de las fórmulas son propuestas físicas; solo se convierten en entradas operativas tras comprobar soporte en el ejecutable seleccionado. No se ha elegido un evento real.
+
+\subsection{Ruta ATS: onda difusiva, sin inercia}
+\textbf{Ecuaciones conceptuales propuestas para evaluar ATS (no transcripción de un binario):} continuidad $\partial_t h+\partial_x q_x+\partial_y q_y=r-i+s_h$ y, para una cara de celda de longitud $\Delta\ell$ con pendiente $S_\eta=\Delta\eta/\Delta\ell$,
+\begin{equation}
+q_f=-\frac{h_f^{5/3}}{n}\operatorname{sgn}(S_\eta)\sqrt{|S_\eta|},\qquad
+h_f=\max\!\left(0,\max(\eta_L,\eta_R)-\max(z_{b,L},z_{b,R})\right).\label{eq:ats}
+\end{equation}
+$q_f$ es caudal por ancho de cara (m$^2$/s), $h_f$ profundidad efectiva (m), $L,R$ son las dos celdas, $\Delta\eta=\eta_R-\eta_L$ y $q_f>0$ indica flujo de $L$ hacia $R$. Esta ley de Manning expresa flujo debido a pendiente de superficie y fricción; omite aceleraciones temporal y advectiva. La definición de cara es una \emph{ilustración física}; comprobar ecuación exacta, tratamiento de $S_\eta=0$ y paso estable en el ATS de la versión elegida (véase la fuente Bristol en Referencias). Lluvia e infiltración no se presuponen soportadas por ese ejecutable.
+\textbf{Flujo propio:} DEM/datum, rugosidad, estado inicial, fronteras y forzamientos documentados $\rightarrow$ comprobar flujo lento y pendiente válida $\rightarrow$ generar entradas ATS $\rightarrow$ ejecutar adaptador externo $\rightarrow$ comprobar balance, estabilidad y extensión contra referencia independiente. \textbf{Ventaja:} simplicidad para avance lento en llanura. \textbf{Puede estimar:} extensión y profundidad bajo esas hipótesis. \textbf{No asegura:} frentes rápidos, aceleraciones ni velocidades locales confiables. \textbf{Stack específico:} opción ATS de LISFLOOD-FP solo tras confirmar manual, release y ejecutable; mismos GDAL/Rasterio y \texttt{pipeline/} compartidos, sin solver propio.
+
+\subsection{Ruta ACC: inercia local, candidato principal condicionado}
+\textbf{Ecuaciones físicas propuestas (no transcripción del ejecutable):}
+Para permitir revisión antes de programar, se propone como candidato conceptual ACC bidimensional en forma conservativa de continuidad y forma de cantidad de movimiento sin aceleración advectiva. Sea $\boldsymbol{q}=(q_x,q_y)=h(u,v)$ el caudal unitario (m$^2$/s), $z_b$ elevación del lecho, $\eta=h+z_b$ superficie libre, $g$ gravedad y $n$ Manning:
+\begin{align}
+\partial_t h+\partial_x q_x+\partial_y q_y &= r-i+s_h, \label{eq:mass}\\
+\partial_t q_x+g h\,\partial_x\eta+g n^2\frac{q_x\sqrt{q_x^2+q_y^2}}{h^{7/3}} &= a_x, \label{eq:accx}\\
+\partial_t q_y+g h\,\partial_y\eta+g n^2\frac{q_y\sqrt{q_x^2+q_y^2}}{h^{7/3}} &= a_y. \label{eq:accy}
+\end{align}
+Aquí $r,i,s_h$ son fuentes/sumideros areales en m/s (precipitación, infiltración y otras fuentes netas); $a_x,a_y$ son fuentes de cantidad de movimiento por área en m$^2$/s$^2$, si se admiten y definen. El término de Manning es una escritura vectorial conceptual con $h>0$; tratamiento de seco, regularización y forma discreta dependen del solver. No aplicar la expresión en seco sin la regla documentada del ejecutable.
+
+Las ecuaciones retienen almacenamiento/aceleración local $\partial_t\boldsymbol q$, gradiente de superficie y fricción, pero omiten flujo advectivo de momento. Las unidades de continuidad son m/s; las de cada término de momento, m$^2$/s$^2$. $u,v$ se miden en m/s, $h,z_b,\eta$ en m, $n$ tiene unidades usuales de Manning (s m$^{-1/3}$), y $g$ en m/s$^2$. Esta formulación es una candidata de continuo, no afirmación de que coincida exactamente con una opción binaria ni con la discretización por caras de una versión LISFLOOD-FP.
+\textbf{Flujo propio:} confirmar que el caso tiene avance gradual principalmente subcrítico $\rightarrow$ preparar DEM, datum, rugosidad, fronteras y forzamientos $\rightarrow$ comprobar manual/binario ACC $\rightarrow$ generar entradas $\rightarrow$ ejecutar adaptador $\rightarrow$ verificar masa, estados secos y referencia independiente. \textbf{Ventaja:} retiene cambios de movimiento con el tiempo con menor complejidad que SWE completo. \textbf{Puede estimar:} profundidad, propagación y extensión si las condiciones se cumplen. \textbf{No asegura:} chorros, curvas bruscas, flujo supercrítico, rotura de presa ni velocidad confiable sin validación. \textbf{Stack específico propuesto:} LISFLOOD-FP 8.1 ACC uniforme en CPU con adaptador Python, sujeto a revisión; no se instaló ni aprobó ese solver.
+
+El artículo de LISFLOOD-FP 8.1 (Sharifian et al., 2023) documenta el ACC de malla uniforme en CPU/GPU y una adaptación de malla no uniforme en GPU. Su manuscrito prepublicado v4 presenta continuidad y momento como ecuaciones (1)--(3), y actualizaciones de interfaz/celda para la adaptación no uniforme en (4)--(7); no se atribuye esa numeración ni esa actualización al ACC uniforme ni se confunde la expresión general de momento del artículo con la reducción sin advección propuesta aquí. La lectura automatizada del texto publicado no permitió cotejar directamente sus fórmulas, por lo que el cotejo línea a línea con el artículo publicado, manual y fuente del artefacto exacto sigue \pend. Las ecuaciones (\ref{eq:mass})--(\ref{eq:accy}) son hipótesis físicas de diseño, no una transcripción verificada del código de LISFLOOD-FP 8.1. Antes de implementar: cotejar Eqs. y nomenclatura de versión, unidades, discretización de flujos/fricción, tratamiento de lluvia, infiltración, fronteras y salidas. En particular, la inclusión de $i$ aquí es extensión conceptual y no garantía de que el binario 8.1 la soporte.
+
+\subsection{Glosario compartido de símbolos de las cuatro rutas}
+Esta tabla define símbolos comunes, sin afirmar que cada ruta utilice todos los términos.
+\begin{longtable}{p{.20\textwidth}p{.15\textwidth}p{.57\textwidth}}
+\toprule Símbolo & Unidad & Significado y origen esperado\\\midrule
+$x,y,t$; $\partial_t,\partial_x,\partial_y$ & m, m, s; derivadas & Coordenadas horizontales en CRS métrico y tiempo transcurrido desde un origen UTC documentado; $\partial$ indica cambio local respecto de la variable indicada.\\
+$h$, $h_0=h(x,y,0)$ & m & Profundidad de agua y estado inicial por celda; no es elevación del terreno ni se observa directamente con NISAR.\\
+$z_b$, $\eta=h+z_b$ & m & Altura del fondo según DEM/batimetría y cota de superficie libre; deben compartir datum vertical.\\
+$u,v$, $\boldsymbol u=(u,v)$ & m/s & Componentes horizontal $x,y$ de la velocidad media en profundidad; no son velocidad en un punto o debajo de un puente.\\
+$q_x=hu$, $q_y=hv$, $\boldsymbol q$ & m$^2$/s & Caudal por unidad de ancho en cada dirección. Un caudal total de frontera $Q$ (m$^3$/s) requiere anchura o conversión específica del solver.\\
+$g$, $n$ & m/s$^2$; s/m$^{1/3}$ & Gravedad y coeficiente de rugosidad de Manning; registrar valor/convención de $g$ y fuente espacial de $n$, sin asumirlos de un mapa radar.\\
+$h_f$, $q_f$, $S_\eta$, $\Delta\ell$, $L,R$ & m; m$^2$/s; adimensional; m; índices & Profundidad y caudal por ancho en una cara ATS, pendiente de superficie, distancia entre centros y celdas a ambos lados; aproximación conceptual, no regla exacta del ejecutable.\\
+$r$, $i$, $s_h$ & m/s & Lluvia, infiltración y otras fuentes netas de profundidad por unidad de tiempo; $i$ se resta, $s_h$ lleva signo. No son automáticamente opciones admitidas por cualquier ejecutable.\\
+$a_x,a_y$, $\boldsymbol a$ & m$^2$/s$^2$ & Fuentes de momento por unidad de área, si se modelan; no dejar un valor tácito. Verificar si la variante elegida admite estos términos.\\
+$\boldsymbol S_f$, $I$, $\nabla$, $\otimes$ & adimensional; adimensional; operador; operador & Pendiente de fricción vectorial, matriz identidad, gradiente/divergencia horizontal y producto tensorial en la alternativa completa; $gh\boldsymbol S_f$ tiene unidades m$^2$/s$^2$.\\
+\bottomrule
+\end{longtable}
+En $h=0$ los cocientes de Manning no se evalúan literalmente: el solver debe definir su propio tratamiento de celdas secas.
+
+\subsection{Ruta FV1: volúmenes finitos de primer orden, SWE 2D completo}
+\textbf{Ecuaciones físicas:} continuidad y momento promediado en profundidad, con transporte advectivo. FV1 no designa otras ecuaciones, sino un método de primer orden para aproximar estas mismas ecuaciones en la malla:
+\begin{align}
+\partial_t h+\nabla\cdot(h\boldsymbol u)&=r-i+s_h,\label{eq:swe-masa}\\
+\partial_t(h\boldsymbol u)+\nabla\cdot\left(h\boldsymbol u\otimes\boldsymbol u+\tfrac12 gh^2 I\right)&=-gh\nabla z_b-gh\boldsymbol S_f+\boldsymbol a.\label{eq:swe-momento}
+\end{align}
+Fuentes y fricción se representan aquí conceptualmente; cotejar su soporte y discretización exactos con el release seleccionado. \textbf{Flujo propio:} preparar datos y fronteras $\rightarrow$ verificar versión FV1 y su tratamiento de flujos/interfaz/seco-húmedo $\rightarrow$ generar entradas $\rightarrow$ ejecutar $\rightarrow$ verificar balance y benchmarks de frente, referencia y convergencia. \textbf{Ventaja:} incluye advección y puede estudiar transitorios donde las aproximaciones previas fallen; su primer orden puede difuminar frentes. \textbf{Puede estimar:} profundidad y extensión en regímenes admitidos por aguas someras. \textbf{No asegura:} precisión sin buena malla/datos, turbulencia 3D ni el efecto de estructuras no representadas. \textbf{Stack específico:} opción FV1 documentada de LISFLOOD-FP (8.0/8.1 a verificar) mediante adaptador externo, sin cambiar el pipeline compartido.
+
+\subsection{Ruta DG2: Galerkin discontinuo de segundo orden, SWE 2D completo}
+\textbf{Ecuaciones físicas:} exactamente el mismo sistema completo (\ref{eq:swe-masa})--(\ref{eq:swe-momento}) que FV1, con advección; DG2 cambia la \emph{aproximación numérica} dentro de cada celda y el intercambio entre caras, no la ley física. \textbf{Flujo propio:} preparar datos y fronteras $\rightarrow$ verificar versión DG2, reconstrucción, limitadores y estabilidad $\rightarrow$ generar entradas $\rightarrow$ ejecutar $\rightarrow$ evaluar balance, frentes y convergencia contra benchmarks. \textbf{Ventaja:} potencial para representar gradientes con mayor resolución numérica en mallas apropiadas. \textbf{Puede estimar:} evolución de profundidad/extensión bajo SWE completo y datos válidos. \textbf{No asegura:} superioridad en todos los casos, menor costo ni representación automática de cauces subcelda, alcantarillas, erosión o turbulencia 3D. \textbf{Stack específico:} opción DG2 documentada de LISFLOOD-FP (8.0/8.1 a verificar), con adaptador externo y recursos de cómputo medidos.
+
+\subsection{Tabla de ventajas, desventajas y demostraciones propuestas}
+Cada fila corresponde a \emph{una ruta distinta}. Las demostraciones son pruebas sintéticas por diseñar, no simulaciones ya ejecutadas ni eventos reales. Sus referencias y tolerancias deben acordarse \emph{antes} de correrlas; una prueba superada no demuestra por sí sola precisión para una localidad.
+\begin{landscape}
+\footnotesize
+\begin{longtable}{p{.12\linewidth}p{.18\linewidth}p{.20\linewidth}p{.23\linewidth}p{.19\linewidth}}
+\toprule Ruta física / método & Ventaja & Desventaja o límite & Simulación de demostración propuesta & Qué permitiría evaluar; qué no prueba\\\midrule
+\endhead
+ATS (difusiva) & Modelo sencillo para extensión lenta cuando la inercia importa poco. & Omite aceleración local y advectiva; puede fallar con frentes rápidos. & Lámina de agua avanzando por una planicie idealizada de pendiente suave, con topografía y frontera sintéticas documentadas. & Extensión, profundidad y balance en régimen lento frente a referencia acordada; no demuestra crecidas súbitas ni velocidad real.\\
+ACC (inercia local) & Representa aceleración con el tiempo sin resolver toda la advección. & Omite aceleración advectiva; chorros, curvas fuertes y flujo supercrítico pueden quedar fuera de la hipótesis. & Pulso de caudal sintético que entra a una planicie idealizada, con zonas inicialmente secas; contrastar propagación y volumen con una referencia independiente. & Continuidad, frente seco/húmedo y respuesta temporal; no demuestra exactitud para un río de Chiapas ni profundidad observada por NISAR.\\
+FV1 (SWE completo, primer orden) & Incluye advección; método relativamente simple para ensayar transitorios de aguas someras. & El primer orden puede difuminar frentes y exige malla/tiempo verificados. & Rotura de presa \emph{idealizada} con solución o benchmark publicado compatible y datos sintéticos explícitos. & Frente, conservación y respuesta al refinar malla; no demuestra rotura real, erosión ni estructuras omitidas.\\
+DG2 (SWE completo, segundo orden) & Puede representar gradientes con mayor precisión numérica en casos adecuados. & Requiere revisar limitadores, estabilidad y costo; no siempre mejora el resultado real. & El mismo benchmark idealizado que FV1, con condiciones y métricas comparables y estudio de convergencia. & Diferencia de error y costo entre métodos bajo condiciones fijadas; no demuestra superioridad universal ni datos reales de inundación.\\
+\bottomrule
+\end{longtable}
+\end{landscape}
+\normalsize
+Si el físico aprueba una ruta y se consiguen DEM, forzamientos y observaciones independientes, el siguiente paso \emph{separado} sería aplicarla a un evento fluvial real documentado. Ninguna demostración sintética reemplaza esa evaluación ni autoriza afirmar 100\% de certeza.
+
+\paragraph{Elección entre rutas.} Una crecida fluvial gradual es solo un primer caso \emph{candidato}, no un evento seleccionado en Chiapas o Guerrero. La ruta ACC requiere aprobación del físico y pruebas; si falla por régimen, evaluar FV1/DG2 u otro modelo documentado. ATS solo si la inercia resulta despreciable. En ninguna ruta una ecuación más compleja corrige por sí sola DEM/datum, cauces, lluvia/caudal o validación deficientes. No afirmar exactitud de extensión, profundidad, llegada o velocidad sin referencia independiente para cada magnitud.
+
+\subsection{Condiciones, parámetros y representación geoespacial}
+\begin{itemize}
+\item \textbf{Iniciales:} $h(x,y,0)$ y estado compatible; velocidades/caudales iniciales cuando el solver los requiera. Justificar agua permanente, almacenamiento inicial y período de calentamiento.
+\item \textbf{Fronteras:} hidrogramas de caudal o niveles con referencia vertical y hora; condiciones de salida y lateral según dominio y solver. Un caudal total (m$^3$/s) necesita anchura/distribución o interfaz documentada para relacionarlo con caudal unitario. No duplicar escorrentía representada por lluvia y caudales de entrada.
+\item \textbf{Lluvia e infiltración:} series con unidades, cobertura, zona contribuyente, intervalo, procedencia e incertidumbre. Infiltración explícita; si se omite, decisión documentada y análisis de sensibilidad, nunca cero implícito.
+\item \textbf{DEM y datum:} cobertura y calidad documentadas; datum vertical compatible entre terreno, niveles y datos de referencia. La resolución remuestreada no crea detalle. Usar CRS métrico adecuado, no EPSG:4326 para distancias. Diferenciar ROI de evaluación y dominio hidráulico.
+\item \textbf{Cauces/estructuras:} DEM puede no representar batimetría; especificar canales, puentes, alcantarillas, diques y barreras relevantes y cómo se incorporan o se declaran ausentes. No inferirlos automáticamente del relieve.
+\item \textbf{Rugosidad:} mapa/clases, unidades, fuente y asignación espacial de $n$; incertidumbre y rangos de sensibilidad aprobados, sin inventar valores.
+\end{itemize}
+
+\subsection{Método, estabilidad y balance}
+La implementación discreta será la del solver aprobado. Debe documentar malla, discretización, paso fijo/adaptativo, regla CFL propia, condiciones de borde, convergencia y tratamiento wet/dry. Una actualización de volumen de celda en esquema de volúmenes finitos debe contabilizar flujos de caras y fuentes; por tanto, la suma de volúmenes cambia únicamente por flujos de frontera y fuentes/sumideros, dentro de tolerancia previamente aprobada. Controlar profundidades no físicas, estados secos y volumen corregido; no ocultar errores mediante recorte silencioso. Reportar balance como volumen inicial + entradas + lluvia $-$ infiltración $-$ salidas $-$ volumen final, con convenciones y unidades explícitas.
+
+\subsection{Papel de NISAR}
+NISAR puede aportar una observación radar de cambio/agua bajo reglas de comparabilidad y procesamiento, no verdad automática de inundación. Cambio de retrodispersión no equivale por sí mismo a inundación, profundidad ni velocidad: vegetación, humedad, geometría, sombras/layover, resolución y momento de adquisición afectan la señal. Una máscara derivada debe describir umbrales, máscara, polarización, escenas, incertidumbre y agua permanente. No usar NISAR como sustituto automático del forzamiento hidráulico. Contrastar hora UTC de observación con instante simulado; máximo temporal no es una instantánea equivalente.
+
+\subsection{Benchmarks, validación e incertidumbre}
+Antes de un evento real, definir pruebas comunes de lago en reposo sobre lecho irregular, dominio sin forzamiento, conservación de volumen y transición seco-húmedo. Para ATS, añadir propagación lenta con referencia; para ACC, flujo gradual y una prueba que identifique dónde falla la hipótesis inercial local; para FV1 y DG2, benchmarks de advección y rotura de presa con referencias pertinentes, además de sensibilidad y convergencia de malla/tiempo. No exigir que ATS o ACC reproduzcan un benchmark fuera de sus hipótesis como si resolvieran SWE completo. Fuente, versión, condiciones y tolerancias deben fijarse por el equipo antes de ejecutar; aquí no se afirman resultados ni tolerancias numéricas.
+
+Validación independiente: observación de extensión de agua con instante comparable y nodata excluido; lluvia/caudal contextualizan evento pero no son por sí solos verdad espacial. Separar calibración de evaluación. Si hay etiquetas, reportar matriz de confusión, precisión, recall, F1 e IoU con máscara y denominadores; si faltan etiquetas, resultado exploratorio, sin exactitud afirmada. Incertidumbre de DEM/datum, rugosidad, caudales/lluvia, estructura, clasificación radar, escala y solver deberá propagarse o al menos explorarse sistemáticamente.
+
+\subsection{Decisiones que requieren aprobación}
+\begin{enumerate}
+\item ¿Se confirma inundación y qué evento, dominio y régimen se representan?
+\item ¿ACC es aceptable frente a ATS y SWE completo dadas las escalas y aceleración esperadas? ¿Qué evidencia decide?
+\item ¿Qué solver, esquema, release, compilación, entradas, licencias y salidas se verificaron en artefacto/documentación primaria?
+\item ¿Qué DEM/datum, cauces/estructuras, forzamientos, fronteras, estado inicial, infiltración y rugosidad tienen procedencia suficiente?
+\item ¿Qué benchmarks, evaluación independiente, métricas y tolerancias previas permiten avanzar?
+\item ¿Qué incertidumbres se exponen al usuario y qué afirmaciones quedan prohibidas?
+\end{enumerate}
+
+\section{II. Flujo técnico/de código --- plan de desarrollo}
+La lógica científica reside en \texttt{pipeline/}, ejecutable sin Django. Los nombres de módulos siguientes son propuestas, no archivos existentes. La interfaz entre etapas se versiona y valida; no se acoplan vistas web ni se copian módulos desde ramas no integradas.
+
+\subsection{Stack recomendado para un primer caso, no instalado ni aprobado}
+\begin{longtable}{p{.22\textwidth}p{.38\textwidth}p{.32\textwidth}}
+\toprule Componente propuesto & Responsabilidad & Motivo y condición de uso\\\midrule
+Frontend React + TypeScript + MapLibre GL (existente) & Permitir seleccionar una ROI y mostrar capas/fechas/advertencias. & Reutilizar el mapa actual; hoy solo tiene mocks y almacenamiento local. La ROI no es automáticamente el dominio hidráulico.\\
+Python 3.11 + \texttt{pipeline/} (existente parcialmente) & Orquestar búsqueda, validación de configuración, ejecución y trazabilidad sin depender de Django. & Respeta la arquitectura actual y permite probar con datos sintéticos antes de la integración web.\\
+\texttt{pipeline/sources/} + ASF (parcial) & Consultar NISAR y recibir C1 cuando la adquisición esté integrada; conservar procedencia. & No asumir que los módulos de \texttt{origin/ETAPA-1} existen en la rama actual. NISAR solo apoya observación/validación.\\
+GDAL + Rasterio (presentes en entorno declarado) & Inspeccionar DEM, CRS, nodata; recortar/reproyectar y alinear insumos y rasters C6. & Rasterio documenta \texttt{reproject} con CRS, transformaciones y métodos de remuestreo; el datum vertical requiere verificación adicional. La fuente y descarga de DEM siguen pendientes.\\
+Solver externo documentado, ruta por aprobar & Adaptador \texttt{solver\_adapter.py} específico para ATS, ACC, FV1 o DG2; registrar profundidad/extensión y versión. & Se propone evaluar primero ACC uniforme de LISFLOOD-FP 8.1 en CPU, sin exigir GPU; verificar manual, binario, opciones, licencia y régimen antes de ejecutarlo. Ningún solver está instalado ni aprobado.\\
+Django + DRF (esqueleto), teselas COG/TiTiler y MapLibre (integración futura) & Publicar metadatos C6/C3, servir capas y exportar figura/reporte con manifiesto. & Evitar recalcular hidráulica en vistas; TiTiler es una opción posterior, no una dependencia instalada ni requisito de la primera prueba científica.\\
+\bottomrule
+\end{longtable}
+\subsection{Cuatro recorridos técnicos separados sobre el stack compartido}
+\paragraph{ATS.} \texttt{inputs.py} prepara topografía, rugosidad y fronteras para la opción difusiva verificada; \texttt{solver\_adapter.py} ejecuta ATS y \texttt{outputs.py} extrae profundidad. Rechazar la ruta si la inercia importa o falta soporte documentado; probar conservación y propagación lenta antes de C6.
+\paragraph{ACC (candidato).} Preparar entradas de inercia local para una versión/binario verificados; ejecutar ACC uniforme CPU mediante adaptador; comprobar masas, estabilidad, condiciones seco-húmedo y extensión comparada al instante de observación. Si lluvia/infiltración/fronteras no son compatibles, detenerse; no emularlas silenciosamente.
+\paragraph{FV1.} Preparar entradas para la versión SWE completo de primer orden; ejecutar su adaptador y contrastar dinámica advectiva, conservación y sensibilidad de malla. No reutilizar parámetros de estabilidad ATS/ACC sin comprobación.
+\paragraph{DG2.} Preparar entradas para la versión SWE completo de segundo orden; verificar configuración de reconstrucción/estabilidad; ejecutar y comparar solución, costo y convergencia con criterios previamente acordados. No inferir capacidades o superioridad de DG2 por su nombre.
+Cada ruta produce C6 con \texttt{formulation}, \texttt{solver}, \texttt{solver\_version} y pruebas propias; la API y la interfaz solo consumen resultados verificados, no seleccionan un esquema hidráulico por cuenta propia.
+
+Para un usuario que dibuja cualquier ROI: primero verificar si existe un caso preparado que la cubra. Si no hay DEM, forzamientos, condiciones de frontera o evaluación, indicar que la simulación no está disponible; no prometer ejecución instantánea solo por seleccionar un polígono. El dominio de cálculo puede extenderse aguas arriba y más allá de la ROI visible. Un producto exploratorio debe identificarse como tal.
+
+
+\begin{center}
+\begin{tikzpicture}[node distance=4mm and 4mm, every node/.style={draw,rounded corners,align=center,font=\scriptsize,text width=2.35cm,minimum height=8mm}, >=Stealth]
+\node (a) {Fuentes y adquisición\\C1};
+\node[right=of a] (b) {Dominio y entradas\\DEM, forzamientos};
+\node[right=of b] (c) {Config + adaptador\\solver externo};
+\node[right=of c] (d) {Salidas y manifiesto\\C6};
+\node[below=of d] (e) {Validación científica\\C3};
+\node[left=of e] (f) {Backend/API\\C4};
+\node[left=of f] (g) {Frontend / export.\\C5};
+\draw[->] (a)--(b); \draw[->] (b)--(c); \draw[->] (c)--(d); \draw[->] (d)--(e); \draw[->] (e)--(f); \draw[->] (f)--(g);
+\end{tikzpicture}
+\end{center}
+
+\subsection{Contrato C6}
+Artefacto propuesto por ejecución \path{data/processed/<simulation_id>/}: rasters georreferenciados \path{water_depth_t*.tif}, \path{maximum_depth.tif}, \path{simulated_extent.tif}; opcionales \path{observed_extent.tif}, \path{arrival_time.tif} solo si existen y se definen (origen temporal UTC, umbral de llegada y convención nodata para celdas nunca inundadas); \path{simulation_manifest.json}, \path{validation.json} y log. El manifiesto identifica CRS/transformación/resolución/nodata, dominio/ROI, datum, instante e intervalos UTC, umbral y definición de extensión, fuentes y checksum cuando disponible, configuración física, solver y versión, comando reproducible sin secretos, versiones de código/entradas, estado/errores y referencias de procedencia. No registrar rutas/credenciales sensibles. Validar unicidad, completitud y coherencia antes de publicar. C6 no implica API ni validación positiva.
+
+\begin{landscape}
+\footnotesize
+\begin{longtable}{p{.10\linewidth}p{.17\linewidth}p{.19\linewidth}p{.17\linewidth}p{.16\linewidth}p{.14\linewidth}}
+\toprule Etapa & Entradas y precondiciones & Salidas/contrato y módulos propuestos & Validaciones y errores & Pruebas & Estado/avance\\\midrule
+\endhead
+1. Obtener datos & Catálogo/escenas compatibles; fuentes con licencia y cobertura; evento aún pendiente. & C1: capas, malla/cobertura y metadatos; \texttt{pipeline/sources/}, adaptadores de descarga/inspección. & Falta de cobertura, metadata, credenciales externas o compatibilidad: fallo explícito; nunca asumir módulos de otra rama. & Unitarias de metadatos/compatibilidad; integración fuente con fixtures sin secretos. & ASF catálogo y contratos existentes parcialmente; recorte en rama actual pendiente. Avanzar con procedencia y cobertura verificadas.\\
+2. Preparar dominio & DEM, datum, cauces/estructuras, ROI y área contribuyente; CRS/vertical coherentes. & Malla hidráulica, máscaras, rugosidad y datos alineados; \texttt{pipeline/hydrology/domain.py} (propuesto). & Revisar nodata, alineación, datum, unidades, huecos y remuestreo; rechazar geográfico para cálculo métrico. & Unitarias de CRS, transformación, máscara y remuestreo categórico/continuo; integración con raster sintético. & Sin productos hidráulicos implementados. Avanzar con cobertura y control de calidad reproducibles.\\
+3. Configuración & Config versionada con modelo/formulación/versión, fechas, malla, entradas y fronteras explícitas. & Config normalizada y reporte de validación; \texttt{hydrology/config.py}. & Campos requeridos ausentes o incompatibles, unidades inválidas, ruta inexistente: error antes de ejecutar. No defaults físicos silenciosos. & Unitarias de esquema, límites y rechazo de configuración incompleta. & Por desarrollar. Avanzar solo con decisiones aprobadas y dependencias disponibles.\\
+4. Generar entradas & Config válida, capas procesadas, documentación de input del solver. & Archivos exactos del solver y registro de hashes/parametría; \texttt{hydrology/inputs.py}. & Verificar dimensiones, CRS, formato, rangos y contrato documentado de versión. & Unitarias de serialización; integración round-trip/fixture de entrada validado. & Pendiente; no fijar formato hasta elegir solver y versión.\\
+5. Ejecutar solver & Entradas válidas, ejecutable/versión verificadas, recursos y comando permitido. & Código de salida, log, temporales aislados y outputs; \texttt{solver\_adapter.py}. & Timeout/error de proceso, log de fallo, outputs faltantes/vacíos o versión distinta => ejecución fallida; no aceptar resultado parcial. & Unitarias del adaptador con ejecutable simulado; integración numérica solo con solver instalado y versión fijada. & No hay solver/adaptador. Priorizar adaptador externo documentado. Avanzar cuando smoke test y benchmark pasen.\\
+6. Procesar salida & Outputs del solver y grillas/tiempos documentados. & Rasters de C6 con georreferencia, nodata y semántica; \texttt{hydrology/outputs.py}. & Rechazar CRS/grilla/tiempos incoherentes, profundidades inválidas y extensión sin umbral/instante declarado. & Unitarias de lectura y derivación; integración sobre salida fixture del solver. & Pendiente. Avanzar cuando salidas completas correspondan al contrato.\\
+7. Manifiesto/traza & Config, versiones, fuentes, outputs y logs. & C6 con manifiesto reproducible; \texttt{hydrology/manifest.py}. & Validar campos, checksums disponibles, enlaces y ausencia de secretos; preservar desconocidos como null/estado faltante. & Unitarias de esquema y reproducibilidad; prueba de no exponer secretos. & Pendiente. Criterio: otra persona puede identificar entradas, decisiones y artefactos.\\
+8. Validación científica & C6, observación independiente compatible en tiempo y espacio, reglas/máscaras aprobadas. & \texttt{validation.json}, métricas/incertidumbres/estado exploratorio; \texttt{pipeline/validate.py} ampliado. & Sin referencia adecuada: no declarar accuracy; distinguir calibración, nodata, agua permanente y estado exploratorio. & Unitarias métricas; pruebas numéricas benchmark; integración de registro completo. & Validación genérica de métricas indicada en proyecto; hidráulica no existe. Avanzar según criterios aprobados y reproducidos.\\
+9. Backend/API & C6 válido y validación; esquema API revisado. & Persistir metadatos y exponer referencias/estado; Django/DRF, lectura inicial. & No recalcular física; controlar archivos, permisos, estados incompletos y errores. & Unitarias modelos/serialización; integración API con fixture C6; no ejecutar shell desde petición. & Backend esqueleto. Depende de C6 estable; no bloquear pipeline en Django.\\
+10. Frontend/exportación & API C4, teselas C5 o mock explícito, metadatos científicos. & Capas con semántica, instante, leyenda, advertencias y exportación enlazada al manifiesto. & No mezclar observación/simulación; señalar incertidumbre, ausencia y estado; validar metadatos de exportación. & Componentes con fixtures; integración API/teselas; prueba exportación y atribución. & Frontend presente con mocks/localStorage; API no conectada. Avanzar tras contrato backend y revisión científica.\\
+\bottomrule
+\end{longtable}
+\end{landscape}
+\normalsize
+
+\subsection{Dependencias y orden de implementación}
+Primero cerrar decisiones científicas y verificar contrato/documentación de una versión concreta; luego asegurar C1 y datos de evento, preparar dominio y configuración estricta, escribir generador/adaptador externo, probar benchmarks numéricos, procesar y manifestar C6, validar independientemente, y solo entonces integrar backend C4 y frontend/teselas C5. Las pruebas unitarias pueden desarrollarse antes con fixtures sintéticos inequívocamente marcados; no prueban un evento real. Toda fase se bloquea con errores explícitos si falta dato obligatorio. Mantener pipeline importable y ejecutable sin Django.
+
+\section{Conexión entre los flujos: matriz de trazabilidad}
+\begin{landscape}
+\small
+\begin{longtable}{p{.18\linewidth}p{.18\linewidth}p{.18\linewidth}p{.17\linewidth}p{.22\linewidth}}
+\toprule Ecuación/supuesto físico & Dato/parámetro exigido & Módulo/solver & Salida observable & Prueba/criterio de aceptación\\\midrule
+\endhead
+Masa compartida (\ref{eq:mass}); lluvia/infiltración & $h_0$, $r,i,s_h$, límites, unidades y cobertura & Config/inputs/adaptador; opción realmente soportada & Series $h$, volumen y balance en manifiesto & Prueba de fuentes/cierre; tolerancia de volumen aprobada antes de evaluar; ninguna fuente implícita.\\
+ATS difusiva (\ref{eq:ats}) & $h_f,n,S_\eta$ y frontera & Adaptador ATS documentado & Profundidad y flujo por cara si existe & Contrastar flujo lento y balance; cotejar ley exacta con release elegido.\\
+Momento local candidato (\ref{eq:accx})--(\ref{eq:accy}) & $z_b$, $n$, geometría, frontera, $g$ fijada/documentada & Opción ACC de versión verificada o alternativa aprobada & Profundidad, caudal y velocidad si hay salida & Cotejo de ecuaciones con fuente primaria y versión; flujo plano/pendiente y benchmark validado.\\
+Omisión de advección ACC & Régimen y evidencia de escalas/aceleración & Decisión de física y esquema & Diferencia frente a SWE/benchmark si pertinente & Aprobación experta condicionada a validación; no se acepta por etiqueta del software.\\
+FV1/DG2 SWE completo (\ref{eq:swe-masa})--(\ref{eq:swe-momento}) & DEM, fronteras, malla, rugosidad y fuentes & Adaptador FV1 o DG2 separados & Profundidad y frentes, si se verifican & Benchmarks advectivos y convergencia por método; comparar costo y balance.\\
+Fricción Manning & Mapa/clases, procedencia e incertidumbre $n$ & Preparación dominio y fricción del solver & Caudal, nivel y sensibilidad & Prueba de unidades/signo; sensibilidad con intervalos aprobados.\\
+Lecho hidrostático y datum & DEM, datum vertical, batimetría/canales & dominio y entrada del solver & Superficie libre y extensión espacial & Lago en reposo; alineación, datum coherente y estructuras documentadas.\\
+Wet/dry, paso y estabilidad & Resolución, topografía, parámetros y diagnósticos del solver & Adaptador/esquema fijado & estados secos, profundidades y log temporal & Benchmark seco-húmedo, no negatividad según solver y regla de estabilidad documentada.\\
+NISAR como observación, no dinámica & Escenas compatibles, máscara, hora UTC y calidad & pipeline SAR/validación independiente & extensión observada separada de simulada & No usar cambio como profundidad/velocidad; evaluación temporal y máscaras declaradas.\\
+Evaluación de extensión/profundidad & Referencia independiente, nodata, calibración separada & \texttt{validate.py} y C3 & métricas, área, errores e incertidumbre & Pruebas unitarias métricas y evaluación retenida; sin referencia, estado exploratorio.\\
+\bottomrule
+\end{longtable}
+\end{landscape}
+\normalsize
+
+\section{Artefactos, licencias y criterios de aceptación}
+El manifiesto debe preservar modelo y formulación, versiones, configuración, dominio y ROI, CRS, resolución y datum, fuentes y hashes disponibles, condiciones iniciales y de frontera, lluvia, infiltración y rugosidad, tiempos y umbral, escenas NISAR, commit de código, logs, salidas y validación. Campos desconocidos se expresan como faltantes explícitos, nunca cero. La licencia del artefacto LISFLOOD-FP concreto queda \pend: existe discrepancia reportada entre referencias GPLv3 y metadatos Zenodo GPL-2.0; verificar el archivo LICENSE del release y obligaciones antes de distribuir. No afirmar resolución legal por este documento.
+
+Aceptación para un caso real requiere aprobación del evento/modelo/versión, datos y datum completos, forzamientos explícitos, dominio adecuado, benchmarks con tolerancias fijadas, balance de volumen, outputs C6 completos, validación independiente temporalmente comparable, manifiesto reproducible y revisión de incertidumbres. Sin ello, solo se permite desarrollo con datos sintéticos etiquetados y resultados exploratorios.
+
+\section{Referencias}
+\begin{enumerate}
+\item Shaw, J. et al. (2021). ``LISFLOOD-FP 8.0: the new discontinuous Galerkin shallow-water solver for multi-core CPUs and GPUs''. \emph{Geoscientific Model Development}, 14, 3577--3602. DOI: \url{https://doi.org/10.5194/gmd-14-3577-2021}; PDF primario: \url{https://gmd.copernicus.org/articles/14/3577/2021/gmd-14-3577-2021.pdf}. Fuente de afirmaciones explícitas sobre 8.0 §2.1 Eqs. (1)--(9), §2.1.2--2.1.3 Eq. (14), no sustituto de verificar el binario.
+\item Sharifian, M. K. et al. (2023). ``LISFLOOD-FP 8.1: new GPU-accelerated solvers for faster fluvial/pluvial flood simulations''. \emph{Geoscientific Model Development}, 16, 2391--2413. DOI: \url{https://doi.org/10.5194/gmd-16-2391-2023}. Fuente primaria para revisar formulaciones y capacidades; cotejar versión concreta.
+\item Sharifian et al., manuscrito prepublicado v4 (ecuaciones (1)--(7), cotejo pendiente con edición publicada): \url{https://gmd.copernicus.org/preprints/gmd-2022-259/gmd-2022-259-manuscript-version4.pdf}.
+\item LISFLOOD-FP 8.1, artefacto de código, Zenodo record 6912932: \url{https://zenodo.org/records/6912932}. Verificar release, fuente, manual y licencia del artefacto, no solo metadatos.
+\item LISFLOOD-FP, University of Bristol: \url{https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/}; descripción histórica de estructura y ley de flujo difusivo (no manual de ATS 8.1): \url{https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/structure/}; historia: \url{https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/heritage/}.
+\item Rasterio, documentación de reproyección y manejo de CRS: \url{https://rasterio.readthedocs.io/en/stable/topics/reproject.html}. La elevación y el datum vertical exigen revisión adicional.
+\item Documentación de proyecto, estado de rama y contratos: \path{AGENTS.md} y \path{docs/guia-simulacion-inundacion.md}. La guía distingue C1--C6 y señala que el código de otras ramas no está integrado.
+\end{enumerate}
+\end{document}

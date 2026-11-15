@@ -1,0 +1,128 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,longtable,tabularx,array}
+\usepackage{enumitem,xcolor,hyperref,xurl}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlist{nosep,leftmargin=*}
+\newcommand{\pend}{\textbf{Pendiente de confirmar}}
+\newcommand{\prop}{\textbf{Propuesta}}
+\newcommand{\hecho}{\textbf{Hecho verificado}}
+\title{Flujo DG2 para una futura simulación de inundación\\\large TerraPulse AI}
+\author{Documento de diseño; no implementa ni autoriza una simulación}
+\date{Dirección comunicada: DG2; requisitos y versión concreta pendientes}
+\begin{document}
+\maketitle
+\begin{abstract}
+El equipo comunicó que el físico eligió DG2 como dirección de trabajo. Este documento presenta esa ruta sin atribuirle un motivo único; la revisión física y numérica deberá documentar el régimen, las hipótesis de aguas someras, la pertinencia de la advección, la calidad de los datos y las pruebas de estabilidad, conservación y convergencia. El alcance acordado se limita a terrenos no urbanos: no se modelarán ciudades ni variables urbanas. Este documento separa el flujo físico del flujo de aplicación, distingue evidencia publicada para LISFLOOD-FP 8.0 de capacidades pendientes del binario que eventualmente se elija y no inventa evento, entradas, parámetros ni resultados.
+\end{abstract}
+\tableofcontents\newpage
+
+\section{Estado de evidencia y decisión}
+\begin{description}
+\item[Dirección del equipo.] DG2 es la ruta seleccionada para diseñar la propuesta; no equivale a que un ejecutable, versión, evento o parámetros estén aprobados.
+\item[Alcance acordado.] Estudiar inundación sobre terreno no urbano, sin incorporar edificios, calles, drenaje pluvial urbano ni variables de ciudades. La topografía, cauces naturales, rugosidad del terreno y fronteras hidráulicas siguen siendo necesarios. La selección del lugar no está hecha: no se presume que la ROI o su dominio completo estén libres de zonas urbanas.
+\item[Justificación de DG2.] Se requieren evidencia de que aceleración advectiva/transitorios importan y que las hipótesis de aguas someras son adecuadas; necesidad de resolver gradientes/frentes mejor que un método de primer orden; benchmarks pertinentes con conservación y convergencia; datos de terreno, cauce y fronteras adecuados; estabilidad y costo medidos en el dominio previsto. DG2 no garantiza por sí mismo mejor exactitud física.
+\item[Pendientes.] Evento y régimen; verificación de que dominio y área contribuyente sean compatibles con el alcance no urbano; DEM, datum y cauces; lluvia/caudales y fronteras; infiltración; rugosidad; malla y periodos; versión exacta, manual, binario, opciones, formatos y licencia; benchmarks y tolerancias; observación independiente para validar.
+\end{description}
+
+\part{I. Flujo físico}
+\section{Hipótesis y ecuaciones del sistema}
+\prop\ Representar agua somera promediada verticalmente con profundidad $h(x,y,t)$, velocidad horizontal media $\boldsymbol u=(u,v)$ y elevación del lecho $z_b$. Se supone escala horizontal mayor que profundidad y presión aproximadamente hidrostática. El sistema no resuelve flujo 3D local, turbulencia detallada ni erosión. Este caso no representará edificios, calles, alcantarillado urbano ni barreras construidas: si alguno altera significativamente el flujo hacia o dentro del dominio, el caso no cumple este alcance y debe replantearse, no simularse como si la barrera no existiera. Corresponde comprobar estas hipótesis para el evento, no asumirlas.
+
+Una forma conceptual conservativa de SWE 2D es
+\begin{align}
+\partial_t h+\nabla\cdot(h\boldsymbol u)&=r-i+s_h, \label{eq:cont}\\
+\partial_t(h\boldsymbol u)+\nabla\cdot\left(h\boldsymbol u\otimes\boldsymbol u+\tfrac12gh^2 I\right)&=-gh\nabla z_b-gh\boldsymbol S_f+\boldsymbol a. \label{eq:mom}
+\end{align}
+$\boldsymbol S_f$ aquí significa pendiente de fricción; en la notación de la fuente LISFLOOD-FP 8.0, $S_f$ puede designar el término de fuerza de fricción con signo, no esta pendiente adimensional. No confundir las dos convenciones. La aceleración/fuente de momento $\boldsymbol a$ solo se incluiría con definición y soporte verificados.
+
+\paragraph{Comprobación dimensional.} $[h]=[z_b]=\mathrm m$, $[u]=\mathrm{m/s}$, $[g]=\mathrm{m/s^2}$. En continuidad, $[\partial_t h]=\mathrm{m/s}$ y $[\nabla\cdot(h\boldsymbol u)]=(1/\mathrm m)(\mathrm m^2/\mathrm s)=\mathrm{m/s}$; por tanto $r,i,s_h$ deben ser m/s. En momento, $[\partial_t(h\boldsymbol u)]=\mathrm{m^2/s^2}$. El flujo tensorial $h\boldsymbol u\otimes\boldsymbol u$ y la presión $gh^2I$ tienen m$^3$/s$^2$; su divergencia tiene m$^2$/s$^2$. También $gh\nabla z_b$ y $gh\boldsymbol S_f$ tienen m$^2$/s$^2$, pues $\nabla z_b$ y la pendiente de fricción son adimensionales. $\boldsymbol a$, si se usa en esta ecuación, debe tener m$^2$/s$^2$.
+
+\section{Fuentes, fricción y operadores: glosario dimensional}
+\begin{longtable}{p{.17\linewidth}p{.18\linewidth}p{.57\linewidth}}
+\toprule Símbolo & Unidad & Significado y comprobación \\\midrule
+$r$ & m/s & Lluvia que llega a la superficie como profundidad añadida por unidad de tiempo sobre el área modelada; si se resta $i$ por separado, $r$ no debe incorporar ya esa misma pérdida. Una lámina de lluvia $r\Delta t$ tiene metros. Que un binario admita lluvia y su formato concreto se debe verificar; no se infiere de la ecuación. \\
+$i$ & m/s & Infiltración como profundidad retirada del agua superficial por unidad de tiempo; aparece restando porque reduce almacenamiento superficial. No representa automáticamente pérdidas subterráneas complejas y no debe fijarse tácitamente en cero. El soporte del ejecutable está pendiente. \\
+$s_h$ & m/s & Otras fuentes netas areales: signo positivo añade agua y negativo la retira. Identificar proceso, área y convención; no es una entrada genérica garantizada del solver. \\
+$Q$, $A$, $Q/A$ & m$^3$/s, m$^2$, m/s & Caudal total dividido entre un área definida da una tasa equivalente de profundidad solo si se distribuye realmente sobre esa área: volumen $Q\Delta t$ (m$^3$) equivale a $(Q/A)A\Delta t$. Una entrada de frontera $Q$ no se convierte ni se suma además como fuente areal sin especificar el modelo; evitar contar el mismo aporte dos veces. \\
+$n$ & s/m$^{1/3}$ & Rugosidad de Manning en unidades SI usuales; fuente, asignación espacial y convención pendientes. \\
+$S_{f,x},S_{f,y}$ & 1 & Componentes adimensionales de pendiente de fricción. Una forma de Manning ilustrativa para $h>0$ es $S_{f,x}=n^2u\sqrt{u^2+v^2}/h^{4/3}$ y análogamente para $y$. Unidades: $(\mathrm{s^2/m^{2/3}})(\mathrm{m^2/s^2})/(\mathrm{m^{4/3}})=1$. No implica que sea la forma discreta del ejecutable. \\
+$gh\boldsymbol S_f$ & m$^2$/s$^2$ & $(\mathrm{m/s^2})(\mathrm m)(1)$, unidad de cada término de momento. \\
+$I$ & 2$\times$2, adimensional & Matriz identidad; $gh^2I$ tiene m$^3$/s$^2$, como el flujo advectivo tensorial antes de aplicar divergencia. \\
+$\nabla$ & 1/m antes de actuar & Operador espacial. Sobre $h$ produce $\nabla h$ adimensional; sobre $z_b$ produce pendiente adimensional; divergencia de $h\boldsymbol u$ da m/s; divergencia del tensor de flujo de momento da m$^2$/s$^2$. \\
+$\otimes$ & depende de factores & Producto tensorial: $\boldsymbol u\otimes\boldsymbol u$ tiene m$^2$/s$^2$, y al multiplicar por $h$ da m$^3$/s$^2$. \\
+\bottomrule
+\end{longtable}
+En celdas secas ($h=0$), la expresión de Manning no se evalúa literalmente: tratamiento, umbrales y regularización dependen de la versión y deben verificarse. Ningún símbolo de fuente demuestra por sí solo que el binario acepte una opción de entrada correspondiente.
+
+\section{Entradas físicas y fronteras}
+\begin{itemize}
+\item \textbf{Estado inicial:} $h(x,y,0)$ y, si se requiere, velocidad/caudal iniciales; procedencia, hora de referencia y agua permanente explícitas.
+\item \textbf{Dominio y ROI:} la ROI es el área que selecciona o consulta la persona usuaria; el dominio hidráulico puede extenderse aguas arriba/abajo e incluir área contribuyente y fronteras relevantes. Verificar ambas áreas como no urbanas para este caso; si el flujo depende de infraestructura urbana omitida, rechazar el caso o cambiar explícitamente el alcance. No recortar automáticamente el dominio a la pantalla.
+\item \textbf{Terreno:} DEM con CRS métrico, resolución, nodata, cobertura, fuente, licencia y datum vertical; niveles y DEM deben compartir datum. Verificar cauces naturales y, si importan, su geometría o batimetría; un DEM superficial no garantiza representar el lecho sumergido. No preparar capas de edificios, calles ni drenaje urbano. Si hay estructuras que gobiernan el flujo, documentar esa limitación y no aceptar el caso bajo este alcance simplificado.
+\item \textbf{Forzamientos:} lluvia temporal/espacial, caudales o niveles de frontera con unidades, periodo, zona contribuyente, referencia vertical y procedencia. Distinguir entrada por frontera de fuente areal para evitar doble conteo.
+\item \textbf{Pérdidas y parámetros:} especificar infiltración y su método/datos, o justificar su omisión y sensibilidad; mapa y fuente de Manning para terreno no urbano, sin categorías urbanas; gravedad, malla, paso y duración tras revisión experta, sin inventar valores.
+\end{itemize}
+
+\section{Método numérico, estabilidad y aceptación científica}
+\hecho\ Shaw et al. describen LISFLOOD-FP 8.0 con formulación SWE conservativa y un método DG2: representación planar por elemento, integración temporal Runge--Kutta de segundo orden y flujos HLL en la publicación. El artículo reporta un CFL máximo de 0.33 para ese esquema. También advierte dificultades de DG2 con profundidades muy pequeñas/fricción y velocidades espurias que pueden exigir pasos pequeños. Esos datos describen el método publicado en 8.0, no confirman una compilación/binario específico ni opciones de entrada. El artículo trata lluvia como adición al promedio de profundidad; no demuestra soporte de infiltración. No atribuir estos parámetros automáticamente a otra versión.
+
+\prop\ Registrar esquema y versión; comprobar la regla CFL de la implementación concreta, paso adaptativo/fijo, reconstrucción/limitadores, estados seco-húmedo, fronteras y discretización de fricción. Pruebas previas: lago en reposo, conservación de masa, transición seco-húmedo, benchmarks publicados pertinentes, sensibilidad a malla/tiempo y convergencia. El balance debe comparar almacenamiento inicial más aportes menos infiltración y salidas con almacenamiento final, usando volúmenes (m$^3$), intervalos, convenciones y tolerancia aprobada antes de correr. No ocultar inestabilidad recortando resultados sin reportarlo.
+
+\paragraph{Alternativas (no mezclar con la dirección seleccionada).} ATS es aproximación difusiva sin inercia; ACC retiene inercia local pero omite advección; FV1 resuelve SWE completo con esquema de primer orden. Son alternativas identificadas, no partes de DG2. La pertinencia física y capacidades concretas también requieren revisión de versión.
+
+\section{Incertidumbre, validación y límites}
+Evaluar incertidumbre de DEM/datum, geometría de cauces naturales, lluvia/caudal, infiltración, rugosidad del terreno, discretización, estado inicial y observación. La exclusión de ciudades no elimina su posible efecto aguas arriba: si altera el flujo, el escenario queda fuera de alcance. Separar calibración de evaluación independiente. Comparar con observación de extensión temporalmente compatible, excluyendo nodata y documentando agua permanente y máscaras. NISAR mide respuesta radar: un cambio no demuestra por sí solo causa, profundidad o velocidad. Si no hay etiquetas adecuadas, el resultado es exploratorio y no se afirma exactitud. Un raster 2D no valida física ni el solver.
+
+\section{Qué se verificó de DG2 y qué no}
+La fuente primaria de Shaw et al. (2021), \emph{LISFLOOD-FP 8.0: the new discontinuous Galerkin shallow-water solver for multi-core CPUs and GPUs}, §2.1, ecuaciones (1)--(9), describe ecuaciones y método DG2; §2.1.2 discute el comportamiento en profundidades delgadas/fricción; §2.1.3, ecuación (14), describe tratamiento de lluvia. No se encontró allí soporte de canal subgrid para FV1/DG2. Estas afirmaciones se limitan a lo publicado para 8.0.
+
+Sharifian et al. (2023) estudian LISFLOOD-FP 8.1 y ACC/GPU; las menciones a herramientas/formatos en ese artículo no prueban que una versión concreta de DG2 8.1 admita una determinada opción. Antes de atribuir capacidad a un ejecutable hay que inspeccionar su versión, manual, ayuda, fuente/release y ejecutar una prueba reproducible. No se inspeccionó ni instaló aquí ningún solver. La licencia del artefacto concreto sigue pendiente de verificación; la licencia indicada en publicaciones no resuelve la licencia del binario distribuible.
+
+\part{II. Flujo de aplicación}
+\section{Arquitectura y estado: existente frente a propuesto}
+\begin{description}
+\item[Existente según documentación del proyecto.] Frontend React/MapLibre con mapa, mocks y persistencia local; pipeline de catálogo/fuentes parcialmente desarrollado; backend Django/DRF en estado de esqueleto. La guía existente describe C1--C6, pero no equivale a implementación integrada en esta rama.
+\item[Propuesto.] La simulación corre fuera de Django mediante un adaptador en \texttt{pipeline/}, invocable desde CLI o tarea controlada. Backend/API registra metadatos y expone resultados; no calcula hidráulica. Frontend solicita/visualiza resultados ya disponibles, distinguiendo observación, simulación y validación. Los nombres de módulos siguientes son contratos de diseño, no archivos existentes.
+\end{description}
+
+\section{Recorrido de datos y contratos}
+\begin{enumerate}
+\item \textbf{Selección de ROI (frontend).} Validar polígono, CRS/área y mostrarlo como región de consulta. La ROI no define automáticamente dominio, condición inicial ni frontera hidráulica. Comprobar con datos adecuados si tanto la ROI como el dominio propuesto cumplen el alcance no urbano; si no se puede verificar o hay dependencia hidráulica urbana, informar que este caso simplificado no está disponible. Respuesta: identificador/geom y estado de elegibilidad; errores: geometría inválida, cobertura insuficiente o caso fuera de alcance.
+\item \textbf{Disponibilidad y adquisición.} Consultar datos para la ROI y dominio no urbano propuesto: DEM, cauces naturales, forzamientos, referencia independiente y evidencia de uso del suelo suficiente para evaluar el alcance, con procedencia/licencia. No adquirir capas de edificios, vialidades o drenaje urbano como entradas del modelo. Falta de cobertura o de evidencia para delimitar el dominio bloquea ejecución; no se sustituyen datos faltantes por datos ficticios.
+\item \textbf{Preparación.} Determinar dominio computacional, CRS métrico y datum vertical; alinear mallas conservando nodata y método de remuestreo. Separar entradas físicas de escenas radar. Salida: insumos preparados con metadatos y controles de calidad.
+\item \textbf{Configuración estricta.} Declarar alcance no urbano y evidencia de elegibilidad, formulación DG2, solver y versión, periodo/UTC, malla, DEM, fuentes, condiciones iniciales/frontera, infiltración, rugosidad de terreno, umbral de extensión y política de estabilidad. Rechazar áreas urbanas o dependencias hidráulicas urbanas detectadas, campos requeridos ausentes y unidades incoherentes antes de ejecutar; no hay defaults físicos silenciosos.
+\item \textbf{Entradas del solver.} Adaptador específico serializa solo formatos y opciones confirmados en documentación/ejecutable. No se supone que lluvia, infiltración, ROI, cauces o una opción DG2 se puedan pasar automáticamente.
+\item \textbf{Ejecución externa.} Ejecutar por proceso aislado desde \texttt{pipeline/}, sin dependencia de Django. Registrar versión, argumentos no sensibles, logs, tiempos y código de salida. Timeout, binario/versionado distinto, salida faltante o error numérico invalidan el run; no publicar parciales como resultados válidos.
+\item \textbf{Salidas C6 y manifiesto.} Propuesta: \texttt{data/processed/<simulation\_id>/} contiene profundidad en tiempos seleccionados, profundidad máxima, extensión con instante/umbral definidos, manifiesto y validación; tiempo de llegada u observación solo si existen y están definidos. Manifiesto registra hashes disponibles, fuentes, CRS/transformación/nodata, dominio y ROI, datum, justificación del alcance no urbano, infraestructura excluida, configuración, versiones, log, código, estado y limitaciones; nunca secretos.
+\item \textbf{Validación.} Comprobar integridad de rasters, balance, estabilidad, benchmark y referencia independiente. Sin observación adecuada, informar estado exploratorio y límites; no bloquear el registro técnico del run, pero sí cualquier afirmación de validación positiva.
+\item \textbf{Backend/API.} Persistir estado y metadatos C6/C3 y servir referencias controladas. No ejecutar comandos desde petición ni recalcular física. Respuestas distinguen pendiente, fallido, exploratorio y validado; errores de esquema o artefacto corrupto se hacen visibles.
+\item \textbf{Visualización y exportación.} Mostrar mapas/series, leyenda, instante, unidades, estado de validación, incertidumbre y procedencia; señalar que solo se modeló terreno no urbano y que no se estiman impactos en ciudades. Mantener separadas simulación y observación. Exportación incluye referencia al manifiesto y al alcance. Sin API/capas válidas, interfaz muestra indisponibilidad, no un resultado simulado.
+\end{enumerate}
+
+\section{Criterios de avance y pruebas}
+\begin{longtable}{p{.18\linewidth}p{.34\linewidth}p{.36\linewidth}}
+\toprule Etapa & Prueba/criterio para avanzar & Fallo observable y tratamiento \\\midrule
+ROI y datos & Geometría válida y evidencia del alcance no urbano para ROI y dominio; cobertura, CRS y procedencia inspeccionados. & Sin datos para verificar el alcance, o si hay dependencia urbana: detener el caso e informar qué falta. \\
+Dominio/entradas & Alineación, datum, nodata, unidades y configuraciones obligatorias verificados con tests y fixtures. & Huecos, incompatibilidad vertical o campo obligatorio ausente: rechazo previo al solver. \\
+Adaptador/solver & Versión exacta documentada; prueba de interfaz; benchmarks DG2, balance, estabilidad y convergencia acordados. & Binario/formato/opción desconocida, timeout o no convergencia: run fallido, logs conservados. \\
+C6/manifiesto & Salidas completas y georreferenciadas; manifiesto reproducible, sin secretos; esquema validado. & Archivo faltante, grilla o tiempo incoherente: artefacto no publicable. \\
+Validación & Comparación independiente temporal/espacialmente compatible, métricas/máscaras y tolerancias predefinidas. & Sin referencia: etiquetar exploratorio; no inventar exactitud. \\
+API, interfaz y exportación & Pruebas de contrato y visualización con C6 de prueba; verificar leyenda, unidades, estado y procedencia. & API o capa ausente: informar indisponibilidad; nunca presentar mocks como simulación real. \\
+\bottomrule
+\end{longtable}
+
+\section{Decisiones y límites pendientes}
+Antes de una implementación física deben confirmarse por responsables: evento/régimen; idoneidad de SWE y DG2 frente a alternativas; elegibilidad no urbana de ROI, dominio y aportes aguas arriba; DEM/datum/cauces; lluvia, caudales y fronteras; infiltración y rugosidad del terreno; versión exacta y formatos de solver; benchmarks, criterios de estabilidad y balance; validación independiente; licencia del artefacto. El primer uso no debe prometer simulación interactiva para cualquier polígono: solo puede ejecutarse donde existan entradas suficientes y configuración revisada. Este documento no implementa simulación, no instala software y no acredita resultados.
+
+\section{Fuentes primarias}
+\begin{enumerate}
+\item Shaw, J. et al. (2021). ``LISFLOOD-FP 8.0: the new discontinuous Galerkin shallow-water solver for multi-core CPUs and GPUs''. \emph{Geoscientific Model Development}, 14, 3577--3602, §2.1, Eqs. (1)--(9), §2.1.2--2.1.3, Eq. (14). \url{https://gmd.copernicus.org/articles/14/3577/2021/gmd-14-3577-2021.pdf}. DOI: \url{https://doi.org/10.5194/gmd-14-3577-2021}.
+\item Sharifian, M. K. et al. (2023). ``LISFLOOD-FP 8.1: new GPU-accelerated solvers for faster fluvial/pluvial flood simulations''. \emph{Geoscientific Model Development}, 16, 2391--2413. \url{https://gmd.copernicus.org/articles/16/2391/2023/}. Referencia de 8.1, no prueba por sí sola capacidades DG2 de un binario.
+\item LISFLOOD-FP, University of Bristol, documentación del modelo: \url{https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/}. Consultar documentación/release correspondiente al artefacto finalmente elegido.
+\item Contratos y estado de aplicación documentados en \texttt{AGENTS.md} y \path{docs/guia-simulacion-inundacion.md}; describen estado de proyecto, no resultados de solver.
+\end{enumerate}
+\end{document}
