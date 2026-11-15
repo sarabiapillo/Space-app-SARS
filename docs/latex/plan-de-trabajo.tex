@@ -1,0 +1,416 @@
+% Versión LaTeX de docs/plan-de-trabajo.md (2026-11-14). La fuente es el .md: si cambia, actualizar aquí.
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+
+\newcommand{\ida}{\ensuremath{\leftrightarrow}}
+
+\title{Plan de trabajo --- TerraPulse AI}
+\author{Equipo de 6 integrantes}
+\date{Actualizado: 14 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+Cada integrante tiene \textbf{una responsabilidad única} y es \textbf{dueño de un conjunto de archivos que nadie más edita}. Así cada
+quien trabaja en su rama y los merges no chocan. Los equipos se comunican mediante \textbf{contratos} (formatos de archivo y de API)
+que se acuerdan en la Fase 0. Mientras el contrato no cambie, nadie depende del código de otro para avanzar.
+
+Reglas del proyecto: \texttt{AGENTS.md}. Instalación: \texttt{README.md}.
+
+\begin{nota}
+\textbf{Fuera de alcance por ahora:} el asistente conversacional con IA (propuesta §7.1 y §9.4). No se implementa en este plan. La
+arquitectura no lo impide: si después se retoma, consumirá la misma API y los mismos \texttt{run.json} sin cambiar nada de lo que se
+construya aquí.
+\end{nota}
+
+\section{Lo que ya está hecho}
+
+{\small
+\begin{longtable}{p{0.17\linewidth}p{0.50\linewidth}p{0.26\linewidth}}
+\toprule
+\textbf{Área} & \textbf{Qué hay} & \textbf{Dónde} \\
+\midrule
+\endhead
+Entorno & Entorno conda \texttt{nisar} reproducible (Python 3.11, GDAL, rasterio, h5py, xarray, Django, DRF, asf\_search, pytest)
+  & \path{environment.yml} \\
+Configuración & Secretos fuera del código, plantilla de variables, \texttt{.gitignore} & \path{.env.example}, \path{.gitignore} \\
+Base de datos & PostGIS 3.4 en Docker, migraciones base de Django aplicadas & \path{docker-compose.yml} \\
+Backend & Proyecto Django con GeoDjango y DRF; apps \texttt{scenes} y \texttt{analyses} creadas (todavía sin modelos) & \path{backend/} \\
+Fuente de datos & Capa intercambiable: contrato \texttt{DataSource} / \texttt{SceneMeta} y fuente ASF (búsqueda) & \path{pipeline/sources/} \\
+Comparabilidad & \path{check_pair}: bloquea si difieren producto, trayectoria, marco, dirección, polarización, CRID o madurez (o si
+  alguno es desconocido) & \path{pipeline/compat.py} \\
+Catálogo & \path{python -m pipeline.catalog}: consulta, agrupa en pilas y guarda un JSON trazable & \path{pipeline/catalog.py} \\
+Lectura e inspección (Etapa 1) & Lectura por ventanas de los \texttt{.h5} (GCOV/GSLC); inspección de una escena con GeoTIFF, figuras,
+  estadísticas y valores de control para revisar a mano & \path{pipeline/nisar_h5.py}, \path{pipeline/etapa1.py},
+  \path{pipeline/etapa1_figuras.py} \\
+Recorte a la ROI & \path{python -m pipeline.download}: recorta escenas a la ROI leyendo el \texttt{.h5} remoto por HTTPS (solo los
+  bloques de la ROI) o local; verifica la identidad contra el catálogo, calcula la cobertura de la ROI y compara la malla del par
+  & \path{pipeline/sources/subset.py}, \path{pipeline/sources/asf.py}, \path{pipeline/download.py} \\
+\textbf{Par de trabajo} & GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 \flecha{} 2026-10-16, recortado a \path{data/raw/} con
+  formato C1 & \path{pipeline/config.yaml -> pair} \\
+Pruebas & 44 pruebas \texttt{pytest} (compat, metadatos, lectura \texttt{.h5}, recorte) & \path{pipeline/tests/} \\
+Documentación & README (cuentas y DAAC), AGENTS.md, metodología en borrador con fuentes auxiliares candidatas
+  & \path{README.md}, \path{AGENTS.md}, \path{docs/} \\
+\bottomrule
+\end{longtable}
+}
+
+\textbf{Hallazgos clave.}
+
+\begin{itemize}
+  \item Sobre la ROI hay \textbf{3 pilas GCOV} con CRID P05023, madurez PROVISIONAL y HH+HV, de junio a octubre de 2026, cada 12 días:
+        T55/F80 descendente (10 fechas), T62/F10 ascendente (10 fechas) y T156/F80 descendente (8 fechas). El CRID cambió a P05036
+        el 2026-10-23, así que \textbf{no se deben formar pares que crucen esa fecha}.
+  \item \textbf{Cobertura real de la ROI} (verificada en el \texttt{.h5}): T62/F10 cubre \textbf{\textasciitilde 99.6\,\%}; T55/F80
+        solo \textbf{\textasciitilde 50\,\%} (la mitad este). Por eso el par de trabajo es T62 y no T55, que era el plan original.
+        T156 no se ha verificado.
+  \item Los recursos oficiales del reto para NISAR son \textbf{Earthdata Search y ASF Vertex}, los mismos que ya usa el pipeline: no
+        hace falta una fuente nueva para el evento.
+\end{itemize}
+
+El detalle está en \texttt{AGENTS.md} §4 y en \emph{Metodología} (\texttt{metodologia.tex}).
+
+\textbf{Lo que falta, en una frase:} convertir el par a dB, calcular el cambio, decidir el fenómeno y validarlo, servirlo por API,
+mostrarlo en el mapa y exportar un reporte reproducible.
+
+\section{Roles y archivos de cada uno}
+
+\begin{nota}
+\textbf{Regla de oro:} solo el dueño edita sus archivos. Si necesitas un cambio en archivos ajenos, abre un \emph{issue} o pídeselo
+al dueño. No lo edites tú.
+\end{nota}
+
+{\small
+\begin{longtable}{p{0.04\linewidth}p{0.14\linewidth}p{0.20\linewidth}p{0.47\linewidth}p{0.07\linewidth}}
+\toprule
+\textbf{\#} & \textbf{Rol} & \textbf{Responsabilidad única} & \textbf{Archivos que le pertenecen (solo él/ella los edita)} & \textbf{Rama base} \\
+\midrule
+\endhead
+\textbf{P1} & \textbf{Datos y adquisición} & Conseguir recortes NISAR reales de la ROI y sus metadatos (ASF / Earthdata)
+  & \path{pipeline/sources/**}, \path{pipeline/catalog.py}, \path{pipeline/download.py}, \path{pipeline/nisar_h5.py},
+    \path{pipeline/etapa1.py}, \path{pipeline/etapa1_figuras.py}, \path{pipeline/config.yaml},
+    \path{pipeline/tests/test_sources.py}, \path{pipeline/tests/test_subset.py}, \path{pipeline/tests/test_nisar_h5.py}
+  & \path{p1/...} \\
+\textbf{P2} & \textbf{Procesamiento SAR} & Convertir los recortes en dB, aplicar máscaras y producir los mapas de cambio
+  & \path{pipeline/preprocess.py}, \path{pipeline/masks.py}, \path{pipeline/change.py}, \path{pipeline/run.py},
+    \path{pipeline/processing.yaml}, \path{pipeline/tests/test_preprocess.py}, \path{pipeline/tests/test_change.py}
+  & \path{p2/...} \\
+\textbf{P3} & \textbf{Ciencia, validación y documentación} & Elegir el fenómeno, validar con datos independientes y documentar qué
+  significa cada resultado y qué no
+  & \path{pipeline/compat.py}, \path{pipeline/validate.py}, \path{pipeline/auxiliary/**}, \path{pipeline/tests/test_compat.py},
+    \path{pipeline/tests/test_validate.py}, \path{docs/metodologia.md}, \path{docs/comparacion.md}, \path{AGENTS.md}, \path{README.md}
+  & \path{p3/...} \\
+\textbf{P4} & \textbf{Backend y API} & Guardar escenas y resultados en PostGIS y exponerlos por REST, incluidos los reportes
+  & \path{backend/**} (modelos, serializers, vistas, \path{urls.py}, \path{settings.py}, comandos de gestión, migraciones),
+    \path{docs/api.md}
+  & \path{p4/...} \\
+\textbf{P5} & \textbf{Frontend: estructura, Explorador y Comparador} & La aplicación web y los dos módulos de mapa
+  & \path{web/} excepto \path{web/src/features/laboratorio/} y \path{web/src/features/exportacion/}. Es decir: \path{package.json},
+    lockfile, \path{vite.config.ts}, \path{web/src/App.tsx}, \texttt{routes}, \texttt{layout}, \path{api/}, \path{mocks/},
+    \path{components/}, \path{features/explorador/}, \path{features/comparador/}
+  & \path{p5/...} \\
+\textbf{P6} & \textbf{Plataforma, Laboratorio y Exportación} & Infraestructura (Docker, teselas, CI, despliegue) y los módulos de
+  análisis visual y exportación
+  & \path{docker-compose.yml}, \path{environment.yml}, \path{.gitignore}, \path{.env.example}, \path{.github/**}, \path{infra/**},
+    \path{web/src/features/laboratorio/**}, \path{web/src/features/exportacion/**}
+  & \path{p6/...} \\
+\bottomrule
+\end{longtable}
+}
+
+\subsection*{Archivos compartidos: dueño único y cómo pedir cambios}
+
+{\small
+\begin{longtable}{p{0.33\linewidth}p{0.07\linewidth}p{0.52\linewidth}}
+\toprule
+\textbf{Archivo} & \textbf{Dueño} & \textbf{Si otro necesita cambiarlo\ldots} \\
+\midrule
+\endhead
+\path{environment.yml} (dependencias Python) & P6 & Pide la dependencia en un \emph{issue}; P6 la agrega en un PR pequeño y avisa \\
+\path{web/package.json} y lockfile (dependencias JS) & P5 & P6 pide la librería; P5 la instala \\
+\path{backend/config/settings.py} y \path{urls.py} & P4 & Nadie más los toca. Si Exportación necesita un endpoint, P6 lo pide a P4 \\
+\path{web/src/App.tsx} y rutas & P5 & En la Fase 0, P5 crea las 4 rutas con componentes vacíos que importan de cada
+  \path{features/<modulo>/index.tsx}; después P6 solo edita dentro de sus carpetas \\
+\path{pipeline/config.yaml} (ROI, búsqueda, comparabilidad) & P1 & Los parámetros de procesamiento van en
+  \path{pipeline/processing.yaml} (P2), no aquí \\
+\path{AGENTS.md}, \path{README.md} & P3 & Los demás envían el texto a P3 o comentan en su PR \\
+\bottomrule
+\end{longtable}
+}
+
+\subsection*{Cobertura de los módulos de la propuesta}
+
+\begin{longtable}{p{0.45\linewidth}p{0.45\linewidth}}
+\toprule
+\textbf{Módulo (propuesta §9)} & \textbf{Dueño} \\
+\midrule
+\endhead
+Explorador global & P5 \\
+Comparador temporal & P5 \\
+Laboratorio científico & P6 \\
+Exportación & P6 (interfaz) + P4 (endpoint del reporte) \\
+\sout{Asistente de investigación} & Fuera de alcance por ahora \\
+\bottomrule
+\end{longtable}
+
+\section{Contratos entre equipos (se acuerdan en la Fase 0)}
+
+Cada quien trabaja contra el contrato con datos simulados (\emph{mocks}) sin esperar a los demás. \textbf{Un contrato solo se cambia
+con un PR que revisan su productor y todos sus consumidores.}
+
+{\small
+\begin{longtable}{p{0.04\linewidth}p{0.12\linewidth}p{0.07\linewidth}p{0.09\linewidth}p{0.58\linewidth}}
+\toprule
+\textbf{ID} & \textbf{Contrato} & \textbf{Lo produce} & \textbf{Lo consume} & \textbf{Formato} \\
+\midrule
+\endhead
+\textbf{C1} & Recorte de escena & P1 & P2 & \path{data/raw/<scene_id>/<capa>.tif} (GeoTIFF en el EPSG de la escena; capas
+  \texttt{HHHH}, \texttt{HVHV}, \texttt{mask}, \texttt{numberOfLooks}, \texttt{rtcGammaToSigmaFactor}; potencias en lineal con
+  nodata NaN, sin dB, máscara ni multilook) + \path{data/raw/<scene_id>/scene.json} (\texttt{scene} = \path{SceneMeta.to_dict()},
+  \path{identificacion_h5}, \texttt{roi}, \texttt{malla} con ventana y transformación, \texttt{capas}, \path{cobertura_roi},
+  \texttt{procedencia} con método y URL, \path{code_version}, fechas). \emph{Cambio 2026-11-14:} \texttt{procedencia} reemplaza al
+  «comando GDAL usado», porque el recorte se hace con h5py \\
+\textbf{C2} & Resultado de cambio & P2 & P3, P4, P6 & Carpeta \path{data/processed/<run_id>/} con \path{t1_db.tif},
+  \path{t2_db.tif}, \path{delta_db.tif}, \path{zscore.tif}, \path{change_mask.tif} (COG) y \path{run.json} (escenas, reporte de
+  \texttt{compat}, parámetros, máscaras, estadísticas, \path{code_version}) \\
+\textbf{C3} & Validación & P3 & P4, P6 & \path{data/processed/<run_id>/validation.json}: fuente auxiliar, fecha, resolución,
+  métricas (precisión, recall, F1, IoU) \textbf{o} \texttt{"status": "exploratorio"} si no hay etiquetas \\
+\textbf{C4} & API REST & P4 & P5, P6 & Documentada en \path{docs/api.md}: \path{GET /api/rois},
+  \texttt{GET /api/scenes?roi=\&track=\&maturity=}, \path{GET /api/changes}, \texttt{GET /api/changes/\{id\}} (con \path{run.json} y
+  \path{validation.json} incrustados), \texttt{GET /api/compat?t1=\&t2=}, \texttt{GET /api/changes/\{id\}/report} \\
+\textbf{C5} & Teselas & P6 & P5, P6 & TiTiler:
+  \texttt{/cog/tiles/\{z\}/\{x\}/\{y\}?url=<ruta COG>\&rescale=\ldots\&colormap\_name=\ldots} \\
+\bottomrule
+\end{longtable}
+}
+
+\textbf{Primera tarea de la Fase 0:} P2 y P5 crean ejemplos \emph{mock} de C2 y C4 (archivos pequeños, marcados como sintéticos) para
+que P4, P5 y P6 empiecen sin datos reales.
+
+\begin{nota}
+Los mocks son \textbf{datos sintéticos de prueba}. Nunca se muestran como resultados ni se usan en la presentación (\texttt{AGENTS.md} §2.5).
+\end{nota}
+
+\section{Flujo de Git}
+
+\begin{enumerate}
+  \item \textbf{Antes de crear ramas:} se hace commit en \texttt{main} de todo lo que hay hoy en la carpeta del proyecto (configuración
+        inicial, pipeline, documentos).
+  \item \texttt{main} está protegida: solo se modifica mediante Pull Request con \textbf{1 revisión aprobada} y pruebas en verde (la CI
+        la configura P6).
+  \item Ramas con el prefijo del rol: \path{p1/recorte-asf}, \path{p2/conversion-db}, \path{p5/comparador-slider}\ldots
+  \item Los PRs se mantienen pequeños (idealmente menos de 400 líneas). Al menos una vez al día: \path{git pull --rebase origin main}.
+  \item Un PR \textbf{solo toca archivos de su dueño}. Si toca otros, el revisor lo rechaza.
+  \item Se recomienda crear \path{.github/CODEOWNERS} (lo hace P6 en la Fase 0) con la tabla de la sección 2 y los usuarios de GitHub
+        de cada integrante. Así GitHub pide automáticamente la revisión del dueño.
+  \item Mensajes de commit en español e imperativo: \texttt{Agrega recorte remoto a la ROI}.
+  \item \textbf{Nunca} se sube \texttt{.env}, \texttt{.netrc}, \path{data/} ni datos o resultados reales a git.
+\end{enumerate}
+
+\textbf{Revisión cruzada recomendada:} P1\ida{}P2 (pipeline), P3 revisa la parte científica de los PRs de P2, P4\ida{}P6 (backend e
+infraestructura), P5\ida{}P6 (frontend).
+
+\section{Fases y tareas}
+
+Las fechas se definen cuando se confirme el calendario del evento. Las fases son secuenciales; \textbf{dentro de cada fase los 6
+trabajan en paralelo.}
+
+\subsection{Fase 0: Arranque y contratos (todos, 1--2 días)}
+
+\begin{itemize}[label=$\square$]
+  \item \textbf{Todos:} clonar, seguir el README y pasar la checklist de instalación (§8 del README).
+  \item \textbf{Todos los que descarguen datos (P1, P2, P3):} cuenta de Earthdata y \texttt{.netrc} propio.
+  \item \textbf{Líder:} hacer commit en \texttt{main} del estado actual y proteger \texttt{main}.
+  \item \textbf{P1 + P2:} acordar C1. \textbf{P2 + P3 + P4:} acordar C2 y C3. \textbf{P4 + P5 + P6:} acordar C4 y C5. Todo se escribe
+        en \path{docs/api.md} (P4) y en el docstring de \path{pipeline/run.py} (P2).
+  \item \textbf{P5:} crear \path{web/} con Vite + React + TypeScript + MapLibre GL y las 4 rutas vacías (Explorador, Comparador,
+        Laboratorio, Exportación).
+  \item \textbf{P6:} CI en GitHub Actions (\texttt{pytest}, \texttt{manage.py check}, \texttt{npm run build}, lint) y \texttt{CODEOWNERS}.
+\end{itemize}
+
+\subsection{Fase 1: Un par real, de principio a fin (antes del evento)}
+
+\textbf{Objetivo:} un mapa de \dsz{} real del par T62/F10 ASC (2026-06-18 \flecha{} 2026-10-16, P05023), visible en la web.
+\emph{Antes era T55/F80; se cambió porque T55 solo cubre \textasciitilde 50\,\% de la ROI.}
+
+{\small
+\begin{longtable}{p{0.05\linewidth}p{0.58\linewidth}p{0.29\linewidth}}
+\toprule
+\textbf{Rol} & \textbf{Tareas} & \textbf{Listo cuando\ldots} \\
+\midrule
+\endhead
+\textbf{P1} & \ok{} \texttt{ASFSource.fetch\_subset} (h5py remoto con \texttt{.netrc}, solo Frequency A; \texttt{gdalwarp} no sirve con
+  el GDAL del entorno). \ok{} Inspección: \path{etapa1.py} y \path{scene.json} cubren resolución, CRS, capas, máscara y cobertura
+  real de la ROI (sustituyen al \path{inspect.py} previsto). \ok{} Recortes de las dos fechas en \path{data/raw/}. \ok{} Par en
+  \path{config.yaml}. \sout{Borrador de \texttt{sources/event.py}}: no hace falta (ver Fase 3).
+  & \ok{} 2 recortes que cumplen C1, misma malla confirmada, cobertura \textasciitilde 99.6\,\% y pruebas. \textbf{Falta:} que P3
+    fije el mínimo de cobertura \\
+\textbf{P2} & \path{preprocess.py}: GCOV (potencia) \flecha{} dB y manejo de nodata/ceros. \path{masks.py}: máscara del producto
+  (layover/sombra) y pendiente con DEM. \path{change.py}: $\Delta$ en dB, razón, z-score respecto a la pila, umbral por estadística
+  de la región. \path{run.py} orquesta todo y escribe C2.
+  & \path{python -m pipeline.run --t1 ... --t2 ...} genera C2; hay pruebas de la conversión a dB y de $\Delta$ con arreglos sintéticos \\
+\textbf{P3} & \textbf{Decidir el fenómeno} con los criterios de \texttt{AGENTS.md} §4 y documentarlo (apoyo: NISAR StoryMaps y White
+  Papers de la lista del reto). Fijar el \textbf{\% mínimo de cobertura de la ROI}. Elegir \textbf{una} fuente auxiliar entre las
+  candidatas ya encontradas en Earthdata (GPM IMERG, HLS, OPERA DSWx/DIST; ver \texttt{metodologia}) y escribir su descarga en
+  \path{pipeline/auxiliary/}. Implementar \path{validate.py} (precisión, recall, F1 e IoU, o modo exploratorio). Escribir
+  \texttt{metodologia.md} en paralelo.
+  & Fenómeno decidido y escrito; \path{validate.py} con pruebas; fuente auxiliar descargable de forma reproducible \\
+\textbf{P4} & Modelos \texttt{ROI}, \texttt{Scene}, \texttt{ChangeResult} (\texttt{AGENTS.md} §8). Serializers y endpoints de C4 (con
+  filtros). Comando \path{python manage.py load_run <run_id>} que lee C2/C3 y los guarda. \path{GET /api/compat} usando
+  \path{pipeline.compat}.
+  & Endpoints funcionando con el mock de C2; pruebas de API; \path{docs/api.md} completo \\
+\textbf{P5} & \textbf{Explorador:} mapa MapLibre con el polígono de la ROI, lista de escenas desde \path{/api/scenes} y filtros por
+  trayectoria, fecha y madurez. \textbf{Comparador:} elegir t1 y t2, mostrar la insignia de comparabilidad (errores en rojo,
+  advertencias en ámbar, desde \path{/api/compat}), deslizador antes/después y capa \dsz{} con leyenda en dB.
+  & Funciona con mocks; cada vista muestra fecha, producto, polarización, unidad y escala (propuesta §9.2) \\
+\textbf{P6} & Servicio TiTiler en \path{docker-compose.yml} (C5). \textbf{Laboratorio:} histograma de \dsz, estadísticas y tabla de
+  parámetros, con cada cifra enlazada a su \path{run.json}. Preparar el despliegue (Dockerfiles en \path{infra/}).
+  & TiTiler sirve un COG de prueba; el Laboratorio funciona con el mock \\
+\bottomrule
+\end{longtable}
+}
+
+\subsection{Fase 2: Integración, validación y exportación}
+
+{\small
+\begin{longtable}{p{0.06\linewidth}p{0.87\linewidth}}
+\toprule
+\textbf{Rol} & \textbf{Tareas} \\
+\midrule
+\endhead
+\textbf{P1} & Descargar más fechas de la pila para el z-score (línea base). Documentar en \path{scene.json} cada descarga. \\
+\textbf{P2} & Ajustar umbrales y máscaras con P3. Exportar COG optimizado para teselas. Celery solo si el tiempo de cómputo lo justifica
+  (se coordina con P4). \\
+\textbf{P3} & Ejecutar la validación sobre el resultado real. Escribir los límites: qué \textbf{no} indica \dsz{} (\texttt{AGENTS.md}
+  §2.4). Completar \texttt{comparacion.md} con la revisión de herramientas existentes. Redactar el texto fijo de «qué significa y qué
+  no» que se mostrará en la interfaz y en el reporte. \\
+\textbf{P4} & Cargar los resultados reales con \path{load_run}. Endpoint \texttt{GET /api/changes/\{id\}/report}, que devuelve los datos
+  del reporte (escenas, parámetros, métricas, validación y limitaciones). \\
+\textbf{P5} & Conectar con la API real (quitar mocks). Panel de advertencias que distinga observación, inferencia y predicción, con el
+  texto de P3. \\
+\textbf{P6} & \textbf{Exportación:} descarga de GeoTIFF, PNG del mapa y reporte PDF/HTML generado con
+  \texttt{/api/changes/\{id\}/report}. Cada cifra del reporte se puede rastrear hasta su \path{run.json}. \\
+\bottomrule
+\end{longtable}
+}
+
+\subsection{Fase 3: Evento (recursos del reto)}
+
+Los recursos oficiales del reto para NISAR son \textbf{Earthdata Search y ASF Vertex}, los mismos que ya usa el pipeline. Ya no se
+espera una fuente distinta, así que esta fase se centra en actualizar datos y desplegar.
+
+{\small
+\begin{longtable}{p{0.07\linewidth}p{0.86\linewidth}}
+\toprule
+\textbf{Rol} & \textbf{Tareas} \\
+\midrule
+\endhead
+\textbf{P1} & Volver a correr \path{pipeline.catalog} por si hay fechas nuevas (por ejemplo, P05036 de T62, que daría pareja a la escena
+  del 2026-10-28). Solo si los organizadores entregan otra fuente: crear un módulo en \path{sources/} y cambiar \texttt{source:} en
+  \path{config.yaml}. \\
+\textbf{P2} & Solo si cambian los datos: volver a correr \path{run.py} y comparar contra el resultado anterior. \\
+\textbf{P3} & Revisar si cambia la comparabilidad o la validación con datos nuevos; actualizar la metodología. Otros sensores del reto
+  (RCM, RADARSAT-1, SAOCOM) no se mezclan con NISAR (\texttt{AGENTS.md} §5). \\
+\textbf{P4--P6} & Desplegar (P6), cargar resultados (P4) y pulir la interfaz (P5). \\
+\bottomrule
+\end{longtable}
+}
+
+\subsection{Fase 4: Cierre y presentación}
+
+\begin{itemize}[label=$\square$]
+  \item \textbf{P3:} metodología, limitaciones y comparación finales. AGENTS.md y README al día.
+  \item \textbf{P5 + P6:} demo de extremo a extremo grabada (respaldo por si falla la red).
+  \item \textbf{P6:} despliegue público y reporte exportado de ejemplo.
+  \item \textbf{Todos:} revisar que \textbf{cada cifra mostrada} se pueda rastrear hasta escenas, fechas, parámetros y código.
+\end{itemize}
+
+Con esto se cumplen los 7 puntos del \textbf{alcance mínimo viable} (propuesta §14), que no incluye el asistente conversacional.
+
+\section{Frontend en detalle}
+
+\textbf{Stack:} Vite + React + TypeScript + MapLibre GL. Teselas raster con TiTiler. Gráficas: una sola librería, que elige P5 y
+aprueba P6.
+
+\begin{lstlisting}
+web/
+|-- package.json             # P5
+|-- vite.config.ts           # P5
+`-- src/
+    |-- App.tsx, routes.tsx  # P5 (crea las 4 rutas en la Fase 0)
+    |-- layout/              # P5: barra, navegación, tema
+    |-- api/                 # P5: cliente tipado de C4 (lo usan todos los módulos)
+    |-- mocks/               # P5: datos sintéticos de C4 (marcados como tales)
+    |-- components/          # P5: componentes compartidos (Mapa base, Leyenda, InsigniaCompat)
+    `-- features/
+        |-- explorador/      # P5
+        |-- comparador/      # P5
+        |-- laboratorio/     # P6
+        `-- exportacion/     # P6
+\end{lstlisting}
+
+\textbf{Para no chocar:} P6 \textbf{usa} \path{api/} y \path{components/} pero no los edita. Si necesita un endpoint o un componente
+compartido nuevo, lo pide a P5. Todo lo que solo usa un módulo vive dentro de la carpeta de ese módulo.
+
+{\small
+\begin{longtable}{p{0.15\linewidth}p{0.70\linewidth}p{0.07\linewidth}}
+\toprule
+\textbf{Módulo} & \textbf{Contenido mínimo} & \textbf{Dueño} \\
+\midrule
+\endhead
+\textbf{Explorador} & Mapa con la ROI, escenas filtrables (fecha, trayectoria, dirección, madurez, CRID), detalle de metadatos por
+  escena & P5 \\
+\textbf{Comparador} & Selector t1/t2, insignia de comparabilidad con los motivos, deslizador antes/después en dB, capa \dsz{} con
+  leyenda y unidad & P5 \\
+\textbf{Laboratorio} & Histograma de \dsz, estadísticas (media, desviación, percentiles, \% de píxeles con cambio), parámetros y
+  máscaras usados, enlace a \path{run.json} & P6 \\
+\textbf{Exportación} & Descarga de GeoTIFF, PNG y reporte con trazabilidad y limitaciones & P6 \\
+\bottomrule
+\end{longtable}
+}
+
+\textbf{Reglas de interfaz} (propuesta §9 y \texttt{AGENTS.md}):
+
+\begin{itemize}
+  \item Toda cifra muestra su unidad, fecha y fuente.
+  \item Un resultado sin validación lleva la etiqueta \textbf{«Exploratorio»}.
+  \item Nunca se dice «inundación» o «deforestación» como hecho: se dice «cambio en la retrodispersión» más la hipótesis y su evidencia.
+  \item Los PNG de vista previa de ASF son solo para referencia visual; no se usan como capa de análisis.
+\end{itemize}
+
+\section{Dependencias críticas y riesgos}
+
+{\small
+\begin{longtable}{p{0.33\linewidth}p{0.13\linewidth}p{0.46\linewidth}}
+\toprule
+\textbf{Riesgo} & \textbf{Afecta a} & \textbf{Mitigación} \\
+\midrule
+\endhead
+\sout{El recorte remoto con GDAL 3.12 falla (no tiene driver NISAR)} & P1 \flecha{} todos & \textbf{Resuelto:} GDAL 3.12 tampoco trae
+  HDF5; el recorte se hace con h5py (remoto y local) \\
+Una pila intersecta la ROI pero no la cubre & P1, P3 & \path{download.py} calcula la cobertura real en el \texttt{.h5}; así se
+  descartó T55 (\textasciitilde 50\,\%) \\
+GES DISC devuelve 403 (precipitación) & P3 & Autorizar la aplicación de GES DISC en el perfil de Earthdata (README §7) \\
+Smart App Control bloquea DLL en Windows & Quien use Windows & Trabajar en WSL2 o Docker; P6 documenta la alternativa \\
+No hay etiquetas para validar & P3 & Marcar como exploratorio y contrastar cualitativamente con la fuente auxiliar (\texttt{AGENTS.md} §6) \\
+La fuente del evento tiene otro formato & P1 & Riesgo bajo: los recursos del reto son ASF/Earthdata. Si cambia, la capa
+  \path{sources/} está aislada y \path{subset.py} se reutiliza \\
+Contrastar con OPERA se reporta como exactitud & P3 & Reportarlo como \textbf{acuerdo} con OPERA, no como exactitud (\texttt{metodologia}) \\
+Alguien edita archivos ajenos & Todos & CODEOWNERS + revisión obligatoria \\
+Se cambia un contrato sin avisar & Todos & Solo por PR revisado por productor y consumidores \\
+\bottomrule
+\end{longtable}
+}
+
+\section{Resumen rápido por persona}
+
+\begin{itemize}
+  \item \textbf{P1, Datos:} «Consigo los recortes reales y sus metadatos desde ASF/Earthdata, y verifico que de verdad cubren la ROI.»
+  \item \textbf{P2, Procesamiento:} «Convierto los recortes en dB y en mapas de cambio trazables.»
+  \item \textbf{P3, Ciencia:} «Decido qué medimos, lo valido con datos independientes y escribo qué significa y qué no.»
+  \item \textbf{P4, Backend:} «Guardo todo en PostGIS y lo sirvo por una API documentada, incluidos los datos del reporte.»
+  \item \textbf{P5, Frontend:} «Construyo la app, el mapa, el Explorador y el Comparador.»
+  \item \textbf{P6, Plataforma:} «Teselas, CI, despliegue, Laboratorio y Exportación.»
+\end{itemize}
+
+\end{document}

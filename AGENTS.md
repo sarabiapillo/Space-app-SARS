@@ -25,7 +25,7 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 - Proyecto Django creado en `backend/` (`config`, apps `scenes` y `analyses`).
 - PostGIS en Docker funcionando; migraciones base aplicadas. Configuración sensible en `.env` (ver `.env.example`).
 - `pipeline/sources/` (fuente intercambiable, hoy ASF), `pipeline/compat.py` y `pipeline/catalog.py` implementados y con pruebas.
-- `pipeline/nisar_h5.py` + `pipeline/etapa1.py`: lectura por ventanas de los `.h5` e inspección de una escena (Etapa 1).
+- `pipeline/nisar_h5.py` + `pipeline/etapa1.py`: lectura por ventanas de los `.h5` e inspección de una escena (Etapa 1), desde un `.h5` local o remoto (`scene_id`). Genera también `web/` (COG, PNG en EPSG:3857 y `capas.json`) para la interfaz web (`pipeline/web_export.py`, ver `docs/p1-etapa1-web.md`).
 - `pipeline/sources/subset.py` + `pipeline/download.py`: recorte a la ROI (local o remoto por HTTPS, solo los bloques de la ROI), con verificación de identidad contra el catálogo, cobertura de la ROI y comparación de malla.
 - **Par de trabajo recortado (2026-11-14):** GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, en `data/raw/` (ver §4). Comparable y con malla idéntica. Aún **no** hay mapa de cambio ni validación.
 - El fenómeno sigue **sin decidir**. Las fuentes auxiliares candidatas están en `docs/metodologia.md`.
@@ -138,7 +138,8 @@ terrapulse/
 │   ├── tests/                  # pytest (pytest.ini en la raíz)
 │   ├── download.py             # recorte a la ROI (h5py, local o remoto) → data/raw/<scene_id>/
 │   ├── nisar_h5.py             # lectura por ventanas de los .h5 NISAR
-│   ├── etapa1.py               # inspección de una escena (figuras, control) → data/explore/
+│   ├── etapa1.py               # inspección de una escena, local o remota → data/explore/
+│   ├── web_export.py           # COG + PNG (EPSG:3857) + capas.json para la web
 │   ├── preprocess.py           # complejo -> dB, máscaras
 │   ├── compat.py               # control de comparabilidad
 │   ├── change.py               # Δσ⁰, z-score, umbral
@@ -180,6 +181,7 @@ python -m pipeline.catalog                                # actualiza data/catal
 python -m pipeline.download <scene_id_t1> <scene_id_t2>   # recorta, verifica y compara el par
 python -m pipeline.download <scene_id> --capas HHHH mask  # solo algunas capas
 python -m pipeline.download <scene_id> --h5-local "ruta\archivo.h5"   # desde un .h5 ya descargado
+python -m pipeline.etapa1 <scene_id> --escala-web -22 0  # inspección remota + capas web (misma escala en ambas fechas)
 ```
 
 Escribe `data/raw/<scene_id>/<capa>.tif` + `scene.json` (contrato C1) e imprime si el par es `COMPARABLE`. Usa solo **Frequency A** (banda L). El fragmento `gdalwarp` que genera ASF Vertex **no funciona** con el GDAL del entorno (3.12, sin drivers HDF5/NISAR).

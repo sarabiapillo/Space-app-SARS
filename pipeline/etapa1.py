@@ -2,9 +2,16 @@
 
 Uso (desde la raíz del repo, entorno `nisar`):
 
-    python -m pipeline.etapa1 "ruta/al/archivo.h5"
+    python -m pipeline.etapa1 "ruta/al/archivo.h5"                  # .h5 descargado completo
+    python -m pipeline.etapa1 <scene_id>                            # remoto: lee solo la ROI por HTTPS
     python -m pipeline.etapa1 "ruta/al/archivo.h5" --sin-vista      # omite la vista general (lenta)
     python -m pipeline.etapa1 "ruta/al/archivo.h5" --sin-figuras    # solo datos (GeoTIFF, CSV, JSON)
+    python -m pipeline.etapa1 <scene_id> --escala-web -22 0         # misma escala web para las dos fechas
+
+Remoto: el scene_id se busca en el catálogo más reciente de data/catalog/ (como pipeline.download),
+se abre con las credenciales de Earthdata (.env o .netrc) y se verifica que la identidad del archivo
+coincide con el catálogo. La vista general se omite en remoto, porque obligaría a bajar casi toda
+la capa (forzarla con --vista-remota).
 
 No modifica el .h5. Escribe en data/explore/<granuleId>/:
 
@@ -14,6 +21,8 @@ No modifica el .h5. Escribe en data/explore/<granuleId>/:
                           en GCOV también σ⁰, el factor γ⁰→σ⁰ y el número de looks
     figuras/              vista general, ROI en dB, histogramas, máscara, ángulo de incidencia
     control/              píxeles al azar y un bloque de multilook, para recalcular a mano
+    web/                  capas para la interfaz web: COG (TiTiler), PNG en EPSG:3857 (MapLibre)
+                          y capas.json (manifiesto). Ver pipeline/web_export.py
 """
 from __future__ import annotations
 
@@ -22,6 +31,7 @@ import csv
 import json
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,7 +42,9 @@ import yaml
 from rasterio.features import geometry_mask
 
 from . import nisar_h5 as nh
+from . import web_export as web
 from .catalog import code_version
+from .download import find_scenes, latest_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
 HIST_EDGES = np.arange(-60.0, 30.0 + 0.1, 0.1)   # dB, bins de 0.1 dB
@@ -52,6 +64,12 @@ def g9(v) -> str:
     return "NaN" if not np.isfinite(v) else f"{v:.9g}"
 
 
+def _rel(p: Path) -> str:
+    """Ruta relativa a la raíz del repo (con /), o absoluta si la salida está fuera del repo."""
+    p = Path(p).resolve()
+    return p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else p.as_posix()
+
+
 def write_tif(path: Path, arr: np.ndarray, grid: nh.Grid, row0: int, col0: int, step: int, nodata, tags: dict):
     profile = dict(
         driver="GTiff", height=arr.shape[0], width=arr.shape[1], count=1, dtype=arr.dtype,
@@ -61,7 +79,7 @@ def write_tif(path: Path, arr: np.ndarray, grid: nh.Grid, row0: int, col0: int, 
     with rasterio.open(path, "w", **profile) as dst:
         dst.write(arr, 1)
         dst.update_tags(**{k: str(v) for k, v in tags.items()})
-    return {"archivo": str(path.relative_to(ROOT)), "bytes": path.stat().st_size, "forma": list(arr.shape)}
+    return {"archivo": _rel(path), "bytes": path.stat().st_size, "forma": list(arr.shape)}
 
 
 def json_default(o):
@@ -98,9 +116,56 @@ def pick_full_block(ok: np.ndarray, n: int, rng: np.random.Generator):
     return int(i), int(j)
 
 
+def resolve_input(entrada: str, cfg: dict, catalogo: str | None):
+    """Devuelve (ruta_local, None, None) o (None, SceneMeta, ruta_catálogo).
+
+    Es un archivo si existe o termina en .h5; si no, se trata como scene_id del catálogo.
+    """
+    p = Path(entrada)
+    if p.exists() or p.suffix.lower() == ".h5":
+        if not p.is_file():
+            raise FileNotFoundError(f"No existe el archivo {p}")
+        return p.resolve(), None, None
+    catalog = Path(catalogo) if catalogo else latest_catalog(ROOT / cfg.get("paths", {}).get("catalog", "data/catalog"))
+    return None, find_scenes(catalog, [entrada])[0], catalog
+
+
+@contextmanager
+def open_h5(local: Path | None, scene=None, catalog: Path | None = None):
+    """Abre el .h5 local o remoto y devuelve (archivo h5py, procedencia)."""
+    if local is not None:
+        with h5py.File(local, "r") as f:
+            yield f, {"modo": "local", "metodo": "h5py, archivo local", "nombre": local.name,
+                      "bytes": local.stat().st_size}
+        return
+
+    from .sources.asf import REMOTE_BLOCK_SIZE, earthdata_https_fs
+    from .sources.subset import check_identity
+
+    if not scene.url:
+        raise ValueError(f"{scene.scene_id}: el catálogo no trae URL de descarga.")
+    fs = earthdata_https_fs()
+    with fs.open(scene.url, "rb", block_size=REMOTE_BLOCK_SIZE, cache_type="blockcache") as fobj:
+        with h5py.File(fobj, "r") as f:
+            check_identity(f, scene)            # el archivo debe ser el que dice el catálogo
+            yield f, {"modo": "remoto", "metodo": "h5py sobre HTTPS (fsspec, lectura por ventanas)",
+                      "nombre": scene.url.rsplit("/", 1)[-1], "bytes": scene.size_bytes, "url": scene.url,
+                      "block_size_bytes": REMOTE_BLOCK_SIZE, "catalogo": catalog.name,
+                      "identidad_verificada_contra_catalogo": True,
+                      "catalogo_escena": {"fecha": scene.date, "trayectoria": scene.track, "marco": scene.frame,
+                                          "direccion": scene.direction, "crid": scene.crid,
+                                          "madurez": scene.maturity}}
+
+
 def main(argv=None) -> Path:
     ap = argparse.ArgumentParser(description="Etapa 1: inspección de un producto NISAR L2 sobre la ROI.")
-    ap.add_argument("h5", help="ruta al archivo .h5")
+    ap.add_argument("entrada", help="ruta a un .h5 descargado, o scene_id del catálogo (lectura remota)")
+    ap.add_argument("--catalogo", default=None, help="JSON de catálogo para el scene_id (default: el más reciente)")
+    ap.add_argument("--vista-remota", action="store_true",
+                    help="en remoto, generar igualmente la vista general (baja casi toda la capa)")
+    ap.add_argument("--sin-web", action="store_true", help="no generar las capas para la interfaz web")
+    ap.add_argument("--escala-web", nargs=2, type=float, metavar=("VMIN", "VMAX"), default=None,
+                    help="escala fija en dB para los PNG web (usar la misma en las dos fechas de un par)")
     ap.add_argument("--config", default=str(ROOT / "pipeline" / "config.yaml"), help="de aquí se toma la ROI")
     ap.add_argument("--frecuencia", default="A")
     ap.add_argument("--multilook", type=int, default=None, help="n del multilook n×n (default: GCOV 2, GSLC 4)")
@@ -120,11 +185,14 @@ def main(argv=None) -> Path:
         from . import etapa1_figuras as fig  # matplotlib solo si se van a hacer figuras
 
     t_start = time.time()
-    h5_path = Path(args.h5).resolve()
-    roi_wkt = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))["roi"]["wkt"]
+    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    roi_wkt = cfg["roi"]["wkt"]
     rng = np.random.default_rng(args.semilla)
+    local, scene, catalog = resolve_input(args.entrada, cfg, args.catalogo)
+    if scene is not None:
+        log(f"Modo remoto: {scene.scene_id} (catálogo {catalog.name}); solo se leen los bloques de la ROI")
 
-    with h5py.File(h5_path, "r") as f:
+    with open_h5(local, scene, catalog) as (f, origen):
         # 1. Ficha, malla y parámetros del procesador ---------------------------------------
         ident = nh.read_identification(f)
         grid = nh.open_grid(f, args.frecuencia)
@@ -243,7 +311,9 @@ def main(argv=None) -> Path:
 
         # 5. Vista general (lee todos los chunks de una capa: lento) --------------------------
         overview_info = None
-        if fig and not args.sin_vista:
+        if fig and not args.sin_vista and origen["modo"] == "remoto" and not args.vista_remota:
+            log("Vista general omitida en modo remoto (obligaría a bajar casi toda la capa; usar --vista-remota)")
+        elif fig and not args.sin_vista:
             layer0 = grid.layers[0]
             log(f"Vista general {layer0}: 1 de cada {args.paso_vista} px de toda la escena "
                 "(descomprime la capa completa; puede tardar varios minutos)...")
@@ -276,6 +346,13 @@ def main(argv=None) -> Path:
             fig.mask_map(out / "figuras" / "D_mascara.png", mask_win, in_roi, ext_w, roi_xy, grid.epsg, mask_counts)
             fig.incidence(out / "figuras" / "E_incidencia.png", inc, roi_xy, grid.epsg)
             log("Figuras listas")
+
+        # 6b. Capas para la interfaz web -------------------------------------------------------
+        web_info = None
+        if not args.sin_web:
+            t0 = time.time()
+            web_info = export_web(out, ident, grid, win, n, ml_db, q, is_gcov, args.escala_web, origen, roi_wkt)
+            log(f"Capas web listas en {time.time() - t0:.0f} s -> {_rel(out / 'web')}")
 
         # 7. Control para validación a mano ---------------------------------------------------
         xs = grid.x[[win.col0 + c for _, c in control_px]]
@@ -338,7 +415,8 @@ def main(argv=None) -> Path:
         "etapa": "1 - inspección",
         "creado_utc": datetime.now(timezone.utc).isoformat(),
         "version_codigo": code_version(),
-        "archivo_h5": {"nombre": h5_path.name, "bytes": h5_path.stat().st_size},
+        "archivo_h5": {"nombre": origen["nombre"], "bytes": origen["bytes"]},
+        "procedencia": origen,
         "identificacion": ident,
         "malla": {"producto": grid.product, "frecuencia": grid.frequency, "epsg": grid.epsg,
                   "dx_m": grid.dx, "dy_m": grid.dy, "forma": list(grid.shape), "extension_m": grid.extent(),
@@ -365,14 +443,75 @@ def main(argv=None) -> Path:
         "incidencia": {"altura_m": inc["altura_m"], "media_en_roi_por_altura": inc["media_por_altura"],
                        "min": float(np.nanmin(inc["angulo"])), "max": float(np.nanmax(inc["angulo"]))},
         "salidas": outputs,
+        "web": web_info,
         "duracion_s": round(time.time() - t_start, 1),
         "advertencias": warnings,
     }
     (out / "metadatos.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=json_default),
                                         encoding="utf-8")
     write_readme(out, meta, grid)
-    log(f"Listo en {meta['duracion_s']} s -> {out.relative_to(ROOT)}")
+    log(f"Listo en {meta['duracion_s']} s -> {_rel(out)}")
     return out
+
+
+
+
+def export_web(out: Path, ident: dict, grid: nh.Grid, win: nh.Window, n: int, ml_db: dict, q: str, is_gcov: bool,
+               fixed_scale, origen: dict, roi_wkt: str) -> dict:
+    """COG + PNG (EPSG:3857) por capa y magnitud, y el manifiesto web/capas.json."""
+    web_dir = out / "web"
+    quantities = [q, "sigma0"] if is_gcov else [q]
+    crs = f"EPSG:{grid.epsg}"
+    t_ml = grid.transform(win.row0, win.col0, n)
+    layers = []
+    for name in quantities:
+        arrays = {layer: by_q[name] for layer, by_q in ml_db.items()}
+        if fixed_scale:
+            vmin, vmax, how = float(fixed_scale[0]), float(fixed_scale[1]), "fija (--escala-web)"
+        else:
+            vmin, vmax = web.percentile_scale(list(arrays.values()))
+            how = "percentiles 2–98 de esta escena, común a las polarizaciones"
+        for layer, arr in arrays.items():
+            entry = web.export_layer(web_dir, f"{name}_{layer}_ml{n}_dB", arr, crs, t_ml, vmin, vmax,
+                                     {"fuente": ident["granuleId"], "capa": layer, "magnitud": name,
+                                      "escala": f"10*log10(promedio lineal {n}x{n})", "codigo": code_version()},
+                                     ROOT)
+            entry.update({"capa": layer, "magnitud": name, "simbolo": nh.SYMBOL.get(name, name),
+                          "multilook": n, "pixel_m": abs(grid.dx) * n})
+            entry["escala"]["metodo"] = how
+            layers.append(entry)
+
+    cat = origen.get("catalogo_escena", {})
+    manifest = {
+        "version": web.MANIFEST_VERSION,
+        "tipo": "inspeccion_una_fecha",
+        "creado_utc": datetime.now(timezone.utc).isoformat(),
+        "version_codigo": code_version(),
+        "escena": {
+            "granuleId": ident.get("granuleId"),
+            "producto": grid.product,
+            "fecha_inicio": ident.get("zeroDopplerStartTime"),
+            "trayectoria": ident.get("trackNumber"),
+            "marco": ident.get("frameNumber"),
+            "direccion": ident.get("orbitPassDirection"),
+            "crid": ident.get("compositeReleaseId"),
+            "madurez_catalogo": cat.get("madurez"),
+            "frecuencia": grid.frequency,
+            "polarizaciones": list(grid.polarizations),
+        },
+        "roi_wkt_4326": roi_wkt,
+        "procedencia": {k: v for k, v in origen.items() if k != "catalogo_escena"},
+        "capas": layers,
+        "figuras": sorted(_rel(p) for p in (out / "figuras").glob("*.png")),
+        "metadatos": _rel(out / "metadatos.json"),
+        "advertencias": [
+            "Una sola fecha: sirve para ver la escena, no es un mapa de cambio.",
+            "Los PNG son solo para ver; los valores en dB están en los COG (.tif).",
+            "Para comparar dos fechas en el mapa, ambas deben tener la misma escala (--escala-web).",
+        ],
+    }
+    web.write_manifest(web_dir / "capas.json", manifest)
+    return {"manifiesto": _rel(web_dir / "capas.json"), "capas": [e["id"] for e in layers]}
 
 
 def write_readme(out: Path, meta: dict, grid: nh.Grid) -> None:

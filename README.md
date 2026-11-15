@@ -8,7 +8,7 @@ Proyecto para NASA Space Apps 2026 (*Be an Earth System Trend Detective*). Caso 
 
 > **Estado (2026-11-14):** hay un par GCOV comparable recortado a la ROI (T62/F10, 2026-06-18 → 2026-10-16, ~99.6 % de cobertura). Todavía no hay mapa de cambio ni validación. Detalle en [docs/metodologia.md](docs/metodologia.md).
 
-Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md). Adquisición de datos (P1), cómo correr los scripts y formato de los recortes: [docs/p1-datos.md](docs/p1-datos.md).
+Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md). Adquisición de datos (P1), cómo correr los scripts y formato de los recortes: [docs/p1-datos.md](docs/p1-datos.md). Generar las imágenes y capas web del par T62 sin descargar los `.h5`: [docs/guia-capas-web.md](docs/guia-capas-web.md).
 
 Antes de contribuir, lee [AGENTS.md](AGENTS.md). Ahí están las reglas científicas y de trabajo del proyecto, que aplican a personas y a agentes de IA por igual.
 
