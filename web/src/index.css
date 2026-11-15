@@ -750,6 +750,492 @@ button:disabled {
   color: #64748b;
 }
 
+/* ---------- Galería de Figuras Científicas Oficiales de Python (Matplotlib) ---------- */
+
+.ws-sci-figures {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.ws-sci-figures__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.ws-sci-figures__badge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.ws-sci-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ws-sci-badge--verified {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.ws-sci-badge--date {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  font-family: var(--font-mono);
+}
+
+.ws-sci-badge--dpi {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.ws-sci-figures__title {
+  margin: 0 0 2px 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ws-sci-figures__subtitle {
+  margin: 0;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.ws-sci-figures__close-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #64748b;
+  padding: 4px;
+  border-radius: 2px;
+}
+
+.ws-sci-figures__close-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.ws-sci-figures__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  flex-wrap: wrap;
+}
+
+.ws-sci-figures__categories {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ws-sci-filter-btn {
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.ws-sci-filter-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.ws-sci-filter-btn.is-active {
+  background: #0284c7;
+  border-color: #0369a1;
+  color: #ffffff;
+}
+
+.ws-sci-figures__meta-right {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: #64748b;
+}
+
+.ws-sci-figures__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+}
+
+.ws-sci-card {
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.ws-sci-card--wide {
+  grid-column: 1 / -1;
+}
+
+.ws-sci-card:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.ws-sci-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 4px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.ws-sci-card__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-sci-card__code {
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: #0284c7;
+  color: #ffffff;
+  text-transform: uppercase;
+}
+
+.ws-sci-card__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ws-sci-card__subtitle {
+  margin: 0;
+  padding: 2px 12px 6px;
+  font-size: 10px;
+  color: #64748b;
+  font-family: var(--font-mono);
+}
+
+.ws-sci-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ws-sci-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.ws-sci-btn--icon {
+  padding: 4px;
+}
+
+.ws-sci-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.ws-sci-btn--primary {
+  background: #0284c7;
+  border-color: #0369a1;
+  color: #ffffff;
+}
+
+.ws-sci-btn--primary:hover {
+  background: #0369a1;
+  color: #ffffff;
+}
+
+.ws-sci-btn--figures {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+  font-weight: 600;
+}
+
+.ws-sci-btn--figures:hover {
+  background: #dcfce7;
+  border-color: #4ade80;
+  color: #15803d;
+}
+
+.ws-sci-card__preview {
+  position: relative;
+  width: 100%;
+  min-height: 180px;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.ws-sci-card__img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: contain;
+  transition: transform 0.2s ease;
+}
+
+.ws-sci-card__preview:hover .ws-sci-card__img {
+  transform: scale(1.015);
+}
+
+.ws-sci-card__zoom-hint {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #ffffff;
+  border-radius: 2px;
+  font-size: 9.5px;
+  font-weight: 600;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.ws-sci-card__fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.ws-sci-card__footer {
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #fafafa;
+  border-top: 1px solid #f1f5f9;
+}
+
+.ws-sci-card__desc {
+  margin: 0;
+  font-size: 10.5px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+.ws-sci-card__tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ws-sci-tag {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 1px 5px;
+  background: #e2e8f0;
+  color: #334155;
+  border-radius: 2px;
+}
+
+.ws-sci-card__details {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 9.5px;
+  color: #64748b;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Modal Pantalla Completa con Zoom */
+.ws-sci-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.78);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.ws-sci-modal {
+  width: 92vw;
+  max-width: 1240px;
+  max-height: 90vh;
+  background: #ffffff;
+  border-radius: 4px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: ws-fade-in 0.15s ease-out;
+}
+
+.ws-sci-modal--standalone {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.ws-sci-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.ws-sci-modal__title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-sci-modal__title-box h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ws-sci-modal__sub {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: #64748b;
+}
+
+.ws-sci-modal__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-sci-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 2px;
+  padding: 1px;
+}
+
+.ws-sci-zoom-level {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 0 6px;
+  color: #334155;
+}
+
+.ws-sci-modal__body {
+  flex: 1;
+  background: #090d16;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 16px;
+  min-height: 380px;
+}
+
+.ws-sci-modal__img-canvas {
+  max-width: 100%;
+}
+
+.ws-sci-modal__img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 2px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+
+.ws-sci-modal__footer {
+  padding: 8px 16px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ws-sci-modal__footer-text {
+  font-size: 11px;
+  color: #334155;
+}
+
+.ws-sci-modal__footer-details {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ws-sci-modal__pill {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  padding: 2px 6px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  color: #334155;
+}
+
 /* ---------- Cabeceras de Panel Acoplado (Tabs Estilo COMSOL) ---------- */
 
 .ws-panel-tabbar {

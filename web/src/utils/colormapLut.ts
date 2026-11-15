@@ -1,4 +1,18 @@
-export type ScientificColormapId = 'inferno' | 'turbo' | 'viridis' | 'grayscale'
+import {
+  LUT_INFERNO_256,
+  LUT_MAGMA_256,
+  LUT_PLASMA_256,
+  LUT_TURBO_256,
+  LUT_VIRIDIS_256,
+} from './colormapTables'
+
+export type ScientificColormapId =
+  | 'inferno'
+  | 'turbo'
+  | 'viridis'
+  | 'plasma'
+  | 'magma'
+  | 'grayscale'
 
 export interface ScientificColormapSpec {
   id: ScientificColormapId
@@ -15,11 +29,11 @@ export const SCIENTIFIC_COLORMAPS: readonly ScientificColormapSpec[] = Object.fr
     id: 'inferno',
     label: 'Inferno (Mapa de Calor)',
     shortLabel: 'Inferno',
-    description: 'Rampa térmica perceptual (negro → púrpura → carmesí → ámbar → amarillo pálido)',
+    description: 'Rampa térmica perceptual Matplotlib (negro → púrpura → carmesí → ámbar → amarillo pálido)',
     cssGradientHorizontal:
-      'linear-gradient(90deg, rgb(0, 0, 4) 0%, rgb(66, 10, 104) 20%, rgb(147, 38, 103) 40%, rgb(221, 81, 58) 60%, rgb(252, 165, 10) 80%, rgb(252, 255, 164) 100%)',
+      'linear-gradient(90deg, rgb(0,0,4) 0%, rgb(40,11,84) 15%, rgb(101,21,110) 30%, rgb(159,42,99) 45%, rgb(212,72,66) 60%, rgb(245,125,21) 75%, rgb(250,193,39) 90%, rgb(252,255,164) 100%)',
     cssGradientVertical:
-      'linear-gradient(0deg, rgb(0, 0, 4) 0%, rgb(66, 10, 104) 20%, rgb(147, 38, 103) 40%, rgb(221, 81, 58) 60%, rgb(252, 165, 10) 80%, rgb(252, 255, 164) 100%)',
+      'linear-gradient(0deg, rgb(0,0,4) 0%, rgb(40,11,84) 15%, rgb(101,21,110) 30%, rgb(159,42,99) 45%, rgb(212,72,66) 60%, rgb(245,125,21) 75%, rgb(250,193,39) 90%, rgb(252,255,164) 100%)',
     stops: [
       [0.0, [0, 0, 4]],
       [0.2, [66, 10, 104]],
@@ -35,9 +49,9 @@ export const SCIENTIFIC_COLORMAPS: readonly ScientificColormapSpec[] = Object.fr
     shortLabel: 'Turbo',
     description: 'Rampa de alto contraste tipo COMSOL / Jet corregido perceptualmente',
     cssGradientHorizontal:
-      'linear-gradient(90deg, rgb(48, 18, 59) 0%, rgb(65, 119, 246) 20%, rgb(27, 218, 172) 40%, rgb(164, 252, 60) 60%, rgb(251, 150, 39) 80%, rgb(122, 4, 3) 100%)',
+      'linear-gradient(90deg, rgb(48,18,59) 0%, rgb(70,134,251) 20%, rgb(27,218,172) 40%, rgb(164,252,60) 60%, rgb(251,150,39) 80%, rgb(122,4,3) 100%)',
     cssGradientVertical:
-      'linear-gradient(0deg, rgb(48, 18, 59) 0%, rgb(65, 119, 246) 20%, rgb(27, 218, 172) 40%, rgb(164, 252, 60) 60%, rgb(251, 150, 39) 80%, rgb(122, 4, 3) 100%)',
+      'linear-gradient(0deg, rgb(48,18,59) 0%, rgb(70,134,251) 20%, rgb(27,218,172) 40%, rgb(164,252,60) 60%, rgb(251,150,39) 80%, rgb(122,4,3) 100%)',
     stops: [
       [0.0, [48, 18, 59]],
       [0.2, [65, 119, 246]],
@@ -49,19 +63,53 @@ export const SCIENTIFIC_COLORMAPS: readonly ScientificColormapSpec[] = Object.fr
   },
   {
     id: 'viridis',
-    label: 'Viridis (Científica)',
+    label: 'Viridis (Científica Matplotlib)',
     shortLabel: 'Viridis',
-    description: 'Rampa uniforme para retrodispersión y biomasa (violeta → azul → verde → amarillo)',
+    description: 'Rampa oficial Matplotlib para retrodispersión e incidencia (violeta → azul → verde → amarillo)',
     cssGradientHorizontal:
-      'linear-gradient(90deg, rgb(68, 1, 84) 0%, rgb(59, 82, 139) 25%, rgb(33, 145, 140) 50%, rgb(94, 201, 98) 75%, rgb(253, 231, 37) 100%)',
+      'linear-gradient(90deg, rgb(68,1,84) 0%, rgb(71,45,123) 15%, rgb(59,82,139) 30%, rgb(44,114,142) 45%, rgb(33,145,140) 60%, rgb(40,174,128) 75%, rgb(115,208,86) 90%, rgb(253,231,37) 100%)',
     cssGradientVertical:
-      'linear-gradient(0deg, rgb(68, 1, 84) 0%, rgb(59, 82, 139) 25%, rgb(33, 145, 140) 50%, rgb(94, 201, 98) 75%, rgb(253, 231, 37) 100%)',
+      'linear-gradient(0deg, rgb(68,1,84) 0%, rgb(71,45,123) 15%, rgb(59,82,139) 30%, rgb(44,114,142) 45%, rgb(33,145,140) 60%, rgb(40,174,128) 75%, rgb(115,208,86) 90%, rgb(253,231,37) 100%)',
     stops: [
       [0.0, [68, 1, 84]],
       [0.25, [59, 82, 139]],
       [0.5, [33, 145, 140]],
       [0.75, [94, 201, 98]],
       [1.0, [253, 231, 37]],
+    ],
+  },
+  {
+    id: 'plasma',
+    label: 'Plasma (Brillo Perceptual)',
+    shortLabel: 'Plasma',
+    description: 'Rampa de alta luminosidad violeta → magenta → naranja → amarillo neón',
+    cssGradientHorizontal:
+      'linear-gradient(90deg, rgb(13,8,135) 0%, rgb(84,2,163) 20%, rgb(156,23,158) 40%, rgb(204,71,120) 60%, rgb(237,121,83) 80%, rgb(240,249,33) 100%)',
+    cssGradientVertical:
+      'linear-gradient(0deg, rgb(13,8,135) 0%, rgb(84,2,163) 20%, rgb(156,23,158) 40%, rgb(204,71,120) 60%, rgb(237,121,83) 80%, rgb(240,249,33) 100%)',
+    stops: [
+      [0.0, [13, 8, 135]],
+      [0.25, [106, 0, 168]],
+      [0.5, [177, 42, 144]],
+      [0.75, [225, 100, 98]],
+      [1.0, [240, 249, 33]],
+    ],
+  },
+  {
+    id: 'magma',
+    label: 'Magma (Contraste Profundo)',
+    shortLabel: 'Magma',
+    description: 'Rampa profunda negro carbón → violeta oscuro → coral → blanco melocotón',
+    cssGradientHorizontal:
+      'linear-gradient(90deg, rgb(0,0,4) 0%, rgb(40,17,73) 20%, rgb(114,31,129) 40%, rgb(183,55,121) 60%, rgb(241,104,115) 80%, rgb(252,253,191) 100%)',
+    cssGradientVertical:
+      'linear-gradient(0deg, rgb(0,0,4) 0%, rgb(40,17,73) 20%, rgb(114,31,129) 40%, rgb(183,55,121) 60%, rgb(241,104,115) 80%, rgb(252,253,191) 100%)',
+    stops: [
+      [0.0, [0, 0, 4]],
+      [0.25, [51, 16, 82]],
+      [0.5, [130, 37, 129]],
+      [0.75, [221, 81, 105]],
+      [1.0, [252, 253, 191]],
     ],
   },
   {
@@ -85,35 +133,33 @@ export function getColormapSpec(id: ScientificColormapId): ScientificColormapSpe
   return SCIENTIFIC_COLORMAPS.find((c) => c.id === id) ?? SCIENTIFIC_COLORMAPS[0]
 }
 
-/** Construye una tabla LUT de 256 × 3 bytes (R, G, B) interpolando linealmente los stops de la paleta. */
+/** Construye o recupera la tabla LUT de 256 × 3 bytes (R, G, B) de alta precisión de Matplotlib. */
 export function buildLut256(id: ScientificColormapId): Uint8Array {
-  const cached = lutCache.get(id)
-  if (cached) return cached
-
-  const spec = getColormapSpec(id)
-  const stops = spec.stops
-  const lut = new Uint8Array(256 * 3)
-
-  for (let i = 0; i < 256; i++) {
-    const t = i / 255
-    let s0 = stops[0]
-    let s1 = stops[stops.length - 1]
-    for (let j = 0; j < stops.length - 1; j++) {
-      if (t >= stops[j][0] && t <= stops[j + 1][0]) {
-        s0 = stops[j]
-        s1 = stops[j + 1]
-        break
+  switch (id) {
+    case 'inferno':
+      return LUT_INFERNO_256
+    case 'viridis':
+      return LUT_VIRIDIS_256
+    case 'turbo':
+      return LUT_TURBO_256
+    case 'plasma':
+      return LUT_PLASMA_256
+    case 'magma':
+      return LUT_MAGMA_256
+    case 'grayscale':
+    default: {
+      const cached = lutCache.get(id)
+      if (cached) return cached
+      const lut = new Uint8Array(256 * 3)
+      for (let i = 0; i < 256; i++) {
+        lut[i * 3] = i
+        lut[i * 3 + 1] = i
+        lut[i * 3 + 2] = i
       }
+      lutCache.set(id, lut)
+      return lut
     }
-    const span = Math.max(1e-6, s1[0] - s0[0])
-    const f = Math.min(1, Math.max(0, (t - s0[0]) / span))
-    lut[i * 3] = Math.round(s0[1][0] + f * (s1[1][0] - s0[1][0]))
-    lut[i * 3 + 1] = Math.round(s0[1][1] + f * (s1[1][1] - s0[1][1]))
-    lut[i * 3 + 2] = Math.round(s0[1][2] + f * (s1[1][2] - s0[1][2]))
   }
-
-  lutCache.set(id, lut)
-  return lut
 }
 
 /** Interpolar un color hex/rgb de Inferno dado `t` en [0..1] (para el Simulador Solar). */
@@ -158,6 +204,8 @@ export function colorizePngWithLut(
           resolve(pngUrl)
           return
         }
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
         ctx.drawImage(img, 0, 0)
         const imageData = ctx.getImageData(0, 0, w, h)
         const data = imageData.data

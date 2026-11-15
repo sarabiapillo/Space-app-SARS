@@ -10,6 +10,7 @@ import {
   DEFAULT_SOLAR,
   ESCENA_CHIAPAS,
   MAPA_GENERAL,
+  RAW_SCENE_IDS,
   checkPairCompat,
   type CenterDockTab,
   type ExploreDateViewMode,
@@ -31,6 +32,7 @@ import type {
   WorkspaceMap,
 } from './types/workspace'
 import { type ScientificColormapId } from './utils/colormapLut'
+import { ScientificFiguresViewer } from './components/ScientificFiguresViewer'
 import { newId } from './utils/id'
 
 function baseName(nombre: string): string {
@@ -47,6 +49,7 @@ function App() {
   const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
+  const [figuresOpen, setFiguresOpen] = useState(false)
 
   // Controles de estación de trabajo científica compartidos entre Ribbon Bar y Lienzo
   const [exploreLayerId, setExploreLayerId] = useState<ExploreLayerId>('gamma0_HHHH_ml2_dB')
@@ -314,6 +317,7 @@ function App() {
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
         onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
+        onOpenFigures={() => setFiguresOpen(true)}
         onOpenTeamPage={() => setTeamPageOpen(true)}
       />
 
@@ -376,6 +380,18 @@ function App() {
       )}
 
       {teamPageOpen && <TeamLandingPage onClose={() => setTeamPageOpen(false)} />}
+
+      {figuresOpen && (
+        <div className="ws-sci-modal-backdrop" onClick={() => setFiguresOpen(false)}>
+          <div className="ws-sci-modal ws-sci-modal--standalone" onClick={(e) => e.stopPropagation()}>
+            <ScientificFiguresViewer
+              sceneId={current.escena.granuleId || RAW_SCENE_IDS.T62_T2_20261016}
+              dateLabel={current.escena.t2 ? `${current.escena.t2} (t2)` : '2026-10-16 (t2)'}
+              onClose={() => setFiguresOpen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

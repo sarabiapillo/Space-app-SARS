@@ -17,6 +17,7 @@ import {
 import { Bar, Doughnut, Line } from 'react-chartjs-2'
 import { AlertTriangle, BarChart3, CheckCircle2, FileJson, Info } from 'lucide-react'
 import { fetchExploreCharts, type ExploreChartsFetchResult } from '../api/client'
+import { ScientificFiguresViewer } from './ScientificFiguresViewer'
 import {
   RAW_SCENE_IDS,
   type ExploreHistogramChart,
@@ -193,6 +194,7 @@ const maskValueLabels: Plugin<'bar'> = {
 
 export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
   const [dateChoice, setDateChoice] = useState<DateChoice>('t2')
+  const [viewMode, setViewMode] = useState<'matplotlib' | 'chartjs'>('matplotlib')
   const [polFilter, setPolFilter] = useState<PolFilter>('both')
   const [maskMode, setMaskMode] = useState<MaskChartMode>('bar')
   const [loaded, setLoaded] = useState<{
@@ -519,31 +521,59 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
         </div>
 
         <div className="ws-charts-panel__controls">
-          <button
-            type="button"
-            className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't1' ? 'is-active' : ''}`}
-            onClick={() => setDateChoice('t1')}
-            title={`Cargar graficas.json t1 (2026-06-18): ${RAW_SCENE_IDS.T62_T1_20260618}`}
-          >
-            t1 (2026-06-18)
-          </button>
-          <button
-            type="button"
-            className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't2' ? 'is-active' : ''}`}
-            onClick={() => setDateChoice('t2')}
-            title={`Cargar graficas.json t2 (2026-10-16): ${RAW_SCENE_IDS.T62_T2_20261016}`}
-          >
-            t2 (2026-10-16)
-          </button>
+          <div style={{ display: 'flex', gap: '3px' }}>
+            <button
+              type="button"
+              className={`ws-tool-btn ${viewMode === 'matplotlib' ? 'is-active' : ''}`}
+              onClick={() => setViewMode('matplotlib')}
+              title="Figuras científicas oficiales de Python Matplotlib (Figuras B, C, D, E)"
+            >
+              📊 Figuras Python
+            </button>
+            <button
+              type="button"
+              className={`ws-tool-btn ${viewMode === 'chartjs' ? 'is-active' : ''}`}
+              onClick={() => setViewMode('chartjs')}
+              title="Gráficas interactivas vectoriales Chart.js"
+            >
+              📈 Chart.js
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '3px' }}>
+            <button
+              type="button"
+              className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't1' ? 'is-active' : ''}`}
+              onClick={() => setDateChoice('t1')}
+              title={`Cargar t1 (2026-06-18): ${RAW_SCENE_IDS.T62_T1_20260618}`}
+            >
+              t1 (2026-06-18)
+            </button>
+            <button
+              type="button"
+              className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't2' ? 'is-active' : ''}`}
+              onClick={() => setDateChoice('t2')}
+              title={`Cargar t2 (2026-10-16): ${RAW_SCENE_IDS.T62_T2_20261016}`}
+            >
+              t2 (2026-10-16)
+            </button>
+          </div>
         </div>
       </div>
 
-      {loading && (
-        <div className="ws-charts-panel__empty">
-          Cargando <code>{sourceUrl || `/data/explore/${targetGranuleId}/graficas.json`}</code> para{' '}
-          {targetDateLabel}…
-        </div>
-      )}
+      {viewMode === 'matplotlib' ? (
+        <ScientificFiguresViewer
+          sceneId={targetGranuleId}
+          dateLabel={targetDateLabel}
+        />
+      ) : (
+        <>
+          {loading && (
+            <div className="ws-charts-panel__empty">
+              Cargando <code>{sourceUrl || `/data/explore/${targetGranuleId}/graficas.json`}</code> para{' '}
+              {targetDateLabel}…
+            </div>
+          )}
 
       {!loading && error && (
         <div className="ws-charts-panel__error" role="alert">
@@ -818,6 +848,8 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
             )}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

@@ -49,6 +49,8 @@ interface HeaderProps {
   onToggleFloatingTools: () => void
   isCaptureMode: boolean
   onStartCaptureMode: () => void
+  /** Abre la galería de figuras científicas oficiales generadas por Matplotlib en el backend. */
+  onOpenFigures?: () => void
   /** Abre la landing institucional del equipo (MonitosCH) sin perder el estado del mapa. */
   onOpenTeamPage: () => void
 }
@@ -152,6 +154,7 @@ export function Header({
   onToggleFloatingTools,
   isCaptureMode,
   onStartCaptureMode,
+  onOpenFigures,
   onOpenTeamPage,
 }: HeaderProps) {
   const isEditing = viewMode === 'editado' && canShowEdited
@@ -571,6 +574,18 @@ export function Header({
               <CloudRain size={14} />
               <span>Simulador Inundación (DG2)</span>
             </button>
+
+            {onOpenFigures && (
+              <button
+                type="button"
+                className="ws-ribbon__btn ws-ribbon__btn--figures"
+                onClick={onOpenFigures}
+                title="Abrir galería de Figuras Científicas Oficiales de Python (Matplotlib / NISAR QA: Figuras B, C, D, E)"
+              >
+                <Layers size={14} />
+                <span>Figuras Científicas (Backend)</span>
+              </button>
+            )}
 
           </div>
           <span className="ws-ribbon__label">Herramientas y Módulos</span>

@@ -159,6 +159,35 @@ export function generateFloodRaster(
         if (sinkDist < 0.08) {
           baseDepth = Math.max(baseDepth, (0.08 - sinkDist) * 12)
         }
+      } else if (zoneId === 'soconusco_costa') {
+        // Llanura Costera del Soconusco: Ríos Coatán y Huixtla descendiendo de la Sierra hacia el mar
+        const riverAxis = Math.abs(ny - (0.42 + 0.18 * Math.sin(nx * Math.PI * 1.5)))
+        if (riverAxis < 0.05) {
+          baseDepth = (0.05 - riverAxis) * 32
+        } else if (riverAxis < 0.16) {
+          baseDepth = (0.16 - riverAxis) * 3.8
+        }
+        if (nx < 0.35 && ny > 0.6) {
+          baseDepth = Math.max(baseDepth, 0.45 + 0.35 * Math.sin((nx + ny) * 12))
+        }
+      } else if (zoneId === 'encrucijada') {
+        // La Encrucijada: Red de marismas, albuferas y esteros de manglar
+        const marshDist = Math.hypot(nx - 0.45, ny - 0.55)
+        if (marshDist < 0.35) {
+          baseDepth = Math.cos((marshDist / 0.35) * (Math.PI / 2)) * 1.85
+        }
+        const tidalChannel = Math.abs(ny - (0.50 + 0.12 * Math.sin(nx * Math.PI * 3.2)))
+        if (tidalChannel < 0.04) {
+          baseDepth = Math.max(baseDepth, (0.04 - tidalChannel) * 25)
+        }
+      } else if (zoneId === 'malpaso_grijalva') {
+        // Malpaso / Grijalva: Vaso hidroeléctrico y amplias llanuras aluviales tropicales
+        const riverMeander = Math.abs(ny - (0.48 + 0.15 * Math.sin(nx * Math.PI * 2.0)))
+        if (riverMeander < 0.06) {
+          baseDepth = (0.06 - riverMeander) * 28
+        } else if (riverMeander < 0.18) {
+          baseDepth = (0.18 - riverMeander) * 2.6
+        }
       } else {
         // Genérico / Selección personalizada: Red dendrítica natural de drenaje hacia la depresión
         const mainAxis = Math.abs(ny - (0.45 + 0.1 * Math.sin(nx * Math.PI * 2)))

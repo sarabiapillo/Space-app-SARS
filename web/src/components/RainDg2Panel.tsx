@@ -45,6 +45,9 @@ export function RainDg2Panel({
   const [isSimulating, setIsSimulating] = useState(false)
   const [simulationError, setSimulationError] = useState<string | null>(null)
   const [showEquations, setShowEquations] = useState(false)
+  const [showCustomRoiModal, setShowCustomRoiModal] = useState(false)
+  const [customRoiInput, setCustomRoiInput] = useState('')
+  const [customRoiError, setCustomRoiError] = useState<string | null>(null)
 
   const zoneSelectId = useId()
   const amountSliderId = useId()
@@ -91,6 +94,87 @@ export function RainDg2Panel({
       rainfallDuration: duration,
       pressureHpa: pressure,
     })
+  }
+
+  const handleApplyCustomRoi = () => {
+    try {
+      setCustomRoiError(null)
+      const trimmed = customRoiInput.trim()
+      if (!trimmed) {
+        throw new Error('Ingrese o pegue las coordenadas del polígono.')
+      }
+
+      let coords: [number, number][] = []
+
+      if (trimmed.startsWith('{')) {
+        const parsed = JSON.parse(trimmed)
+        if (parsed.type === 'Polygon' && Array.isArray(parsed.coordinates)) {
+          coords = parsed.coordinates[0]
+        } else if (parsed.type === 'Feature' && parsed.geometry?.type === 'Polygon') {
+          coords = parsed.geometry.coordinates[0]
+        } else {
+          throw new Error('El objeto debe ser un GeoJSON Polygon o Feature válido.')
+        }
+      } else if (trimmed.startsWith('[')) {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed) && parsed.length === 4 && typeof parsed[0] === 'number') {
+          const [w, s, e, n] = parsed
+          coords = [
+            [w, n],
+            [e, n],
+            [e, s],
+            [w, s],
+            [w, n],
+          ]
+        } else if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
+          coords = parsed
+        } else {
+          throw new Error('Formato de array de coordenadas no reconocido.')
+        }
+      } else {
+        const parts = trimmed.split(',').map((p) => Number(p.trim()))
+        if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+          const [w, s, e, n] = parts
+          coords = [
+            [w, n],
+            [e, n],
+            [e, s],
+            [w, s],
+            [w, n],
+          ]
+        } else {
+          throw new Error('Pegue GeoJSON Polygon, array [[lng,lat]...] o bbox "west,south,east,north".')
+        }
+      }
+
+      if (coords.length < 3) {
+        throw new Error('El polígono debe tener al menos 3 vértices.')
+      }
+
+      let minLng = Infinity
+      let maxLng = -Infinity
+      let minLat = Infinity
+      let maxLat = -Infinity
+      for (const [lng, lat] of coords) {
+        if (lng < minLng) minLng = lng
+        if (lng > maxLng) maxLng = lng
+        if (lat < minLat) minLat = lat
+        if (lat > maxLat) maxLat = lat
+      }
+
+      const cLng = (minLng + maxLng) / 2
+      const cLat = (minLat + maxLat) / 2
+
+      onFlyToZone?.([cLng, cLat], 12)
+      onFloodChange({
+        ...flood,
+        selectedZoneId: 'custom_roi',
+        rasterBounds: [minLng, minLat, maxLng, maxLat],
+      })
+      setShowCustomRoiModal(false)
+    } catch (err: any) {
+      setCustomRoiError(err.message || 'Error al procesar las coordenadas del ROI.')
+    }
   }
 
   const handleSimulateFlood = async () => {
@@ -271,6 +355,16 @@ export function RainDg2Panel({
             </select>
             <div className="solar-zone-info">
               <span>{currentZone.description}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+              <button
+                type="button"
+                className="ws-tool-btn"
+                style={{ fontSize: '10px', padding: '4px 8px', width: '100%', justifyContent: 'center' }}
+                onClick={() => setShowCustomRoiModal(true)}
+              >
+                📂 Cargar Coordenadas / Importar ROI GeoJSON...
+              </button>
             </div>
           </div>
 
@@ -782,6 +876,131 @@ export function RainDg2Panel({
               </div>
             </div>
           </section>
+        </div>
+      )}
+
+      {/* Modal para Cargar Coordenadas ROI GeoJSON o Bounding Box */}
+      {showCustomRoiModal && (
+        <div
+          className="ws-sci-modal-backdrop"
+          onClick={() => setShowCustomRoiModal(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="ws-sci-modal"
+            style={{ maxWidth: '640px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="ws-sci-modal__header">
+              <div className="ws-sci-modal__title-box">
+                <MapPin size={16} style={{ color: '#0284c7' }} />
+                <h3>Cargar Región de Interés (ROI) / Zona Externa</h3>
+              </div>
+              <button
+                type="button"
+                className="ws-sci-btn ws-sci-btn--close"
+                onClick={() => setShowCustomRoiModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <p style={{ margin: 0, fontSize: '11.5px', color: '#475569' }}>
+                Seleccione una de las nuevas zonas costeras/húmedas fuera de la depresión seca interior,
+                o pegue un polígono GeoJSON / Bounding Box personalizado:
+              </p>
+
+              {/* Botones de Zonas Húmedas / Costeras Recomendadas */}
+              <div>
+                <strong style={{ fontSize: '10.5px', color: '#0f172a', display: 'block', marginBottom: '6px' }}>
+                  Zonas Húmedas / Costeras Fuera del Cañón Seco:
+                </strong>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '6px' }}>
+                  <button
+                    type="button"
+                    className="ws-tool-btn"
+                    style={{ textAlign: 'left', padding: '6px 8px', fontSize: '11px', height: 'auto' }}
+                    onClick={() => {
+                      setCustomRoiInput('[-92.65, 14.78, -92.20, 15.02]')
+                    }}
+                  >
+                    🌊 <strong>Soconusco Costa</strong><br />
+                    <span style={{ fontSize: '9.5px', color: '#64748b' }}>Río Coatán / Tapachula</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ws-tool-btn"
+                    style={{ textAlign: 'left', padding: '6px 8px', fontSize: '11px', height: 'auto' }}
+                    onClick={() => {
+                      setCustomRoiInput('[-93.05, 15.00, -92.65, 15.30]')
+                    }}
+                  >
+                    🌿 <strong>La Encrucijada</strong><br />
+                    <span style={{ fontSize: '9.5px', color: '#64748b' }}>Marismas y Manglares</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="ws-tool-btn"
+                    style={{ textAlign: 'left', padding: '6px 8px', fontSize: '11px', height: 'auto' }}
+                    onClick={() => {
+                      setCustomRoiInput('[-93.75, 17.05, -93.45, 17.30]')
+                    }}
+                  >
+                    💧 <strong>Malpaso / Grijalva</strong><br />
+                    <span style={{ fontSize: '9.5px', color: '#64748b' }}>Llanuras Aluviales Norte</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Área de texto para ingresar GeoJSON o Coordenadas */}
+              <div>
+                <label style={{ fontSize: '10.5px', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '4px' }}>
+                  Coordenadas (GeoJSON Polygon, BBox [w, s, e, n] o CSV):
+                </label>
+                <textarea
+                  rows={4}
+                  value={customRoiInput}
+                  onChange={(e) => setCustomRoiInput(e.target.value)}
+                  placeholder={`Ejemplo Bbox: [-92.65, 14.78, -92.20, 15.02]\nO GeoJSON: {"type":"Polygon","coordinates":[[[-92.65,14.78],[-92.20,14.78],...]]}`}
+                  style={{
+                    width: '100%',
+                    padding: '8px',
+                    fontFamily: 'monospace',
+                    fontSize: '11px',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '3px',
+                    background: '#f8fafc',
+                    resize: 'vertical',
+                  }}
+                />
+              </div>
+
+              {customRoiError && (
+                <div style={{ padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '3px', color: '#b91c1c', fontSize: '11px' }}>
+                  {customRoiError}
+                </div>
+              )}
+            </div>
+
+            <div className="ws-sci-modal__footer">
+              <button
+                type="button"
+                className="ws-sci-btn"
+                onClick={() => setShowCustomRoiModal(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="ws-sci-btn ws-sci-btn--primary"
+                onClick={handleApplyCustomRoi}
+              >
+                Aplicar ROI y Centrar Mapa
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </aside>
