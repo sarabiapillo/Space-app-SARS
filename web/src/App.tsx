@@ -9,10 +9,13 @@ import {
   ESCENA_CHIAPAS,
   MAPA_GENERAL,
   checkPairCompat,
+  type ExploreDateViewMode,
+  type ExploreLayerId,
   type GcovStackSpec,
 } from './mocks/initialWorkspaces'
 import type {
   Carpeta,
+  DrawTool,
   EscenaNisar,
   LngLat,
   MapAnnotation,
@@ -21,6 +24,7 @@ import type {
   ViewMode,
   WorkspaceMap,
 } from './types/workspace'
+import { type ScientificColormapId } from './utils/colormapLut'
 import { newId } from './utils/id'
 
 function baseName(nombre: string): string {
@@ -35,6 +39,12 @@ function App() {
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
   const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
+
+  // Controles de estación de trabajo científica compartidos entre Ribbon Bar y Lienzo
+  const [exploreLayerId, setExploreLayerId] = useState<ExploreLayerId>('gamma0_HHHH_ml2_dB')
+  const [dateViewMode, setDateViewMode] = useState<ExploreDateViewMode>('t2')
+  const [colormapId, setColormapId] = useState<ScientificColormapId>('inferno')
+  const [activeTool, setActiveTool] = useState<DrawTool>('mover')
 
   const activeCopy = maps.find((m) => m.id === activeCopyId) ?? maps[0] ?? null
   const isEditing = viewMode === 'editado' && activeCopy !== null
@@ -215,6 +225,19 @@ function App() {
         canShowEdited={activeCopy !== null}
         onDuplicate={() => setDuplicating(true)}
         onExportJson={handleExportJson}
+        escena={current.escena}
+        opacity={current.opacidadSar}
+        onOpacityChange={handleOpacityChange}
+        exploreLayerId={exploreLayerId}
+        onExploreLayerChange={setExploreLayerId}
+        dateViewMode={dateViewMode}
+        onDateViewModeChange={setDateViewMode}
+        colormapId={colormapId}
+        onColormapChange={setColormapId}
+        activeTool={activeTool}
+        onSelectTool={setActiveTool}
+        solar={current.solar}
+        onSolarChange={handleSolarChange}
       />
 
       <div className="app__body">
@@ -241,6 +264,14 @@ function App() {
           annotations={current.annotations}
           croppedRegion={current.croppedRegion}
           solar={current.solar}
+          exploreLayerId={exploreLayerId}
+          onExploreLayerChange={setExploreLayerId}
+          dateViewMode={dateViewMode}
+          onDateViewModeChange={setDateViewMode}
+          colormapId={colormapId}
+          onColormapChange={setColormapId}
+          activeTool={activeTool}
+          onSelectTool={setActiveTool}
           onViewChange={handleViewChange}
           onAnnotationsChange={handleAnnotationsChange}
           onCropRegionChange={handleCropRegionChange}

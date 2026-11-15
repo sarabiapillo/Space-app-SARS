@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { Sun, X } from 'lucide-react'
 import type { SolarSimulationState } from '../types/workspace'
+import { getColormapSpec } from '../utils/colormapLut'
 
 interface SolarPanelProps {
   solar: SolarSimulationState
@@ -33,6 +34,7 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
   const [dragging, setDragging] = useState(false)
   const angleId = useId()
   const radId = useId()
+  const infernoSpec = getColormapSpec('inferno')
 
   const { x: sunX, y: sunY } = sunArcCoords(solar.sunAngle)
 
@@ -55,14 +57,16 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
   }
 
   return (
-    <aside className="solar-card" aria-label="Simulación Solar">
+    <aside className="solar-card" aria-label="Simulación Solar y Radiación (Inferno)">
       <div className="solar-card__header">
         <div>
           <h3 className="solar-card__title">
-            <Sun size={16} className="solar-card__icon" aria-hidden="true" />
-            Simulación Solar
+            <Sun size={14} className="solar-card__icon" aria-hidden="true" />
+            Settings — Simulación Solar / Radiación
           </h3>
-          <p className="solar-card__subtitle">Ajusta la luz sobre el terreno</p>
+          <p className="solar-card__subtitle">
+            Incidencia azimutal DEM y rampa térmica <strong>Inferno</strong>
+          </p>
         </div>
         <button
           type="button"
@@ -71,11 +75,11 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
           title="Cerrar Simulación Solar"
           aria-label="Cerrar Simulación Solar"
         >
-          <X size={16} />
+          <X size={14} />
         </button>
       </div>
 
-      {/* Recuadro limpio con arco sencillo Este a Oeste y esfera amarilla arrastrable */}
+      {/* Recuadro técnico con arco Este a Oeste y esfera solar arrastrable */}
       <div className="solar-arc-box">
         <svg
           ref={svgRef}
@@ -98,14 +102,14 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
           onPointerCancel={() => setDragging(false)}
         >
           {/* Línea de horizonte */}
-          <line x1={32} y1={96} x2={228} y2={96} stroke="#374151" strokeWidth={1.5} />
+          <line x1={32} y1={96} x2={228} y2={96} stroke="#94A3B8" strokeWidth={1.5} />
 
           {/* Arco punteado completo Este -> Oeste */}
           <path
             d="M 52 96 A 78 78 0 0 1 208 96"
             fill="none"
-            stroke="#4B5563"
-            strokeWidth={2}
+            stroke="#64748B"
+            strokeWidth={1.6}
             strokeDasharray="4 4"
           />
 
@@ -113,8 +117,8 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
           <path
             d={`M 52 96 A 78 78 0 0 1 ${sunX.toFixed(1)} ${sunY.toFixed(1)}`}
             fill="none"
-            stroke="#F59E0B"
-            strokeWidth={2.5}
+            stroke="#DD513A"
+            strokeWidth={2.4}
           />
 
           {/* Rayo proyectado hacia el relieve central */}
@@ -123,41 +127,36 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
             y1={sunY}
             x2={130}
             y2={96}
-            stroke="#FBBF24"
-            strokeWidth={1.25}
+            stroke="#FCA50A"
+            strokeWidth={1.4}
             strokeDasharray="3 3"
           />
 
-          {/* Silueta minimalista del terreno */}
+          {/* Silueta técnica del relieve (Cañón del Sumidero / Chiapas) */}
           <polygon
             points="96,96 114,80 128,89 144,74 166,96"
-            fill="#1F2937"
-            stroke="#6B7280"
+            fill="#CBD5E1"
+            stroke="#475569"
             strokeWidth={1.2}
           />
 
-          {/* Esfera amarilla del Sol */}
+          {/* Halo y esfera solar */}
+          <circle cx={sunX} cy={sunY} r={12} fill="rgba(252, 165, 10, 0.25)" />
           <circle
             cx={sunX}
             cy={sunY}
-            r={13}
-            fill="rgba(251, 191, 36, 0.25)"
-          />
-          <circle
-            cx={sunX}
-            cy={sunY}
-            r={8.5}
-            fill="#FACC15"
-            stroke="#D97706"
-            strokeWidth={1.8}
+            r={7.5}
+            fill="#FCA50A"
+            stroke="#932667"
+            strokeWidth={1.6}
           />
 
           {/* Etiquetas Este / Mediodía / Oeste */}
           <text x={52} y={111} textAnchor="middle" className="solar-arc-svg__label">
-            Este (6:00)
+            Este (06:00)
           </text>
           <text x={130} y={12} textAnchor="middle" className="solar-arc-svg__label">
-            12:00 ({formatSolarHour(solar.sunAngle)})
+            Cenit ({formatSolarHour(solar.sunAngle)})
           </text>
           <text x={208} y={111} textAnchor="middle" className="solar-arc-svg__label">
             Oeste (18:00)
@@ -169,7 +168,7 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
       <div className="solar-control">
         <div className="opacity-control__header">
           <label htmlFor={angleId} className="opacity-control__label">
-            Ángulo del Sol / Hora
+            Ángulo Solar / Hora Local
           </label>
           <span className="opacity-control__value">
             {formatSolarHour(solar.sunAngle)} ({solar.sunAngle}°)
@@ -198,7 +197,7 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
       <div className="solar-control">
         <div className="opacity-control__header">
           <label htmlFor={radId} className="opacity-control__label">
-            Intensidad de Calor / Radiación
+            Intensidad de Radiación (Inferno)
           </label>
           <span className="opacity-control__value">{solar.radiationIntensity}%</span>
         </div>
@@ -221,14 +220,17 @@ export function RightPanel({ solar, onSolarChange, onClose }: SolarPanelProps) {
         />
       </div>
 
-      {/* Barra sencilla de leyenda: Temperatura del terreno */}
+      {/* Barra de leyenda con gradiente exacto Inferno */}
       <div className="solar-legend">
-        <span className="solar-legend__title">Temperatura del terreno</span>
-        <div className="solar-legend__bar" />
+        <span className="solar-legend__title">Escala de Radiación Solar (Inferno)</span>
+        <div
+          className="solar-legend__bar"
+          style={{ background: infernoSpec.cssGradientHorizontal }}
+        />
         <div className="solar-legend__labels">
-          <span>Baja</span>
+          <span>Menor radiación</span>
           <span>Media</span>
-          <span>Mayor calor</span>
+          <span>Mayor radiación</span>
         </div>
       </div>
     </aside>

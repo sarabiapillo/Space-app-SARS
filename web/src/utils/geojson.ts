@@ -255,21 +255,34 @@ export function getPolygonBoundsAndCentroid(points: LngLat[]): {
 
 /**
  * Interpola el color `hillshade-highlight-color` según la intensidad de radiación (0% a 100%)
- * desde `#FDE047` (calor bajo/medio) pasando por `#F97316` hasta `#EF4444` (mayor calor).
+ * usando la escala científica **Inferno** (`rgb(0, 0, 4)` → `rgb(66, 10, 104)` → `rgb(147, 38, 103)` →
+ * `rgb(221, 81, 58)` → `rgb(252, 165, 10)` → `rgb(252, 255, 164)`).
  */
 export function interpolateThermalHighlight(intensityPercent: number): string {
   const t = Math.max(0, Math.min(100, intensityPercent)) / 100
 
-  const lerp = (a: number, b: number, u: number) => Math.round(a + (b - a) * u)
+  const stops: [number, [number, number, number]][] = [
+    [0.0, [0, 0, 4]],
+    [0.2, [66, 10, 104]],
+    [0.4, [147, 38, 103]],
+    [0.6, [221, 81, 58]],
+    [0.8, [252, 165, 10]],
+    [1.0, [252, 255, 164]],
+  ]
+
+  let s0 = stops[0]
+  let s1 = stops[stops.length - 1]
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+      s0 = stops[i]
+      s1 = stops[i + 1]
+      break
+    }
+  }
+
+  const u = Math.min(1, Math.max(0, (t - s0[0]) / Math.max(1e-6, s1[0] - s0[0])))
+  const lerp = (a: number, b: number) => Math.round(a + (b - a) * u)
   const toHex = (n: number) => n.toString(16).padStart(2, '0')
 
-  // 0.0 -> #FDE047 (253, 224, 71)
-  // 0.5 -> #F97316 (249, 115, 22)
-  // 1.0 -> #EF4444 (239, 68, 68)
-  if (t <= 0.5) {
-    const u = t / 0.5
-    return `#${toHex(lerp(253, 249, u))}${toHex(lerp(224, 115, u))}${toHex(lerp(71, 22, u))}`
-  }
-  const u = (t - 0.5) / 0.5
-  return `#${toHex(lerp(249, 239, u))}${toHex(lerp(115, 68, u))}${toHex(lerp(22, 68, u))}`
+  return `#${toHex(lerp(s0[1][0], s1[1][0]))}${toHex(lerp(s0[1][1], s1[1][1]))}${toHex(lerp(s0[1][2], s1[1][2]))}`
 }

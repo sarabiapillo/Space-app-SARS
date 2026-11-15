@@ -12,6 +12,7 @@ import {
   Clock,
   Folder,
   FolderOpen,
+  FolderTree,
   Layers,
   Map as MapIcon,
   Pencil,
@@ -86,6 +87,17 @@ export function Sidebar({
   const [folderFilter, setFolderFilter] = useState<Carpeta | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [openNodes, setOpenNodes] = useState<{
+    savedMaps: boolean
+    catalogAndC1: boolean
+    compat: boolean
+    sceneParams: boolean
+  }>({
+    savedMaps: true,
+    catalogAndC1: true,
+    compat: true,
+    sceneParams: true,
+  })
   const [pairDraft, setPairDraft] = useState<{
     stack: EscenaNisar['pila']
     t1: string
@@ -159,6 +171,10 @@ export function Sidebar({
     }
   }
 
+  const toggleNode = (node: keyof typeof openNodes) => {
+    setOpenNodes((prev) => ({ ...prev, [node]: !prev[node] }))
+  }
+
   const activeT1 = pairDraft.stack === escena.pila ? pairDraft.t1 : escena.t1
   const activeT2 = pairDraft.stack === escena.pila ? pairDraft.t2 : escena.t2
 
@@ -182,157 +198,276 @@ export function Sidebar({
     <aside
       className={`sidebar ${isResizing ? 'is-resizing' : ''}`}
       style={{ width: `${sidebarWidth}px` }}
-      aria-label="Mis Mapas Guardados"
+      aria-label="Model Builder / Árbol del Proyecto"
     >
+      {/* Cabecera de pestaña de panel acoplado estilo COMSOL ("Model Builder / Árbol del Proyecto") */}
+      <div className="ws-panel-tabbar">
+        <div className="ws-panel-tab is-active">
+          <FolderTree size={13} aria-hidden="true" />
+          <span>Model Builder / Árbol del Proyecto</span>
+        </div>
+        <span className="ws-panel-tabbar__meta">{sidebarWidth} px</span>
+      </div>
+
       <div className="sidebar__scroll">
-        <h2 className="sidebar__title">Mis Mapas Guardados</h2>
-
-        <div className="folders" role="group" aria-label="Filtrar por carpeta">
-          {CARPETAS.map((carpeta) => {
-            const count = maps.filter((m) => m.carpeta === carpeta).length
-            const selected = folderFilter === carpeta
-            const Icon = selected ? FolderOpen : Folder
-            return (
-              <button
-                key={carpeta}
-                type="button"
-                className={`folder ${selected ? 'is-selected' : ''}`}
-                aria-pressed={selected}
-                onClick={() => setFolderFilter(selected ? null : carpeta)}
-              >
-                <Icon size={16} aria-hidden="true" />
-                <span className="folder__name">{carpeta}</span>
-                <span className="folder__count">{count}</span>
-              </button>
-            )
-          })}
+        {/* Raíz del árbol del proyecto */}
+        <div className="tree-root-label">
+          <span className="tree-root-label__icon">▣</span>
+          <span>Chiapas_GCOV_Workstation.mph (ROI EPSG:{escena.epsg})</span>
         </div>
 
-        <div className="cards-header">
-          <span>{folderFilter ?? 'Todas las copias'}</span>
-          {folderFilter && (
-            <button type="button" className="link-btn" onClick={() => setFolderFilter(null)}>
-              Ver todas
-            </button>
-          )}
-        </div>
+        {/* Nodo 1: Mis Mapas Guardados */}
+        <div className="tree-node">
+          <button
+            type="button"
+            className="tree-node__header"
+            onClick={() => toggleNode('savedMaps')}
+            aria-expanded={openNodes.savedMaps}
+          >
+            <span className="tree-node__caret">{openNodes.savedMaps ? '▾' : '▸'}</span>
+            <span className="tree-node__title">Mis Mapas Guardados ({maps.length})</span>
+          </button>
 
-        <ul className="cards">
-          {visibleMaps.length === 0 && (
-            <li className="cards__empty">
-              No hay mapas en esta carpeta. Usa <strong>+ Duplicar Mapa</strong> para crear uno.
-            </li>
-          )}
-          {visibleMaps.map((map) => {
-            const active = map.id === activeMapId
-            const isRenaming = editingId === map.id
-
-            return (
-              <li key={map.id} className={`card-item ${active ? 'is-active' : ''}`}>
-                {isRenaming ? (
-                  <form className="card-rename" onSubmit={(e) => submitRename(e, map.id)}>
-                    <input
-                      type="text"
-                      className="card-rename__input"
-                      value={editingName}
-                      maxLength={60}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      autoFocus
-                    />
+          {openNodes.savedMaps && (
+            <div className="tree-node__body">
+              <div className="folders" role="group" aria-label="Filtrar por carpeta">
+                {CARPETAS.map((carpeta) => {
+                  const count = maps.filter((m) => m.carpeta === carpeta).length
+                  const selected = folderFilter === carpeta
+                  const Icon = selected ? FolderOpen : Folder
+                  return (
                     <button
-                      type="submit"
-                      className="icon-btn icon-btn--xs"
-                      title="Guardar nombre"
-                      aria-label="Guardar nombre"
-                    >
-                      <Check size={14} />
-                    </button>
-                    <button
+                      key={carpeta}
                       type="button"
-                      className="icon-btn icon-btn--xs"
-                      onClick={() => setEditingId(null)}
-                      title="Cancelar"
-                      aria-label="Cancelar"
+                      className={`folder ${selected ? 'is-selected' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() => setFolderFilter(selected ? null : carpeta)}
                     >
-                      <X size={14} />
+                      <Icon size={14} aria-hidden="true" />
+                      <span className="folder__name">{carpeta}</span>
+                      <span className="folder__count">{count}</span>
                     </button>
-                  </form>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="card"
-                      aria-current={active ? 'true' : undefined}
-                      onClick={() => onSelectMap(map.id)}
-                    >
-                      <span className="card__thumb" aria-hidden="true">
-                        <MapIcon size={16} />
-                      </span>
-                      <span className="card__body">
-                        <span className="card__title" title={map.nombre}>
-                          {map.nombre}
-                        </span>
-                        <span className="card__meta">
-                          <Clock size={11} aria-hidden="true" />
-                          {formatRelative(map.fechaModificacion, now)}
-                        </span>
-                        {!folderFilter && <span className="card__folder">{map.carpeta}</span>}
-                      </span>
-                    </button>
+                  )
+                })}
+              </div>
 
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="icon-btn icon-btn--xs"
-                        onClick={() => startRename(map)}
-                        title="Renombrar copia"
-                        aria-label={`Renombrar ${map.nombre}`}
-                      >
-                        <Pencil size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn icon-btn--xs icon-btn--danger"
-                        onClick={() => onDeleteMap(map.id)}
-                        title="Eliminar copia"
-                        aria-label={`Eliminar ${map.nombre}`}
-                      >
-                        <Trash size={13} />
-                      </button>
-                    </div>
-                  </>
+              <div className="cards-header">
+                <span>{folderFilter ?? 'Todas las copias'}</span>
+                {folderFilter && (
+                  <button type="button" className="link-btn" onClick={() => setFolderFilter(null)}>
+                    Ver todas
+                  </button>
                 )}
-              </li>
-            )
-          })}
-        </ul>
+              </div>
 
-        {/* Pilas GCOV Reales de Chiapas y Validador de Bloqueo CRID (Contrato C4) */}
-        <ExploradorFeature
-          activeStackId={escena.pila}
-          onSelectStack={(stack) => {
-            setPairDraft({ stack: stack.id, t1: stack.defaultT1, t2: stack.defaultT2 })
-            onSelectStack?.(stack)
-          }}
-        />
+              <ul className="cards">
+                {visibleMaps.length === 0 && (
+                  <li className="cards__empty">
+                    No hay mapas en esta carpeta. Usa <strong>Duplicar Mapa</strong> para crear uno.
+                  </li>
+                )}
+                {visibleMaps.map((map) => {
+                  const active = map.id === activeMapId
+                  const isRenaming = editingId === map.id
 
-        <ComparadorFeature
-          stackId={escena.pila}
-          t1={activeT1}
-          t2={activeT2}
-          onChangePair={(nextT1, nextT2) => {
-            setPairDraft({ stack: escena.pila, t1: nextT1, t2: nextT2 })
-            onChangePair?.(nextT1, nextT2)
-          }}
-        />
+                  return (
+                    <li key={map.id} className={`card-item ${active ? 'is-active' : ''}`}>
+                      {isRenaming ? (
+                        <form className="card-rename" onSubmit={(e) => submitRename(e, map.id)}>
+                          <input
+                            type="text"
+                            className="card-rename__input"
+                            value={editingName}
+                            maxLength={60}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            autoFocus
+                          />
+                          <button
+                            type="submit"
+                            className="icon-btn icon-btn--xs"
+                            title="Guardar nombre"
+                            aria-label="Guardar nombre"
+                          >
+                            <Check size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn icon-btn--xs"
+                            onClick={() => setEditingId(null)}
+                            title="Cancelar"
+                            aria-label="Cancelar"
+                          >
+                            <X size={13} />
+                          </button>
+                        </form>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="card"
+                            aria-current={active ? 'true' : undefined}
+                            onClick={() => onSelectMap(map.id)}
+                          >
+                            <span className="card__thumb" aria-hidden="true">
+                              <MapIcon size={14} />
+                            </span>
+                            <span className="card__body">
+                              <span className="card__title" title={map.nombre}>
+                                {map.nombre}
+                              </span>
+                              <span className="card__meta">
+                                <Clock size={10} aria-hidden="true" />
+                                {formatRelative(map.fechaModificacion, now)}
+                              </span>
+                              {!folderFilter && <span className="card__folder">{map.carpeta}</span>}
+                            </span>
+                          </button>
+
+                          <div className="card-actions">
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--xs"
+                              onClick={() => startRename(map)}
+                              title="Renombrar copia"
+                              aria-label={`Renombrar ${map.nombre}`}
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn--xs icon-btn--danger"
+                              onClick={() => onDeleteMap(map.id)}
+                              title="Eliminar copia"
+                              aria-label={`Eliminar ${map.nombre}`}
+                            >
+                              <Trash size={12} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Nodo 2: Catálogo ASF (3 Pilas GCOV Chiapas) + Capas Contrato C1 (data/raw) */}
+        <div className="tree-node">
+          <button
+            type="button"
+            className="tree-node__header"
+            onClick={() => toggleNode('catalogAndC1')}
+            aria-expanded={openNodes.catalogAndC1}
+          >
+            <span className="tree-node__caret">{openNodes.catalogAndC1 ? '▾' : '▸'}</span>
+            <span className="tree-node__title">
+              Catálogo ASF (3 Pilas GCOV Chiapas) & Capas Contrato C1 (data/raw)
+            </span>
+          </button>
+
+          {openNodes.catalogAndC1 && (
+            <div className="tree-node__body">
+              <ExploradorFeature
+                activeStackId={escena.pila}
+                onSelectStack={(stack) => {
+                  setPairDraft({ stack: stack.id, t1: stack.defaultT1, t2: stack.defaultT2 })
+                  onSelectStack?.(stack)
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Nodo 3: Validador de Comparabilidad y Selección de Par t1/t2 */}
+        <div className="tree-node">
+          <button
+            type="button"
+            className="tree-node__header"
+            onClick={() => toggleNode('compat')}
+            aria-expanded={openNodes.compat}
+          >
+            <span className="tree-node__caret">{openNodes.compat ? '▾' : '▸'}</span>
+            <span className="tree-node__title">Control de Comparabilidad ({escena.pila})</span>
+          </button>
+
+          {openNodes.compat && (
+            <div className="tree-node__body">
+              <ComparadorFeature
+                stackId={escena.pila}
+                t1={activeT1}
+                t2={activeT2}
+                onChangePair={(nextT1, nextT2) => {
+                  setPairDraft({ stack: escena.pila, t1: nextT1, t2: nextT2 })
+                  onChangePair?.(nextT1, nextT2)
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Nodo 4: Parámetros de Escena */}
+        <div className="tree-node">
+          <button
+            type="button"
+            className="tree-node__header"
+            onClick={() => toggleNode('sceneParams')}
+            aria-expanded={openNodes.sceneParams}
+          >
+            <span className="tree-node__caret">{openNodes.sceneParams ? '▾' : '▸'}</span>
+            <span className="tree-node__title">Parámetros de Escena ({escena.producto})</span>
+          </button>
+
+          {openNodes.sceneParams && (
+            <div className="tree-node__body">
+              <table className="ws-param-table" aria-label="Tabla técnica de parámetros de escena">
+                <tbody>
+                  <tr>
+                    <th>Producto / Banda</th>
+                    <td>{escena.producto} · Band L (Freq A, 20 MHz)</td>
+                  </tr>
+                  <tr>
+                    <th>Pila / Órbita</th>
+                    <td>
+                      {escena.pila} · {escena.direccion}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Fechas (t1 → t2)</th>
+                    <td className="ws-mono">
+                      {escena.t1} → {escena.t2}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>CRID / Madurez</th>
+                    <td className="ws-mono">
+                      {escena.crid} · {escena.madurez}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Malla / CRS</th>
+                    <td className="ws-mono">
+                      EPSG:{escena.epsg} · {escena.resolucionM}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Cobertura ROI</th>
+                    <td>{escena.coberturaRoiPct}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="sidebar__footer">
         <div className="opacity-control">
           <div className="opacity-control__header">
             <label htmlFor={sliderId} className="opacity-control__label">
-              <Layers size={14} aria-hidden="true" />
-              Opacidad de capa (0% - 100%)
+              <Layers size={13} aria-hidden="true" />
+              Opacidad de capa SAR (0% - 100%)
             </label>
             <span className="opacity-control__value">{opacity}%</span>
           </div>
@@ -352,8 +487,7 @@ export function Sidebar({
         <div className="sidebar-trace-box" aria-label="Metadatos de trazabilidad NISAR">
           <div className="sidebar-trace-box__line">
             {escena.producto} · {escena.pila} ({escena.direccion}) · {escena.t1} → {escena.t2} ·
-            HH/HV · {escena.unidad} · CRID: {escena.crid} ({escena.madurez}) · Cobertura ROI:{' '}
-            {escena.coberturaRoiPct}
+            HH/HV · {escena.unidad} · CRID: {escena.crid} ({escena.madurez})
           </div>
           <div
             className="sidebar-trace-box__badge"

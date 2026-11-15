@@ -395,103 +395,115 @@ export const ESCENA_CHIAPAS: Readonly<EscenaNisar> = Object.freeze({
 export const CHIAPAS_CENTRO: LngLat = [-93.1338, 16.77515]
 export const CHIAPAS_ZOOM = 10.1
 
-export type NisarRasterLayerId =
-  | 'rgb_polarimetric'
-  | 'gamma0_hhhh'
-  | 'gamma0_hvhv'
-  | 'sigma0_hhhh'
-  | 'mascara'
+export type ExploreLayerId =
+  | 'gamma0_HHHH_ml2_dB'
+  | 'gamma0_HVHV_ml2_dB'
+  | 'sigma0_HHHH_ml2_dB'
+  | 'sigma0_HVHV_ml2_dB'
 
-export type NisarBlendMode = 'fusion' | 'puro'
+export type ExploreDateViewMode = 't1' | 't2' | 'swipe'
 
-export interface NisarRasterLayerOption {
-  id: NisarRasterLayerId
-  shortLabel: string
-  title: string
-  url: string
-  sourceFigureUrl: string
-  scaleLabel: string
-  roiStatsLabel: string
+export interface ExploreLayerEntry {
+  id: ExploreLayerId
+  cog: string
+  png: string
+  crs_cog: string
+  crs_png: 'EPSG:3857' | string
+  forma_cog: [number, number]
+  forma_png: [number, number]
+  esquinas_lonlat: Footprint
+  unidades: 'dB' | string
+  escala: {
+    vmin_dB: number
+    vmax_dB: number
+    colormap: string
+    metodo: string
+  }
+  rango_datos_dB: [number, number]
+  pct_pixeles_validos: number
+  capa: 'HHHH' | 'HVHV' | string
+  magnitud: 'gamma0' | 'sigma0' | string
+  simbolo: 'γ⁰' | 'σ⁰' | string
+  multilook: number
+  pixel_m: number
 }
 
-/**
- * Coordenadas exactas en EPSG:4326 obtenidas al reproyectar con `rasterio.warp.reproject`
- * (`Resampling.bilinear`, 2752 × 1344 px) los GeoTIFF `data/raw/.../HHHH.tif`, `HVHV.tif`,
- * `mask.tif` y `rtcGammaToSigmaFactor.tif` desde `EPSG:32615` (`web/public/rasters/reprojection_bounds.json`).
- */
-export const NISAR_REPROJECTED_BOUNDS = Object.freeze({
-  west: -93.392386,
-  south: 16.653506,
-  east: -92.875581,
-  north: 16.896813,
-})
+export interface ExploreWebManifest {
+  version: 'explore-web-1' | string
+  tipo: 'inspeccion_una_fecha' | string
+  creado_utc: string
+  version_codigo: string
+  escena: {
+    granuleId: string
+    producto: string
+    fecha_inicio: string
+    trayectoria: number
+    marco: number
+    direccion: string
+    crid: string
+    madurez_catalogo: string | null
+    frecuencia: string
+    polarizaciones: string[]
+  }
+  roi_wkt_4326: string
+  procedencia: {
+    modo: string
+    metodo?: string
+    nombre?: string
+    bytes?: number
+    url?: string
+    block_size_bytes?: number
+    catalogo?: string
+    identidad_verificada_contra_catalogo?: boolean
+  }
+  capas: ExploreLayerEntry[]
+  figuras: string[]
+  metadatos: string
+  advertencias: string[]
+}
 
-/**
- * Coordenadas exactas reproyectadas en orden MapLibre `image` source:
- * `[[west, north], [east, north], [east, south], [west, south]]`.
- */
-export const NISAR_REPROJECTED_FOOTPRINT: Footprint = [
-  [NISAR_REPROJECTED_BOUNDS.west, NISAR_REPROJECTED_BOUNDS.north],
-  [NISAR_REPROJECTED_BOUNDS.east, NISAR_REPROJECTED_BOUNDS.north],
-  [NISAR_REPROJECTED_BOUNDS.east, NISAR_REPROJECTED_BOUNDS.south],
-  [NISAR_REPROJECTED_BOUNDS.west, NISAR_REPROJECTED_BOUNDS.south],
-]
+export interface ExploreLayerOption {
+  id: ExploreLayerId
+  shortLabel: string
+  title: string
+}
 
-/**
- * Capas raster HD (`2752 × 1344 px`) reproyectadas a `EPSG:4326` directamente desde `data/raw/`
- * con filtro antibloqueo de speckle Lee 3×3 y canal Alfa en agua abierta (`HH < -16 dB`) y `mask == 0`.
- */
-export const NISAR_RASTER_LAYERS: readonly NisarRasterLayerOption[] = Object.freeze([
+export const EXPLORE_LAYER_OPTIONS: readonly ExploreLayerOption[] = Object.freeze([
   {
-    id: 'rgb_polarimetric',
-    shortLabel: 'Compuesto RGB (HH/HV)',
-    title:
-      'Compuesto SAR Polarimétrico en Falso Color Científico (R = γ⁰ HH dB, G = γ⁰ HV dB, B = razón HH/HV · semitransparencia alfa en agua HH < -16 dB)',
-    url: '/rasters/roi_rgb_polarimetric.webp',
-    sourceFigureUrl: '/B_roi_gamma0_dB.png',
-    scaleLabel: 'R: HH · G: HV · B: HH/HV',
-    roiStatsLabel: '2752×1344 px EPSG:4326 · Agua HH < -16 dB con fusión alfa',
+    id: 'gamma0_HHHH_ml2_dB',
+    shortLabel: 'γ⁰ HH [dB]',
+    title: 'Retrodispersión RTC γ⁰ HHHH en dB (multilook 2×2 · 20 m · EPSG:3857)',
   },
   {
-    id: 'gamma0_hhhh',
-    shortLabel: 'γ⁰ HHHH [dB]',
-    title: 'Retrodispersión RTC γ⁰ HHHH [dB] en alto contraste HD con transparencia gradual en agua/sombras',
-    url: '/rasters/roi_hhhh_db_hd.webp',
-    sourceFigureUrl: '/B_roi_gamma0_dB.png',
-    scaleLabel: '-12.31 a -1.18 dB (p2–p98)',
-    roiStatsLabel: 'Media ROI: -6.46 dB · Filtro Lee 3×3 · 2752×1344 px',
+    id: 'gamma0_HVHV_ml2_dB',
+    shortLabel: 'γ⁰ HV [dB]',
+    title: 'Retrodispersión RTC γ⁰ HVHV en dB (multilook 2×2 · 20 m · EPSG:3857)',
   },
   {
-    id: 'gamma0_hvhv',
-    shortLabel: 'γ⁰ HVHV [dB]',
-    title: 'Retrodispersión RTC γ⁰ HVHV [dB] en paleta Viridis/Esmeralda científica (sensible a volumen de dosel)',
-    url: '/rasters/roi_hvhv_db_hd.webp',
-    sourceFigureUrl: '/B_roi_gamma0_dB.png',
-    scaleLabel: '-18.70 a -8.27 dB (p2–p98)',
-    roiStatsLabel: 'Media ROI: -12.27 dB · Dosel L-HV · 2752×1344 px',
+    id: 'sigma0_HHHH_ml2_dB',
+    shortLabel: 'σ⁰ HH [dB]',
+    title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HHHH en dB · 20 m)',
   },
   {
-    id: 'sigma0_hhhh',
-    shortLabel: 'σ⁰ HHHH [dB]',
-    title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HHHH en dB, realce topográfico)',
-    url: '/rasters/roi_sigma0_hhhh_hd.webp',
-    sourceFigureUrl: '/B2_roi_sigma0_dB.png',
-    scaleLabel: '-14.06 a -2.55 dB (p2–p98)',
-    roiStatsLabel: 'Media ROI: -8.18 dB · Factor RTC σ⁰/γ⁰ · 2752×1344 px',
-  },
-  {
-    id: 'mascara',
-    shortLabel: 'Máscara',
-    title: 'Máscara de validez GCOV (mask.tif: 99.61% válido en esmeralda translúcido, 0.39% layover/sombra en rojo sobre el Cañón del Sumidero)',
-    url: '/rasters/roi_mask_hd.webp',
-    sourceFigureUrl: '/D_mascara.png',
-    scaleLabel: '99.61% válido · 0.39% layover (rojo)',
-    roiStatsLabel: 'mask.tif reproyectada a EPSG:4326 (Cañón del Sumidero)',
+    id: 'sigma0_HVHV_ml2_dB',
+    shortLabel: 'σ⁰ HV [dB]',
+    title: 'Retrodispersión elipsoidal σ⁰ = γ⁰ · rtcGammaToSigmaFactor (HVHV en dB · 20 m)',
   },
 ])
 
-/** Imagen de radar superpuesta por defecto (Compuesto SAR Polarimétrico HD en EPSG:4326). */
-export const NISAR_IMAGE_URL = '/rasters/roi_rgb_polarimetric.webp'
+/**
+ * Esquinas exactas en EPSG:3857 (orientadas al norte) de `data/explore/<granuleId>/web/capas.json`
+ * en orden MapLibre `image` source: `[sup-izq, sup-der, inf-der, inf-izq]`.
+ */
+export const DEFAULT_EXPLORE_ESQUINAS_LONLAT: Footprint = [
+  [-93.3923862, 16.8968125],
+  [-92.8756794, 16.8968125],
+  [-92.8756794, 16.6535913],
+  [-93.3923862, 16.6535913],
+]
+
+/** Ruta inicial por defecto servida desde `/data/explore/<granuleId>/web/gamma0_HHHH_ml2_dB.png`. */
+export const NISAR_IMAGE_URL = `/data/explore/${RAW_SCENE_IDS.T62_T2_20261016}/web/gamma0_HHHH_ml2_dB.png`
 
 /**
  * Coordenadas del polígono ROI oficial en Chiapas (`pipeline/config.yaml` y `data/raw/<scene_id>/scene.json`):

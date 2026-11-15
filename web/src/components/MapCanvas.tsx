@@ -18,11 +18,14 @@ import {
 } from 'maplibre-gl'
 import {
   CircleDot,
+  Columns,
   Hand,
+  Monitor,
   Pencil,
   Pentagon,
   Sun,
   Tag,
+  Terminal,
   Trash,
   Undo2,
 } from 'lucide-react'
@@ -31,15 +34,23 @@ import {
   CHIAPAS_ZOOM,
   DANGER_CIRCLE_DEFAULT_LABEL,
   DANGER_CIRCLE_TOOLTIP,
+  DEFAULT_EXPLORE_ESQUINAS_LONLAT,
+  EXPLORE_LAYER_OPTIONS,
   NISAR_FOOTPRINT,
   NISAR_IMAGE_URL,
-  NISAR_RASTER_LAYERS,
-  NISAR_REPROJECTED_FOOTPRINT,
   WARN_CIRCLE_DEFAULT_LABEL,
   WARN_CIRCLE_TOOLTIP,
-  type NisarBlendMode,
-  type NisarRasterLayerId,
+  type ExploreDateViewMode,
+  type ExploreLayerId,
+  type ExploreWebManifest,
 } from '../mocks/initialWorkspaces'
+import { fetchExploreManifest, verifyExploreScaleMatch } from '../api/client'
+import {
+  SCIENTIFIC_COLORMAPS,
+  colorizePngWithLut,
+  getColormapSpec,
+  type ScientificColormapId,
+} from '../utils/colormapLut'
 import { RightPanel } from './RightPanel'
 import type {
   DrawTool,
@@ -70,6 +81,14 @@ interface MapCanvasProps {
   annotations: MapAnnotation[]
   croppedRegion: LngLat[] | null
   solar: SolarSimulationState
+  exploreLayerId: ExploreLayerId
+  onExploreLayerChange: (id: ExploreLayerId) => void
+  dateViewMode: ExploreDateViewMode
+  onDateViewModeChange: (mode: ExploreDateViewMode) => void
+  colormapId: ScientificColormapId
+  onColormapChange: (id: ScientificColormapId) => void
+  activeTool: DrawTool
+  onSelectTool: (tool: DrawTool) => void
   onViewChange?: (view: MapView, info: { userInitiated: boolean }) => void
   onAnnotationsChange: (next: MapAnnotation[]) => void
   onCropRegionChange: (polygon: LngLat[] | null) => void
@@ -126,7 +145,7 @@ const BASE_STYLE: StyleSpecification = {
     [NISAR_SOURCE]: {
       type: 'image',
       url: NISAR_IMAGE_URL,
-      coordinates: NISAR_REPROJECTED_FOOTPRINT,
+      coordinates: DEFAULT_EXPLORE_ESQUINAS_LONLAT,
     },
   },
   layers: [
@@ -142,10 +161,8 @@ const BASE_STYLE: StyleSpecification = {
       type: 'raster',
       source: NISAR_SOURCE,
       paint: {
-        'raster-opacity': 0.65,
+        'raster-opacity': 0.78,
         'raster-resampling': 'linear',
-        'raster-contrast': 0.15,
-        'raster-saturation': 0.1,
         'raster-fade-duration': 0,
       },
     },
@@ -226,6 +243,14 @@ export function MapCanvas({
   annotations,
   croppedRegion,
   solar,
+  exploreLayerId,
+  onExploreLayerChange,
+  dateViewMode,
+  onDateViewModeChange,
+  colormapId,
+  onColormapChange,
+  activeTool,
+  onSelectTool,
   onViewChange,
   onAnnotationsChange,
   onCropRegionChange,
@@ -241,10 +266,14 @@ export function MapCanvas({
     height: 640,
   })
 
-  const [activeTool, setActiveTool] = useState<DrawTool>('mover')
-  const [rasterLayerId, setRasterLayerId] = useState<NisarRasterLayerId>('rgb_polarimetric')
-  const [blendMode, setBlendMode] = useState<NisarBlendMode>('fusion')
-  const [showTraceDetails, setShowTraceDetails] = useState(false)
+  const [swipePct, setSwipePct] = useState<number>(50)
+  const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
+  const [manifestT1, setManifestT1] = useState<ExploreWebManifest | null>(null)
+  const [manifestT2, setManifestT2] = useState<ExploreWebManifest | null>(null)
+  const [colorizedT1Url, setColorizedT1Url] = useState<string>(NISAR_IMAGE_URL)
+  const [colorizedT2Url, setColorizedT2Url] = useState<string>(NISAR_IMAGE_URL)
+  const [logPanelCollapsed, setLogPanelCollapsed] = useState(false)
+  const [logActiveTab, setLogActiveTab] = useState<'trace' | 'layers' | 'warnings'>('trace')
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null)
   const [draftFreehand, setDraftFreehand] = useState<LngLat[]>([])
   const [draftCircle, setDraftCircle] = useState<{
@@ -306,7 +335,7 @@ export function MapCanvas({
     [annotations, onAnnotationsChange],
   )
 
-  // 2b & 2c. Atajos de teclado: Delete / Backspace para eliminar el seleccionado, Escape para deseleccionar
+  // Atajos de teclado: Delete / Backspace para eliminar el seleccionado, Escape para deseleccionar
   useEffect(() => {
     if (!isEditing || !selectedAnnotation) return
 
@@ -475,7 +504,6 @@ export function MapCanvas({
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
 
       if (tool === 'mover') {
-        // Clic en parte vacía del mapa deselecciona la figura actual
         setSelectedAnnotationId(null)
       } else if (tool === 'poligono') {
         setSelectedAnnotationId(null)
@@ -541,8 +569,8 @@ export function MapCanvas({
             type: 'fill',
             source: FOOTPRINT_SOURCE,
             paint: {
-              'fill-color': '#10B981',
-              'fill-opacity': alpha * 0.12,
+              'fill-color': '#3399FF',
+              'fill-opacity': alpha * 0.05,
             },
           })
           map.addLayer({
@@ -550,9 +578,9 @@ export function MapCanvas({
             type: 'line',
             source: FOOTPRINT_SOURCE,
             paint: {
-              'line-color': '#10B981',
+              'line-color': '#3399FF',
               'line-width': 1.8,
-              'line-opacity': 0.85,
+              'line-opacity': 0.9,
               'line-dasharray': [3, 2],
             },
           })
@@ -562,31 +590,27 @@ export function MapCanvas({
           map.addSource(NISAR_SOURCE, {
             type: 'image',
             url: NISAR_IMAGE_URL,
-            coordinates: NISAR_REPROJECTED_FOOTPRINT,
+            coordinates: DEFAULT_EXPLORE_ESQUINAS_LONLAT,
           })
           map.addLayer({
             id: NISAR_LAYER,
             type: 'raster',
             source: NISAR_SOURCE,
             paint: {
-              'raster-opacity': alpha * 0.88,
+              'raster-opacity': alpha,
               'raster-resampling': 'linear',
-              'raster-contrast': 0.15,
-              'raster-saturation': 0.1,
               'raster-fade-duration': 0,
             },
           })
         } else if (map.getLayer(NISAR_LAYER)) {
-          map.setPaintProperty(NISAR_LAYER, 'raster-opacity', alpha * 0.88)
+          map.setPaintProperty(NISAR_LAYER, 'raster-opacity', alpha)
           map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
-          map.setPaintProperty(NISAR_LAYER, 'raster-contrast', 0.15)
-          map.setPaintProperty(NISAR_LAYER, 'raster-saturation', 0.1)
         }
       } catch (err) {
         console.warn('No se pudo inicializar la capa NISAR:', err)
       }
 
-      // B. Fuente `terrain-dem` y capa `solar-thermal-layer`
+      // B. Fuente `terrain-dem` y capa `solar-thermal-layer` (Inferno)
       try {
         if (!map.getSource(DEM_SOURCE)) {
           const hs = computeHillshadeParams(solarRef.current)
@@ -606,8 +630,8 @@ export function MapCanvas({
               'hillshade-illumination-direction': hs.direction,
               'hillshade-exaggeration': hs.exaggeration,
               'hillshade-highlight-color': hs.highlightColor,
-              'hillshade-accent-color': '#EA580C',
-              'hillshade-shadow-color': '#1E3A8A',
+              'hillshade-accent-color': '#DD513A',
+              'hillshade-shadow-color': '#420A68',
             },
           })
         }
@@ -630,8 +654,8 @@ export function MapCanvas({
             source: CROP_MASK_SOURCE,
             filter: ['==', ['get', 'role'], 'mask'],
             paint: {
-              'fill-color': '#0F172A',
-              'fill-opacity': hasCrop ? 0.72 : 0,
+              'fill-color': '#CBD5E1',
+              'fill-opacity': hasCrop ? 0.65 : 0,
             },
           })
           map.addLayer({
@@ -640,7 +664,7 @@ export function MapCanvas({
             source: CROP_MASK_SOURCE,
             filter: ['==', ['get', 'role'], 'border'],
             paint: {
-              'line-color': '#10B981',
+              'line-color': '#3399FF',
               'line-width': 2.2,
               'line-dasharray': [3, 2],
             },
@@ -664,8 +688,8 @@ export function MapCanvas({
             source: ANNOTATIONS_SOURCE,
             filter: ['==', ['get', 'kind'], 'peligro'],
             paint: {
-              'fill-color': '#EF4444',
-              'fill-opacity': 0.25,
+              'fill-color': '#DC2626',
+              'fill-opacity': 0.24,
             },
           })
           map.addLayer({
@@ -674,7 +698,7 @@ export function MapCanvas({
             source: ANNOTATIONS_SOURCE,
             filter: ['==', ['get', 'kind'], 'peligro'],
             paint: {
-              'line-color': '#EF4444',
+              'line-color': '#DC2626',
               'line-width': 2.5,
             },
           })
@@ -685,7 +709,7 @@ export function MapCanvas({
             source: ANNOTATIONS_SOURCE,
             filter: ['==', ['get', 'kind'], 'advertencia'],
             paint: {
-              'fill-color': '#F59E0B',
+              'fill-color': '#D97706',
               'fill-opacity': 0.18,
             },
           })
@@ -695,7 +719,7 @@ export function MapCanvas({
             source: ANNOTATIONS_SOURCE,
             filter: ['==', ['get', 'kind'], 'advertencia'],
             paint: {
-              'line-color': '#F59E0B',
+              'line-color': '#D97706',
               'line-width': 2.5,
               'line-dasharray': [3, 2],
             },
@@ -711,7 +735,7 @@ export function MapCanvas({
               'line-join': 'round',
             },
             paint: {
-              'line-color': '#38BDF8',
+              'line-color': '#3399FF',
               'line-width': 3.5,
             },
           })
@@ -733,7 +757,7 @@ export function MapCanvas({
             source: DRAFT_POLY_SOURCE,
             filter: ['==', ['get', 'featureType'], 'fill'],
             paint: {
-              'fill-color': '#10B981',
+              'fill-color': '#3399FF',
               'fill-opacity': 0.16,
             },
           })
@@ -743,7 +767,7 @@ export function MapCanvas({
             source: DRAFT_POLY_SOURCE,
             filter: ['==', ['get', 'featureType'], 'line'],
             paint: {
-              'line-color': '#10B981',
+              'line-color': '#3399FF',
               'line-width': 2.2,
               'line-dasharray': [3, 2],
             },
@@ -754,9 +778,9 @@ export function MapCanvas({
             source: DRAFT_POLY_SOURCE,
             filter: ['==', ['get', 'featureType'], 'vertex'],
             paint: {
-              'circle-radius': 5.5,
+              'circle-radius': 5,
               'circle-color': '#FFFFFF',
-              'circle-stroke-color': '#10B981',
+              'circle-stroke-color': '#3399FF',
               'circle-stroke-width': 2.2,
             },
           })
@@ -784,44 +808,94 @@ export function MapCanvas({
     }
   }, [])
 
-  const activeRasterLayer =
-    NISAR_RASTER_LAYERS.find((layer) => layer.id === rasterLayerId) ?? NISAR_RASTER_LAYERS[0]
+  // Consultar `/data/explore/<granuleId>/web/capas.json` (`explore-web-1`) para t1 y t2
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      fetchExploreManifest(escena.t1SceneId),
+      fetchExploreManifest(escena.t2SceneId),
+    ]).then(([m1, m2]) => {
+      if (cancelled) return
+      setManifestT1(m1)
+      setManifestT2(m2)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [escena.t1SceneId, escena.t2SceneId])
 
-  // Conectar slider de opacidad y modo de fusión (`Fusión Terreno` vs `Radar Puro`)
+  const activeLayerOption =
+    EXPLORE_LAYER_OPTIONS.find((opt) => opt.id === exploreLayerId) ?? EXPLORE_LAYER_OPTIONS[0]
+
+  const layerT1 =
+    manifestT1?.capas.find((c) => c.id === exploreLayerId) ?? manifestT1?.capas[0] ?? null
+  const layerT2 =
+    manifestT2?.capas.find((c) => c.id === exploreLayerId) ?? manifestT2?.capas[0] ?? null
+
+  const activeManifest = dateViewMode === 't1' ? manifestT1 : manifestT2
+  const activeLayerEntry = dateViewMode === 't1' ? layerT1 : layerT2
+
+  const scaleCheck =
+    manifestT1 && manifestT2 ? verifyExploreScaleMatch(manifestT1, manifestT2, exploreLayerId) : null
+
+  const activeColormapSpec = getColormapSpec(colormapId)
+  const infernoSpec = getColormapSpec('inferno')
+
+  // Colorear dinámicamente los PNG oficiales en EPSG:3857 usando la tabla LUT de 256 colores (Inferno por defecto)
+  useEffect(() => {
+    let cancelled = false
+    const rawT1 = layerT1 ? `/${layerT1.png}` : NISAR_IMAGE_URL
+    const rawT2 = layerT2 ? `/${layerT2.png}` : NISAR_IMAGE_URL
+
+    Promise.all([
+      colorizePngWithLut(rawT1, colormapId),
+      colorizePngWithLut(rawT2, colormapId),
+    ]).then(([u1, u2]) => {
+      if (cancelled) return
+      setColorizedT1Url(u1)
+      setColorizedT2Url(u2)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [layerT1, layerT2, colormapId])
+
+  const activeColorizedUrl = dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
+
+  // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
     const alpha = opacity / 100
-    const isFusion = blendMode === 'fusion'
-    const effectiveOpacity = isFusion ? Number((alpha * 0.88).toFixed(3)) : alpha
+    // En modo Swipe (t1 ↔ t2) las dos capas coloreadas se dibujan con recorte sincronizado en EPSG:3857
+    const webglOpacity = dateViewMode === 'swipe' ? 0 : alpha
 
     if (map.getLayer(NISAR_LAYER)) {
-      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', effectiveOpacity)
+      map.setPaintProperty(NISAR_LAYER, 'raster-opacity', webglOpacity)
       map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
-      map.setPaintProperty(NISAR_LAYER, 'raster-contrast', isFusion ? 0.15 : 0.04)
-      map.setPaintProperty(NISAR_LAYER, 'raster-saturation', isFusion ? 0.1 : 0)
     }
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
-      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.05)
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.03)
     }
-  }, [opacity, blendMode, mapReady])
+  }, [opacity, dateViewMode, mapReady])
 
-  // Actualizar imagen de `nisar-radar` en tiempo real al alternar compuesto RGB / γ⁰ / σ⁰ / máscara
+  // Actualizar fuente `image` de MapLibre con el BlobURL/DataURL coloreado por LUT y `capa.esquinas_lonlat` (EPSG:3857)
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady) return
+    if (!map || !mapReady || !activeLayerEntry || !activeColorizedUrl) return
     const imgSource = map.getSource(NISAR_SOURCE) as ImageSource | undefined
     if (imgSource && typeof imgSource.updateImage === 'function') {
       try {
         imgSource.updateImage({
-          url: activeRasterLayer.url,
-          coordinates: NISAR_REPROJECTED_FOOTPRINT,
+          url: activeColorizedUrl,
+          coordinates: activeLayerEntry.esquinas_lonlat,
         })
       } catch (err) {
-        console.warn('No se pudo actualizar la capa raster NISAR:', err)
+        console.warn('No se pudo actualizar la capa raster NISAR coloreada:', err)
       }
     }
-  }, [activeRasterLayer, mapReady])
+  }, [activeLayerEntry, activeColorizedUrl, mapReady])
 
   // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
@@ -880,11 +954,11 @@ export function MapCanvas({
       source.setData(buildInverseCropMaskGeoJSON(hasCrop ? croppedRegion : null) as never)
     }
     if (map.getLayer(CROP_MASK_FILL_LAYER)) {
-      map.setPaintProperty(CROP_MASK_FILL_LAYER, 'fill-opacity', hasCrop ? 0.72 : 0)
+      map.setPaintProperty(CROP_MASK_FILL_LAYER, 'fill-opacity', hasCrop ? 0.65 : 0)
     }
   }, [croppedRegion, mapReady])
 
-  // Actualizar `solar-thermal-layer` en tiempo real con `setPaintProperty`
+  // Actualizar `solar-thermal-layer` en tiempo real con `setPaintProperty` (escala Inferno)
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || !map.getLayer(SOLAR_THERMAL_LAYER)) return
@@ -892,8 +966,8 @@ export function MapCanvas({
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-illumination-direction', hs.direction)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-exaggeration', hs.exaggeration)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-highlight-color', hs.highlightColor)
-    map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-accent-color', '#EA580C')
-    map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#1E3A8A')
+    map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-accent-color', '#DD513A')
+    map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#420A68')
   }, [solar, mapReady])
 
   // Volar a la vista de la copia seleccionada
@@ -909,7 +983,7 @@ export function MapCanvas({
   }, [viewKey])
 
   const selectTool = (tool: DrawTool) => {
-    setActiveTool(tool)
+    onSelectTool(tool)
     if (tool !== 'poligono') setDraftPolygon([])
     if (tool !== 'etiqueta') setLabelEditor(null)
     setDraftCircle(null)
@@ -971,7 +1045,7 @@ export function MapCanvas({
 
     onCropRegionChange(poly)
     setDraftPolygon([])
-    setActiveTool('mover')
+    onSelectTool('mover')
 
     const map = mapRef.current
     if (map) {
@@ -1026,7 +1100,7 @@ export function MapCanvas({
       setSelectedAnnotationId(created.id)
     }
     setLabelEditor(null)
-    setActiveTool('mover')
+    onSelectTool('mover')
   }
 
   const handleUndoLastDrawing = () => {
@@ -1043,7 +1117,7 @@ export function MapCanvas({
     }
   }
 
-  // 3. Limpiar todas las anotaciones y recortes de la copia activa
+  // Limpiar todas las anotaciones y recortes de la copia activa
   const handleClearAllDrawings = () => {
     onAnnotationsChange([])
     onCropRegionChange(null)
@@ -1084,683 +1158,1085 @@ export function MapCanvas({
     cursor: canSelectInSvg ? ('pointer' as const) : ('inherit' as const),
   }
 
+  const activeEsquinas =
+    activeLayerEntry?.esquinas_lonlat ??
+    layerT2?.esquinas_lonlat ??
+    DEFAULT_EXPLORE_ESQUINAS_LONLAT
+  const esquinasNW = projectLngLat(activeEsquinas[0], viewport)
+  const esquinasSE = projectLngLat(activeEsquinas[2], viewport)
+  const esquinasX = Math.min(esquinasNW[0], esquinasSE[0])
+  const esquinasY = Math.min(esquinasNW[1], esquinasSE[1])
+  const esquinasW = Math.max(1, Math.abs(esquinasSE[0] - esquinasNW[0]))
+  const esquinasH = Math.max(1, Math.abs(esquinasSE[1] - esquinasNW[1]))
+  const swipeScreenX = esquinasX + (swipePct / 100) * esquinasW
+
+  useEffect(() => {
+    if (!isDraggingSwipe) return
+
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (e: MouseEvent) => {
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const localX = e.clientX - rect.left
+      const ratio = ((localX - esquinasX) / Math.max(1, esquinasW)) * 100
+      setSwipePct(Math.min(98, Math.max(2, Number(ratio.toFixed(1)))))
+    }
+
+    const onMouseUp = () => {
+      setIsDraggingSwipe(false)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [isDraggingSwipe, esquinasX, esquinasW])
+
+  // Sombreado direccional de radiación solar con los stops exactos de Inferno
   const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
   const radRatio = solar.radiationIntensity / 100
   const sunFocusX = 85 - (solar.sunAngle / 180) * 70
   const sunFocusY = 54 - Math.sin((solar.sunAngle * Math.PI) / 180) * 20
   const shadowSideX = 100 - sunFocusX
 
+  const vmin = activeLayerEntry?.escala.vmin_dB ?? -22.0
+  const vmax = activeLayerEntry?.escala.vmax_dB ?? 0.0
+  const colorbarTicks = [
+    vmax,
+    vmax - (vmax - vmin) * 0.2,
+    vmax - (vmax - vmin) * 0.4,
+    vmax - (vmax - vmin) * 0.5,
+    vmax - (vmax - vmin) * 0.6,
+    vmax - (vmax - vmin) * 0.8,
+    vmin,
+  ]
+
   return (
-    <main
-      className="map-canvas"
-      style={{ position: 'relative', flex: 1, width: '100%', height: '100%' }}
-    >
-      <div
-        ref={containerRef}
-        className="map-canvas__map"
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          width: '100%',
-          height: '100%',
-        }}
-      />
-
-      {/* Efecto térmico direccional del Simulador Solar */}
-      {showSolarOverlay && (
-        <div
-          className="solar-thermal-overlay"
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            zIndex: 4,
-            background: `
-              radial-gradient(circle at ${sunFocusX.toFixed(1)}% ${sunFocusY.toFixed(1)}%, rgba(239, 68, 68, ${(radRatio * 0.44).toFixed(2)}) 0%, rgba(249, 115, 22, ${(radRatio * 0.34).toFixed(2)}) 32%, rgba(253, 224, 71, ${(radRatio * 0.22).toFixed(2)}) 58%, rgba(15, 23, 42, 0) 82%),
-              radial-gradient(circle at ${shadowSideX.toFixed(1)}% ${(100 - sunFocusY).toFixed(1)}%, rgba(30, 58, 138, ${(radRatio * 0.38).toFixed(2)}) 0%, rgba(15, 23, 42, 0) 65%)
-            `,
-          }}
-        />
-      )}
-
-      {/* 1. OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
-      <svg
-        className="synchronized-vector-svg"
-        width={viewport.width}
-        height={viewport.height}
-        viewBox={`0 0 ${viewport.width} ${viewport.height}`}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          pointerEvents: 'none',
-          zIndex: 5,
-        }}
-      >
-        {/* Delimitación exacta del polígono ROI oficial de Chiapas (2687 × 5504 px a 10 m en EPSG:32615) */}
-        <polygon
-          points={NISAR_FOOTPRINT.map((pt) => projectLngLat(pt, viewport))
-            .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-            .join(' ')}
-          fill="rgba(16, 185, 129, 0.02)"
-          stroke="#10B981"
-          strokeWidth={1.6}
-          strokeDasharray="6 4"
-          style={{ pointerEvents: 'none' }}
-        />
-
-        {/* Máscara inversa de recorte (`croppedRegion`) */}
-        {croppedScreenPts && (
-          <g>
-            <path
-              d={croppedInversePathAttr}
-              fill="#090D16"
-              fillOpacity={0.78}
-              fillRule="evenodd"
-            />
-            <polygon
-              points={croppedPolygonPointsAttr}
-              fill="none"
-              stroke="#10B981"
-              strokeWidth={2.5}
-              strokeDasharray="8 5"
-            />
-          </g>
-        )}
-
-        {/* Figuras guardadas seleccionables (Círculos, Trazos de Lápiz y Nodos de Etiqueta) */}
-        {annotations.map((ann) => {
-          const isSelected = selectedAnnotation?.id === ann.id
-
-          if (ann.kind === 'lapiz' && ann.points.length >= 2) {
-            const pts = ann.points
-              .map((pt) => projectLngLat(pt, viewport))
-              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-              .join(' ')
-            return (
-              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
-                {/* Resaltado exterior brillante cuando está seleccionado */}
-                {isSelected && (
-                  <polyline
-                    points={pts}
-                    fill="none"
-                    stroke="#FFFFFF"
-                    strokeWidth={7}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
-                  />
-                )}
-                {/* Área de clic ampliada transparente para facilitar seleccionar el trazo */}
-                <polyline
-                  points={pts}
-                  fill="none"
-                  stroke="transparent"
-                  strokeWidth={14}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={svgElementInteractionStyle}
-                />
-                <polyline
-                  points={pts}
-                  fill="none"
-                  stroke="#38BDF8"
-                  strokeWidth={isSelected ? 5 : 3.5}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={svgElementInteractionStyle}
-                />
-              </g>
-            )
-          }
-
-          if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
-            const ringPts = createCirclePolygonCoords(ann.center, ann.radiusKm, 64)
-              .map((pt) => projectLngLat(pt, viewport))
-              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-              .join(' ')
-            const [cx, cy] = projectLngLat(ann.center, viewport)
-            const isDanger = ann.kind === 'peligro'
-
-            return (
-              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
-                {/* Resaltado exterior brillante blanco/cian cuando está seleccionado */}
-                {isSelected && (
-                  <polygon
-                    points={ringPts}
-                    fill="none"
-                    stroke="#FFFFFF"
-                    strokeWidth={6}
-                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
-                  />
-                )}
-                <polygon
-                  points={ringPts}
-                  fill={isDanger ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.22)'}
-                  stroke={isDanger ? '#EF4444' : '#F59E0B'}
-                  strokeWidth={isSelected ? 4.5 : 3}
-                  strokeDasharray={isDanger ? undefined : '8 6'}
-                  style={svgElementInteractionStyle}
-                />
-                <circle
-                  cx={cx}
-                  cy={cy}
-                  r={isSelected ? 5.5 : 4}
-                  fill={isDanger ? '#EF4444' : '#F59E0B'}
-                  stroke="#FFFFFF"
-                  strokeWidth={1.5}
-                  style={svgElementInteractionStyle}
-                />
-              </g>
-            )
-          }
-
-          if (ann.kind === 'etiqueta') {
-            const [x, y] = projectLngLat(ann.position, viewport)
-            return (
-              <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
-                {isSelected && (
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r={9}
-                    fill="none"
-                    stroke="#FFFFFF"
-                    strokeWidth={2.5}
-                    style={{ filter: 'drop-shadow(0 0 6px #38BDF8)', pointerEvents: 'none' }}
-                  />
-                )}
-                <circle
-                  cx={x}
-                  cy={y}
-                  r={isSelected ? 6 : 5}
-                  fill="#10B981"
-                  stroke="#FFFFFF"
-                  strokeWidth={2}
-                  style={svgElementInteractionStyle}
-                />
-              </g>
-            )
-          }
-
-          return null
-        })}
-
-        {/* Círculo en curso mientras el usuario arrastra */}
-        {draftCircle &&
-          (() => {
-            const ringPts = createCirclePolygonCoords(
-              draftCircle.center,
-              draftCircle.radiusKm,
-              64,
-            )
-              .map((pt) => projectLngLat(pt, viewport))
-              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-              .join(' ')
-            const [cx, cy] = projectLngLat(draftCircle.center, viewport)
-            const isDanger = draftCircle.kind === 'peligro'
-            return (
-              <g>
-                <polygon
-                  points={ringPts}
-                  fill={isDanger ? 'rgba(239, 68, 68, 0.28)' : 'rgba(245, 158, 11, 0.22)'}
-                  stroke={isDanger ? '#EF4444' : '#F59E0B'}
-                  strokeWidth={3}
-                  strokeDasharray={isDanger ? undefined : '8 6'}
-                />
-                <circle cx={cx} cy={cy} r={4} fill={isDanger ? '#EF4444' : '#F59E0B'} />
-              </g>
-            )
-          })()}
-
-        {/* Trazo de lápiz en curso mientras el usuario arrastra */}
-        {draftFreehand.length >= 2 && (
-          <polyline
-            points={draftFreehand
-              .map((pt) => projectLngLat(pt, viewport))
-              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-              .join(' ')}
-            fill="none"
-            stroke="#38BDF8"
-            strokeWidth={3.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
-
-        {/* Polígono en construcción (`Seleccionar Región`) */}
-        {draftPolygon.length > 0 && (
-          <g>
-            {draftPolygon.length >= 3 && (
-              <polygon
-                points={draftPolygon
-                  .map((pt) => projectLngLat(pt, viewport))
-                  .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-                  .join(' ')}
-                fill="rgba(16, 185, 129, 0.18)"
-              />
-            )}
-            {draftPolygon.length >= 2 && (
-              <polyline
-                points={(draftPolygon.length >= 3
-                  ? [...draftPolygon, draftPolygon[0]]
-                  : draftPolygon
-                )
-                  .map((pt) => projectLngLat(pt, viewport))
-                  .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
-                  .join(' ')}
-                fill="none"
-                stroke="#10B981"
-                strokeWidth={2.5}
-                strokeDasharray="6 4"
-              />
-            )}
-            {draftPolygon.map((pt, idx) => {
-              const [x, y] = projectLngLat(pt, viewport)
-              return (
-                <circle
-                  key={idx}
-                  cx={x}
-                  cy={y}
-                  r={6}
-                  fill="#FFFFFF"
-                  stroke="#10B981"
-                  strokeWidth={2.5}
-                />
-              )
-            })}
-          </g>
-        )}
-      </svg>
-
-      {/* Marcadores HTML seleccionables encima del SVG (z-index: 10) */}
-      <div
-        className="map-markers-layer"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          overflow: 'hidden',
-          zIndex: 10,
-        }}
-      >
-        {annotations.map((ann) => {
-          const isSelected = selectedAnnotation?.id === ann.id
-
-          if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
-            const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
-            const [x, y] = projectLngLat(topEdgeCoord, viewport)
-            return (
-              <div
-                key={ann.id}
-                onClick={(e) => handleSelectElement(e, ann)}
-                title={ann.kind === 'peligro' ? DANGER_CIRCLE_TOOLTIP : WARN_CIRCLE_TOOLTIP}
-                className={`map-marker-tag ${
-                  ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
-                } ${isSelected ? 'is-selected' : ''}`}
-                style={{
-                  position: 'absolute',
-                  left: `${x.toFixed(1)}px`,
-                  top: `${(y - 8).toFixed(1)}px`,
-                  transform: 'translate(-50%, -100%)',
-                  pointerEvents: canSelectInSvg ? 'auto' : 'none',
-                  cursor: canSelectInSvg ? 'pointer' : 'inherit',
-                }}
-              >
-                {ann.label}
-              </div>
-            )
-          }
-
-          if (ann.kind === 'etiqueta') {
-            const [x, y] = projectLngLat(ann.position, viewport)
-            return (
-              <div
-                key={ann.id}
-                onClick={(e) => handleSelectElement(e, ann)}
-                className={`map-marker-tag map-marker-tag--custom ${
-                  isSelected ? 'is-selected' : ''
-                }`}
-                style={{
-                  position: 'absolute',
-                  left: `${(x + 10).toFixed(1)}px`,
-                  top: `${y.toFixed(1)}px`,
-                  transform: 'translate(0, -50%)',
-                  pointerEvents: canSelectInSvg ? 'auto' : 'none',
-                  cursor: canSelectInSvg ? 'pointer' : 'inherit',
-                }}
-              >
-                {ann.text}
-              </div>
-            )
-          }
-
-          return null
-        })}
-      </div>
-
-      {/* 2a. Píldora flotante de acción rápida junto al elemento seleccionado */}
-      {isEditing && selectedAnnotation && selectedAnchorScreen && !labelEditor && (
-        <div
-          className="selection-action-pill"
-          style={{
-            left: `${Math.min(Math.max(115, selectedAnchorScreen[0]), viewport.width - 115)}px`,
-            top: `${Math.min(Math.max(54, selectedAnchorScreen[1] - 42), viewport.height - 96)}px`,
-          }}
-        >
-          <button
-            type="button"
-            className="selection-action-pill__btn"
-            onClick={handleEditSelectedText}
-          >
-            ✏️ Editar texto
-          </button>
-          <span className="selection-action-pill__sep" aria-hidden="true" />
-          <button
-            type="button"
-            className="selection-action-pill__btn selection-action-pill__btn--danger"
-            onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
-          >
-            🗑️ Eliminar
-          </button>
+    <main className="ws-center-dock" aria-label="Graphics / Map Plot 1">
+      {/* 1. Cabecera de ventana acoplada ("Graphics / Map Plot 1") */}
+      <div className="ws-panel-tabbar">
+        <div className="ws-panel-tab is-active">
+          <Monitor size={13} aria-hidden="true" />
+          <span>Graphics / Map Plot 1</span>
         </div>
-      )}
-
-      {/* Barra flotante superior única y compacta (Trazabilidad + Selector Radar NISAR ROI + Modo Fusión/Puro) */}
-      <div
-        className="map-top-bar"
-        role="region"
-        aria-label="Control de capas NISAR y trazabilidad científica"
-      >
-        <div className="map-top-bar__brand" title={`t1: ${escena.t1SceneId} | t2: ${escena.t2SceneId}`}>
-          <span className="map-top-bar__loc">📍 Chiapas</span>
-          {isEditing && activeMapName && (
-            <span className="map-top-bar__copy">· {activeMapName}</span>
-          )}
-          <span className="map-top-bar__stack">
-            {escena.pila} {escena.direccion === 'ASCENDING' ? 'ASC' : 'DESC'} · 99.6% ROI · 10 m
+        <div className="ws-panel-tabbar__summary">
+          <span className="ws-mono">
+            {isEditing && activeMapName ? activeMapName : 'Mapa General (Solo lectura)'}
+          </span>
+          <span>·</span>
+          <span className="ws-mono">
+            {activeLayerOption.shortLabel} [{activeColormapSpec.shortLabel}]
+          </span>
+          <span>·</span>
+          <span className="ws-mono">
+            {dateViewMode === 'swipe'
+              ? `Swipe t1 (${escena.t1}) ↔ t2 (${escena.t2})`
+              : dateViewMode === 't1'
+                ? `t1 = ${escena.t1}`
+                : `t2 = ${escena.t2}`}
+          </span>
+          <span>·</span>
+          <span className="ws-mono">
+            Centro: [{viewport.centro[0].toFixed(4)}, {viewport.centro[1].toFixed(4)}] · z=
+            {viewport.zoom.toFixed(2)}
           </span>
         </div>
-
-        <span className="map-top-bar__sep" aria-hidden="true" />
-
-        <div className="map-top-bar__layers" role="group" aria-label="Capas Radar NISAR ROI">
-          {NISAR_RASTER_LAYERS.map((layer) => {
-            const active = layer.id === activeRasterLayer.id
-            return (
-              <button
-                key={layer.id}
-                type="button"
-                className={`map-top-bar__pill ${active ? 'is-active' : ''}`}
-                onClick={() => setRasterLayerId(layer.id)}
-                title={`${layer.title} · ${layer.roiStatsLabel} (${layer.scaleLabel})`}
-              >
-                {layer.shortLabel}
-              </button>
-            )
-          })}
-        </div>
-
-        <span className="map-top-bar__sep" aria-hidden="true" />
-
-        <div className="map-top-bar__modes" role="group" aria-label="Modo de visualización del radar">
-          <button
-            type="button"
-            className={`map-top-bar__mode-btn ${blendMode === 'fusion' ? 'is-active' : ''}`}
-            onClick={() => setBlendMode('fusion')}
-            title="Fusión Terreno: realza el contraste (0.15) y permite ver el relieve satelital y el cauce del río Grijalva debajo del radar"
-          >
-            Fusión Terreno
-          </button>
-          <button
-            type="button"
-            className={`map-top-bar__mode-btn ${blendMode === 'puro' ? 'is-active' : ''}`}
-            onClick={() => setBlendMode('puro')}
-            title="Radar Puro: muestra la retrodispersión SAR con opacidad directa sin realce de saturación"
-          >
-            Radar Puro
-          </button>
-        </div>
-
-        <span className="map-top-bar__sep" aria-hidden="true" />
-
-        <button
-          type="button"
-          className={`map-top-bar__info-btn ${showTraceDetails ? 'is-active' : ''}`}
-          onClick={() => setShowTraceDetails((prev) => !prev)}
-          title="Mostrar u ocultar detalles de trazabilidad C1, escala dB y enlace a figura original"
-        >
-          ⓘ C1 · {activeRasterLayer.scaleLabel}
-        </button>
       </div>
 
-      {showTraceDetails && (
-        <div className="map-trace-dropdown" role="dialog" aria-label="Detalles de trazabilidad NISAR">
-          <div className="map-trace-dropdown__row">
-            <strong>{activeRasterLayer.shortLabel}:</strong> {activeRasterLayer.title}
-          </div>
-          <div className="map-trace-dropdown__row">
-            <span>📊 {activeRasterLayer.scaleLabel}</span>
-            <span>·</span>
-            <span>{activeRasterLayer.roiStatsLabel}</span>
-          </div>
-          <div className="map-trace-dropdown__row">
-            <span>
-              🛰️ {escena.producto} · {escena.pila} ({escena.direccion}) · {escena.t1} → {escena.t2} ·
-              CRID: <code>{escena.crid}</code> ({escena.madurez}) · EPSG:{escena.epsg} → EPSG:4326
-            </span>
-          </div>
-          <div className="map-trace-dropdown__footer">
-            <span className="map-badge__exploratory">
-              ⚠️ Etapa 1 (C1 real en data/raw/) · Δσ⁰ pendiente de Contrato C2
-            </span>
-            <a
-              href={activeRasterLayer.sourceFigureUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="roi-layer-switcher__link"
-            >
-              Ver figura Etapa 1 ↗
-            </a>
-          </div>
-        </div>
-      )}
-
-      {/* Chip flotante arriba del mapa cuando hay una región recortada activa */}
-      {hasActiveCrop && (
-        <div className="crop-active-chip" role="status">
-          <span className="crop-active-chip__dot" aria-hidden="true" />
-          <span>Región recortada activa —</span>
+      {/* 2. Barra compacta de iconos justo encima del lienzo del mapa (estilo COMSOL Graphics Toolbar) */}
+      <div
+        className="ws-graphics-toolbar"
+        role="toolbar"
+        aria-label="Barra de herramientas de Graphics / Map Plot 1"
+      >
+        <div className="ws-graphics-toolbar__group">
           <button
             type="button"
-            className="crop-active-chip__action"
-            onClick={handleResetCroppedRegion}
-          >
-            [Restablecer vista completa]
-          </button>
-        </div>
-      )}
-
-      {/* Botón flotante verde "✂️ Recortar región" y "Limpiar puntos" en el centroide del polígono */}
-      {isEditing && draftPolygon.length >= 3 && draftPolyCentroidScreen && (
-        <div
-          className="poly-centroid-actions"
-          style={{
-            left: `${Math.min(Math.max(120, draftPolyCentroidScreen[0]), viewport.width - 140)}px`,
-            top: `${Math.min(Math.max(64, draftPolyCentroidScreen[1] + 24), viewport.height - 110)}px`,
-          }}
-        >
-          <button
-            type="button"
-            className="btn btn--emerald btn--sm"
-            onClick={handleApplyCropRegion}
-          >
-            ✂️ Recortar región
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() => setDraftPolygon([])}
-          >
-            Limpiar puntos
-          </button>
-        </div>
-      )}
-
-      {/* Input flotante limpio para crear o editar una etiqueta */}
-      {labelEditor && labelEditorScreen && (
-        <form
-          className="label-popover"
-          style={{
-            left: `${Math.min(Math.max(16, labelEditorScreen[0]), viewport.width - 280)}px`,
-            top: `${Math.min(Math.max(56, labelEditorScreen[1]), viewport.height - 110)}px`,
-          }}
-          onSubmit={handleConfirmLabel}
-        >
-          <input
-            type="text"
-            className="label-popover__input"
-            value={labelEditor.text}
-            maxLength={96}
-            onChange={(e) => setLabelEditor({ ...labelEditor, text: e.target.value })}
-            placeholder="Escribe una etiqueta..."
-            autoFocus
-          />
-          <button type="submit" className="btn btn--primary btn--xs">
-            Guardar
-          </button>
-          <button
-            type="button"
-            className="btn btn--ghost btn--xs"
-            onClick={() => setLabelEditor(null)}
-          >
-            Cancelar
-          </button>
-        </form>
-      )}
-
-      {/* Tarjeta Flotante Derecha: Simulación Solar */}
-      {solar.enabled && (
-        <RightPanel
-          solar={solar}
-          onSolarChange={onSolarChange}
-          onClose={() => onSolarChange({ ...solar, enabled: false })}
-        />
-      )}
-
-      {/* Barra de Herramientas Flotante Abajo (solo activa en "Mapa Editado") */}
-      {isEditing && (
-        <div className="bottom-toolbar" role="toolbar" aria-label="Herramientas de edición del mapa">
-          <button
-            type="button"
-            className={`dock-btn ${activeTool === 'mover' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${activeTool === 'mover' ? 'is-active' : ''}`}
             onClick={() => selectTool('mover')}
+            title="Mover / Seleccionar elemento dibujado (Clic para seleccionar, Supr para borrar)"
           >
-            <Hand size={17} aria-hidden="true" />
-            <span>Mover</span>
+            <Hand size={13} />
+            <span>Mover/Seleccionar</span>
           </button>
 
           <button
             type="button"
-            className={`dock-btn ${activeTool === 'lapiz' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${isEditing && activeTool === 'lapiz' ? 'is-active' : ''}`}
             onClick={() => selectTool('lapiz')}
+            disabled={!isEditing}
+            title="Dibujar trazo libre sobre el mapa"
           >
-            <Pencil size={17} aria-hidden="true" />
+            <Pencil size={13} />
             <span>Lápiz</span>
           </button>
 
           <button
             type="button"
-            className={`dock-btn ${activeTool === 'peligro' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${isEditing && activeTool === 'peligro' ? 'is-active' : ''}`}
             onClick={() => selectTool('peligro')}
+            disabled={!isEditing}
             title={DANGER_CIRCLE_TOOLTIP}
           >
-            <CircleDot size={17} className="icon-danger" aria-hidden="true" />
-            <span>Círculo Peligro</span>
+            <CircleDot size={13} className="icon-danger" />
+            <span>Círculo Anomalía/Peligro</span>
           </button>
 
           <button
             type="button"
-            className={`dock-btn ${activeTool === 'advertencia' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${isEditing && activeTool === 'advertencia' ? 'is-active' : ''}`}
             onClick={() => selectTool('advertencia')}
+            disabled={!isEditing}
             title={WARN_CIRCLE_TOOLTIP}
           >
-            <CircleDot size={17} className="icon-warn" aria-hidden="true" />
-            <span>Círculo Advertencia</span>
+            <CircleDot size={13} className="icon-warn" />
+            <span>Círculo Observación</span>
           </button>
 
           <button
             type="button"
-            className={`dock-btn ${activeTool === 'poligono' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
             onClick={() => selectTool('poligono')}
+            disabled={!isEditing}
+            title="Seleccionar y recortar subregión poligonal con máscara exterior"
           >
-            <Pentagon size={17} aria-hidden="true" />
-            <span>Seleccionar Región</span>
+            <Pentagon size={13} />
+            <span>Recortar Región</span>
           </button>
 
           <button
             type="button"
-            className={`dock-btn ${activeTool === 'etiqueta' ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${isEditing && activeTool === 'etiqueta' ? 'is-active' : ''}`}
             onClick={() => selectTool('etiqueta')}
+            disabled={!isEditing}
+            title="Insertar o editar etiqueta técnica"
           >
-            <Tag size={17} aria-hidden="true" />
+            <Tag size={13} />
             <span>Etiqueta</span>
           </button>
 
-          <div className="bottom-toolbar__divider" aria-hidden="true" />
+          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
 
           <button
             type="button"
-            className={`dock-btn ${solar.enabled ? 'is-active' : ''}`}
+            className={`ws-tool-btn ${solar.enabled ? 'is-active' : ''}`}
             onClick={() => onSolarChange({ ...solar, enabled: !solar.enabled })}
+            title="Activar/desactivar Simulador Solar con rampa térmica Inferno"
           >
-            <Sun size={17} className="icon-sun" aria-hidden="true" />
+            <Sun size={13} className="icon-sun" />
             <span>Simulador Solar</span>
           </button>
 
-          <div className="bottom-toolbar__divider" aria-hidden="true" />
+          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
 
           <button
             type="button"
-            className="dock-undo-btn"
+            className="ws-tool-btn"
             onClick={handleUndoLastDrawing}
-            disabled={annotations.length === 0 && draftPolygon.length === 0}
-            title="Borrar último dibujo (Deshacer)"
-            aria-label="Borrar último dibujo"
+            disabled={!isEditing || (annotations.length === 0 && draftPolygon.length === 0)}
+            title="Deshacer último trazo o vértice"
           >
-            <Undo2 size={15} />
+            <Undo2 size={13} />
+            <span>Deshacer</span>
           </button>
 
-          {selectedAnnotation && (
-            <button
-              type="button"
-              className="dock-action-btn dock-action-btn--danger"
-              onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
-              title="Eliminar elemento seleccionado (Supr)"
-            >
-              <Trash size={14} aria-hidden="true" />
-              <span>Eliminar seleccionado</span>
-            </button>
-          )}
+          <button
+            type="button"
+            className="ws-tool-btn ws-tool-btn--danger"
+            onClick={() => selectedAnnotation && handleDeleteAnnotation(selectedAnnotation.id)}
+            disabled={!selectedAnnotation}
+            title="Eliminar elemento seleccionado (Tecla Delete / Backspace)"
+          >
+            <Trash size={13} />
+            <span>Eliminar Seleccionado</span>
+          </button>
 
           <button
             type="button"
-            className="dock-action-btn"
+            className="ws-tool-btn"
             onClick={handleClearAllDrawings}
-            disabled={annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0}
-            title="Limpiar todos los dibujos de esta copia"
+            disabled={
+              !isEditing ||
+              (annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0)
+            }
+            title="Limpiar todos los dibujos y recortes de la copia activa"
           >
-            <Trash size={14} aria-hidden="true" />
-            <span>Limpiar todo</span>
+            <Trash size={13} />
+            <span>Limpiar Todo</span>
           </button>
         </div>
-      )}
+
+        <div className="ws-graphics-toolbar__right">
+          <div className="ws-graphics-toolbar__MiniGroup" role="group" aria-label="Selector rápido de capa GCOV">
+            {EXPLORE_LAYER_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className={`ws-tool-btn ws-tool-btn--mono ${opt.id === exploreLayerId ? 'is-active' : ''}`}
+                onClick={() => onExploreLayerChange(opt.id)}
+                title={opt.title}
+              >
+                {opt.shortLabel}
+              </button>
+            ))}
+          </div>
+
+          <span className="ws-graphics-toolbar__sep" aria-hidden="true" />
+
+          <select
+            className="ws-toolbar-select"
+            value={colormapId}
+            onChange={(e) => onColormapChange(e.target.value as ScientificColormapId)}
+            aria-label="Seleccionar paleta de color del mapa de calor"
+            title="Paleta científica aplicada píxel por píxel mediante LUT de 256 colores"
+          >
+            {SCIENTIFIC_COLORMAPS.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+
+          <div className="ws-graphics-toolbar__MiniGroup" role="group" aria-label="Fecha o Swipe">
+            <button
+              type="button"
+              className={`ws-tool-btn ws-tool-btn--mono ${dateViewMode === 't1' ? 'is-active' : ''}`}
+              onClick={() => onDateViewModeChange('t1')}
+              title={`t1 (${escena.t1})`}
+            >
+              t1
+            </button>
+            <button
+              type="button"
+              className={`ws-tool-btn ws-tool-btn--mono ${dateViewMode === 't2' ? 'is-active' : ''}`}
+              onClick={() => onDateViewModeChange('t2')}
+              title={`t2 (${escena.t2})`}
+            >
+              t2
+            </button>
+            <button
+              type="button"
+              className={`ws-tool-btn ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
+              onClick={() => onDateViewModeChange('swipe')}
+              title="Comparador Antes/Después (Swipe t1 ↔ t2)"
+            >
+              <Columns size={12} />
+              <span>Swipe</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Área del lienzo geoespacial + Barra de Escala de Color Vertical a la derecha */}
+      <div className="map-canvas">
+        <div
+          ref={containerRef}
+          className="map-canvas__map"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            width: '100%',
+            height: '100%',
+          }}
+        />
+
+        {/* Efecto direccional de radiación del Simulador Solar con los stops de Inferno */}
+        {showSolarOverlay && (
+          <div
+            className="solar-thermal-overlay"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              zIndex: 4,
+              background: `
+                radial-gradient(circle at ${sunFocusX.toFixed(1)}% ${sunFocusY.toFixed(1)}%, rgba(252, 255, 164, ${(radRatio * 0.46).toFixed(2)}) 0%, rgba(252, 165, 10, ${(radRatio * 0.38).toFixed(2)}) 26%, rgba(221, 81, 58, ${(radRatio * 0.30).toFixed(2)}) 50%, rgba(147, 38, 103, ${(radRatio * 0.22).toFixed(2)}) 72%, rgba(0, 0, 4, 0) 90%),
+                radial-gradient(circle at ${shadowSideX.toFixed(1)}% ${(100 - sunFocusY).toFixed(1)}%, rgba(66, 10, 104, ${(radRatio * 0.42).toFixed(2)}) 0%, rgba(0, 0, 4, ${(radRatio * 0.28).toFixed(2)}) 45%, rgba(0, 0, 4, 0) 75%)
+              `,
+            }}
+          />
+        )}
+
+        {/* OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
+        <svg
+          className="synchronized-vector-svg"
+          width={viewport.width}
+          height={viewport.height}
+          viewBox={`0 0 ${viewport.width} ${viewport.height}`}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            pointerEvents: 'none',
+            zIndex: 5,
+          }}
+        >
+          {/* Deslizador Antes/Después (Swipe t1 ↔ t2) en EPSG:3857 con LUT coloreado */}
+          {dateViewMode === 'swipe' && layerT1 && layerT2 && opacity > 0 && (
+            <g>
+              <defs>
+                <clipPath id="explore-swipe-left">
+                  <rect x={0} y={0} width={Math.max(0, swipeScreenX)} height={viewport.height} />
+                </clipPath>
+                <clipPath id="explore-swipe-right">
+                  <rect
+                    x={Math.max(0, swipeScreenX)}
+                    y={0}
+                    width={Math.max(0, viewport.width - swipeScreenX)}
+                    height={viewport.height}
+                  />
+                </clipPath>
+              </defs>
+              <image
+                href={colorizedT1Url}
+                x={esquinasX}
+                y={esquinasY}
+                width={esquinasW}
+                height={esquinasH}
+                preserveAspectRatio="none"
+                opacity={opacity / 100}
+                clipPath="url(#explore-swipe-left)"
+                style={{ pointerEvents: 'none' }}
+              />
+              <image
+                href={colorizedT2Url}
+                x={esquinasX}
+                y={esquinasY}
+                width={esquinasW}
+                height={esquinasH}
+                preserveAspectRatio="none"
+                opacity={opacity / 100}
+                clipPath="url(#explore-swipe-right)"
+                style={{ pointerEvents: 'none' }}
+              />
+              <line
+                x1={swipeScreenX}
+                y1={esquinasY}
+                x2={swipeScreenX}
+                y2={esquinasY + esquinasH}
+                stroke="#3399FF"
+                strokeWidth={2}
+              />
+            </g>
+          )}
+
+          {/* Delimitación exacta del polígono ROI oficial de Chiapas (2687 × 5504 px a 10 m en EPSG:32615) */}
+          <polygon
+            points={NISAR_FOOTPRINT.map((pt) => projectLngLat(pt, viewport))
+              .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+              .join(' ')}
+            fill="rgba(51, 153, 255, 0.02)"
+            stroke="#3399FF"
+            strokeWidth={1.6}
+            strokeDasharray="6 4"
+            style={{ pointerEvents: 'none' }}
+          />
+
+          {/* Máscara inversa de recorte (`croppedRegion`) */}
+          {croppedScreenPts && (
+            <g>
+              <path
+                d={croppedInversePathAttr}
+                fill="#CBD5E1"
+                fillOpacity={0.72}
+                fillRule="evenodd"
+              />
+              <polygon
+                points={croppedPolygonPointsAttr}
+                fill="none"
+                stroke="#3399FF"
+                strokeWidth={2.4}
+                strokeDasharray="8 5"
+              />
+            </g>
+          )}
+
+          {/* Figuras guardadas seleccionables (Círculos, Trazos de Lápiz y Nodos de Etiqueta) */}
+          {annotations.map((ann) => {
+            const isSelected = selectedAnnotation?.id === ann.id
+
+            if (ann.kind === 'lapiz' && ann.points.length >= 2) {
+              const pts = ann.points
+                .map((pt) => projectLngLat(pt, viewport))
+                .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                .join(' ')
+              return (
+                <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                  {isSelected && (
+                    <polyline
+                      points={pts}
+                      fill="none"
+                      stroke="#FFFFFF"
+                      strokeWidth={7}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ filter: 'drop-shadow(0 0 5px #3399FF)', pointerEvents: 'none' }}
+                    />
+                  )}
+                  <polyline
+                    points={pts}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={14}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={svgElementInteractionStyle}
+                  />
+                  <polyline
+                    points={pts}
+                    fill="none"
+                    stroke="#3399FF"
+                    strokeWidth={isSelected ? 4.5 : 3.2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={svgElementInteractionStyle}
+                  />
+                </g>
+              )
+            }
+
+            if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+              const ringPts = createCirclePolygonCoords(ann.center, ann.radiusKm, 64)
+                .map((pt) => projectLngLat(pt, viewport))
+                .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                .join(' ')
+              const [cx, cy] = projectLngLat(ann.center, viewport)
+              const isDanger = ann.kind === 'peligro'
+
+              return (
+                <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                  {isSelected && (
+                    <polygon
+                      points={ringPts}
+                      fill="none"
+                      stroke="#FFFFFF"
+                      strokeWidth={5.5}
+                      style={{ filter: 'drop-shadow(0 0 5px #3399FF)', pointerEvents: 'none' }}
+                    />
+                  )}
+                  <polygon
+                    points={ringPts}
+                    fill={isDanger ? 'rgba(220, 38, 38, 0.26)' : 'rgba(217, 119, 6, 0.22)'}
+                    stroke={isDanger ? '#DC2626' : '#D97706'}
+                    strokeWidth={isSelected ? 4 : 2.6}
+                    strokeDasharray={isDanger ? undefined : '8 6'}
+                    style={svgElementInteractionStyle}
+                  />
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={isSelected ? 5 : 4}
+                    fill={isDanger ? '#DC2626' : '#D97706'}
+                    stroke="#FFFFFF"
+                    strokeWidth={1.5}
+                    style={svgElementInteractionStyle}
+                  />
+                </g>
+              )
+            }
+
+            if (ann.kind === 'etiqueta') {
+              const [x, y] = projectLngLat(ann.position, viewport)
+              return (
+                <g key={ann.id} onClick={(e) => handleSelectElement(e, ann)}>
+                  {isSelected && (
+                    <circle
+                      cx={x}
+                      cy={y}
+                      r={8.5}
+                      fill="none"
+                      stroke="#FFFFFF"
+                      strokeWidth={2.5}
+                      style={{ filter: 'drop-shadow(0 0 5px #3399FF)', pointerEvents: 'none' }}
+                    />
+                  )}
+                  <circle
+                    cx={x}
+                    cy={y}
+                    r={isSelected ? 5.5 : 4.5}
+                    fill="#3399FF"
+                    stroke="#FFFFFF"
+                    strokeWidth={1.8}
+                    style={svgElementInteractionStyle}
+                  />
+                </g>
+              )
+            }
+
+            return null
+          })}
+
+          {/* Círculo en curso mientras el usuario arrastra */}
+          {draftCircle &&
+            (() => {
+              const ringPts = createCirclePolygonCoords(
+                draftCircle.center,
+                draftCircle.radiusKm,
+                64,
+              )
+                .map((pt) => projectLngLat(pt, viewport))
+                .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                .join(' ')
+              const [cx, cy] = projectLngLat(draftCircle.center, viewport)
+              const isDanger = draftCircle.kind === 'peligro'
+              return (
+                <g>
+                  <polygon
+                    points={ringPts}
+                    fill={isDanger ? 'rgba(220, 38, 38, 0.26)' : 'rgba(217, 119, 6, 0.22)'}
+                    stroke={isDanger ? '#DC2626' : '#D97706'}
+                    strokeWidth={2.6}
+                    strokeDasharray={isDanger ? undefined : '8 6'}
+                  />
+                  <circle cx={cx} cy={cy} r={4} fill={isDanger ? '#DC2626' : '#D97706'} />
+                </g>
+              )
+            })()}
+
+          {/* Trazo de lápiz en curso mientras el usuario arrastra */}
+          {draftFreehand.length >= 2 && (
+            <polyline
+              points={draftFreehand
+                .map((pt) => projectLngLat(pt, viewport))
+                .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                .join(' ')}
+              fill="none"
+              stroke="#3399FF"
+              strokeWidth={3.2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+
+          {/* Polígono en construcción (`Recortar Región`) */}
+          {draftPolygon.length > 0 && (
+            <g>
+              {draftPolygon.length >= 3 && (
+                <polygon
+                  points={draftPolygon
+                    .map((pt) => projectLngLat(pt, viewport))
+                    .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                    .join(' ')}
+                  fill="rgba(51, 153, 255, 0.18)"
+                />
+              )}
+              {draftPolygon.length >= 2 && (
+                <polyline
+                  points={(draftPolygon.length >= 3
+                    ? [...draftPolygon, draftPolygon[0]]
+                    : draftPolygon
+                  )
+                    .map((pt) => projectLngLat(pt, viewport))
+                    .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+                    .join(' ')}
+                  fill="none"
+                  stroke="#3399FF"
+                  strokeWidth={2.2}
+                  strokeDasharray="6 4"
+                />
+              )}
+              {draftPolygon.map((pt, idx) => {
+                const [x, y] = projectLngLat(pt, viewport)
+                return (
+                  <circle
+                    key={idx}
+                    cx={x}
+                    cy={y}
+                    r={5.5}
+                    fill="#FFFFFF"
+                    stroke="#3399FF"
+                    strokeWidth={2.2}
+                  />
+                )
+              })}
+            </g>
+          )}
+        </svg>
+
+        {/* Marcadores HTML seleccionables encima del SVG (z-index: 10) */}
+        <div
+          className="map-markers-layer"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            overflow: 'hidden',
+            zIndex: 10,
+          }}
+        >
+          {annotations.map((ann) => {
+            const isSelected = selectedAnnotation?.id === ann.id
+
+            if (ann.kind === 'peligro' || ann.kind === 'advertencia') {
+              const topEdgeCoord: LngLat = [ann.center[0], ann.center[1] + ann.radiusKm / 110.574]
+              const [x, y] = projectLngLat(topEdgeCoord, viewport)
+              return (
+                <div
+                  key={ann.id}
+                  onClick={(e) => handleSelectElement(e, ann)}
+                  title={ann.kind === 'peligro' ? DANGER_CIRCLE_TOOLTIP : WARN_CIRCLE_TOOLTIP}
+                  className={`map-marker-tag ${
+                    ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
+                  } ${isSelected ? 'is-selected' : ''}`}
+                  style={{
+                    position: 'absolute',
+                    left: `${x.toFixed(1)}px`,
+                    top: `${(y - 8).toFixed(1)}px`,
+                    transform: 'translate(-50%, -100%)',
+                    pointerEvents: canSelectInSvg ? 'auto' : 'none',
+                    cursor: canSelectInSvg ? 'pointer' : 'inherit',
+                  }}
+                >
+                  {ann.label}
+                </div>
+              )
+            }
+
+            if (ann.kind === 'etiqueta') {
+              const [x, y] = projectLngLat(ann.position, viewport)
+              return (
+                <div
+                  key={ann.id}
+                  onClick={(e) => handleSelectElement(e, ann)}
+                  className={`map-marker-tag map-marker-tag--custom ${
+                    isSelected ? 'is-selected' : ''
+                  }`}
+                  style={{
+                    position: 'absolute',
+                    left: `${(x + 10).toFixed(1)}px`,
+                    top: `${y.toFixed(1)}px`,
+                    transform: 'translate(0, -50%)',
+                    pointerEvents: canSelectInSvg ? 'auto' : 'none',
+                    cursor: canSelectInSvg ? 'pointer' : 'inherit',
+                  }}
+                >
+                  {ann.text}
+                </div>
+              )
+            }
+
+            return null
+          })}
+        </div>
+
+        {/* Barra de acción rápida junto al elemento seleccionado */}
+        {isEditing && selectedAnnotation && selectedAnchorScreen && !labelEditor && (
+          <div
+            className="selection-action-pill"
+            style={{
+              left: `${Math.min(Math.max(115, selectedAnchorScreen[0]), viewport.width - 115)}px`,
+              top: `${Math.min(Math.max(54, selectedAnchorScreen[1] - 42), viewport.height - 96)}px`,
+            }}
+          >
+            <button
+              type="button"
+              className="selection-action-pill__btn"
+              onClick={handleEditSelectedText}
+            >
+              ✏️ Editar etiqueta
+            </button>
+            <span className="selection-action-pill__sep" aria-hidden="true" />
+            <button
+              type="button"
+              className="selection-action-pill__btn selection-action-pill__btn--danger"
+              onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
+            >
+              🗑️ Eliminar (Supr)
+            </button>
+          </div>
+        )}
+
+        {/* Control interactivo sobre la ROI cuando está activo el Deslizador Antes/Después (Swipe t1 ↔ t2) */}
+        {dateViewMode === 'swipe' && (
+          <div
+            className="swipe-handle-overlay"
+            style={{
+              left: `${swipeScreenX}px`,
+              top: `${Math.max(24, esquinasY)}px`,
+              height: `${Math.max(48, Math.min(viewport.height - 48, esquinasH))}px`,
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              setIsDraggingSwipe(true)
+            }}
+            role="slider"
+            aria-label="Deslizador Antes y Después entre t1 y t2"
+            aria-valuemin={2}
+            aria-valuemax={98}
+            aria-valuenow={Math.round(swipePct)}
+            tabIndex={0}
+            title="Arrastra hacia la izquierda o derecha para comparar t1 (2026-06-18) vs t2 (2026-10-16) con escala común -22 a 0 dB"
+          >
+            <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--left">
+              ◀ t1 · {escena.t1}
+            </span>
+            <div className="swipe-handle-overlay__knob">↔</div>
+            <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
+              t2 · {escena.t2} ▶
+            </span>
+          </div>
+        )}
+
+        {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
+        <aside
+          className="comsol-colorbar"
+          aria-label="Barra vertical de escala radiométrica estilo COMSOL"
+        >
+          <div className="comsol-colorbar__column">
+            <div className="comsol-colorbar__header">
+              <span className="comsol-colorbar__symbol">
+                {activeLayerEntry?.simbolo ?? 'γ⁰'} {activeLayerEntry?.capa ?? 'HH'}
+              </span>
+              <span className="comsol-colorbar__unit">
+                [{activeLayerEntry?.unidades ?? 'dB'} · {activeColormapSpec.shortLabel}]
+              </span>
+            </div>
+
+            <div className="comsol-colorbar__body">
+              <div
+                className="comsol-colorbar__gradient"
+                style={{ background: activeColormapSpec.cssGradientVertical }}
+                role="img"
+                aria-label={`Rampa vertical ${activeColormapSpec.label} de ${vmin} dB a ${vmax} dB`}
+              />
+              <div className="comsol-colorbar__ticks">
+                {colorbarTicks.map((val, idx) => (
+                  <div key={idx} className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">
+                      {val > 0 ? `+${val.toFixed(1)}` : val.toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="comsol-colorbar__footer">
+              <span>Max: {activeLayerEntry ? `+${activeLayerEntry.rango_datos_dB[1].toFixed(1)}` : '+9.8'}</span>
+              <span>Min: {activeLayerEntry ? activeLayerEntry.rango_datos_dB[0].toFixed(1) : '-28.8'}</span>
+            </div>
+          </div>
+
+          {solar.enabled && (
+            <div className="comsol-colorbar__column comsol-colorbar__column--solar">
+              <div className="comsol-colorbar__header">
+                <span className="comsol-colorbar__symbol">Radiación</span>
+                <span className="comsol-colorbar__unit">[Inferno · {solar.radiationIntensity}%]</span>
+              </div>
+              <div className="comsol-colorbar__body">
+                <div
+                  className="comsol-colorbar__gradient"
+                  style={{ background: infernoSpec.cssGradientVertical }}
+                  role="img"
+                  aria-label="Escala vertical de radiación solar de Menor radiación a Mayor radiación (Inferno)"
+                />
+                <div className="comsol-colorbar__ticks">
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">Mayor</span>
+                  </div>
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">80%</span>
+                  </div>
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">60%</span>
+                  </div>
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">40%</span>
+                  </div>
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">20%</span>
+                  </div>
+                  <div className="comsol-colorbar__tick">
+                    <span className="comsol-colorbar__tick-line" />
+                    <span className="comsol-colorbar__tick-val">Menor</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </aside>
+
+        {/* Chip técnico arriba del mapa cuando hay una región recortada activa */}
+        {hasActiveCrop && (
+          <div className="crop-active-chip" role="status">
+            <span className="crop-active-chip__dot" aria-hidden="true" />
+            <span>Subregión ROI recortada activa —</span>
+            <button
+              type="button"
+              className="crop-active-chip__action"
+              onClick={handleResetCroppedRegion}
+            >
+              [Restablecer vista completa]
+            </button>
+          </div>
+        )}
+
+        {/* Botones en el centroide del polígono en construcción */}
+        {isEditing && draftPolygon.length >= 3 && draftPolyCentroidScreen && (
+          <div
+            className="poly-centroid-actions"
+            style={{
+              left: `${Math.min(Math.max(120, draftPolyCentroidScreen[0]), viewport.width - 140)}px`,
+              top: `${Math.min(Math.max(64, draftPolyCentroidScreen[1] + 24), viewport.height - 110)}px`,
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn--primary btn--sm"
+              onClick={handleApplyCropRegion}
+            >
+              ✂️ Recortar región
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => setDraftPolygon([])}
+            >
+              Limpiar puntos
+            </button>
+          </div>
+        )}
+
+        {/* Input técnico para crear o editar una etiqueta */}
+        {labelEditor && labelEditorScreen && (
+          <form
+            className="label-popover"
+            style={{
+              left: `${Math.min(Math.max(16, labelEditorScreen[0]), viewport.width - 280)}px`,
+              top: `${Math.min(Math.max(56, labelEditorScreen[1]), viewport.height - 110)}px`,
+            }}
+            onSubmit={handleConfirmLabel}
+          >
+            <input
+              type="text"
+              className="label-popover__input"
+              value={labelEditor.text}
+              maxLength={96}
+              onChange={(e) => setLabelEditor({ ...labelEditor, text: e.target.value })}
+              placeholder="Etiqueta técnica..."
+              autoFocus
+            />
+            <button type="submit" className="btn btn--primary btn--xs">
+              Aplicar
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--xs"
+              onClick={() => setLabelEditor(null)}
+            >
+              Cancelar
+            </button>
+          </form>
+        )}
+
+        {/* Panel derecho acoplable/flotante de Simulación Solar */}
+        {solar.enabled && (
+          <RightPanel
+            solar={solar}
+            onSolarChange={onSolarChange}
+            onClose={() => onSolarChange({ ...solar, enabled: false })}
+          />
+        )}
+      </div>
+
+      {/* 5. PANEL INFERIOR COLAPSABLE DE BITÁCORA Y TRAZABILIDAD ("Messages / Progress / Traceability Log") */}
+      <section
+        className={`workstation-log-panel ${logPanelCollapsed ? 'is-collapsed' : ''}`}
+        aria-label="Messages / Progress / Traceability Log"
+      >
+        <div className="ws-panel-tabbar workstation-log-panel__tabbar">
+          <div className="workstation-log-panel__tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={logActiveTab === 'trace'}
+              className={`ws-panel-tab ${logActiveTab === 'trace' ? 'is-active' : ''}`}
+              onClick={() => {
+                setLogActiveTab('trace')
+                setLogPanelCollapsed(false)
+              }}
+            >
+              <Terminal size={12} aria-hidden="true" />
+              <span>Messages / Progress / Traceability Log</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={logActiveTab === 'layers'}
+              className={`ws-panel-tab ${logActiveTab === 'layers' ? 'is-active' : ''}`}
+              onClick={() => {
+                setLogActiveTab('layers')
+                setLogPanelCollapsed(false)
+              }}
+            >
+              <span>Manifiesto explore-web-1 (capas.json)</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={logActiveTab === 'warnings'}
+              className={`ws-panel-tab ${logActiveTab === 'warnings' ? 'is-active' : ''}`}
+              onClick={() => {
+                setLogActiveTab('warnings')
+                setLogPanelCollapsed(false)
+              }}
+            >
+              <span>
+                Advertencias Radiométricas ({activeManifest?.advertencias.length ?? 2})
+              </span>
+            </button>
+          </div>
+
+          <div className="workstation-log-panel__actions">
+            {dateViewMode === 'swipe' && (
+              <label className="workstation-log-panel__swipe-inline">
+                <span>Swipe t1↔t2: {Math.round(swipePct)}%</span>
+                <input
+                  type="range"
+                  min={2}
+                  max={98}
+                  step={1}
+                  value={swipePct}
+                  onChange={(e) => setSwipePct(Number(e.target.value))}
+                />
+              </label>
+            )}
+            <button
+              type="button"
+              className="workstation-log-panel__toggle"
+              onClick={() => setLogPanelCollapsed((prev) => !prev)}
+              title={logPanelCollapsed ? 'Expandir panel de bitácora' : 'Colapsar panel de bitácora'}
+            >
+              {logPanelCollapsed ? '▲ Expandir Log' : '▼ Colapsar'}
+            </button>
+          </div>
+        </div>
+
+        {!logPanelCollapsed && (
+          <div className="workstation-log-panel__content">
+            {logActiveTab === 'trace' && (
+              <div className="ws-log-grid">
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--info">GRANULE t1</span>
+                  <code className="ws-mono">{escena.t1SceneId}</code>
+                  <span className="ws-log-sep">|</span>
+                  <span>
+                    CRID: <strong>{escena.crid}</strong> ({escena.madurez}) · Píxeles válidos ROI:{' '}
+                    <strong>
+                      {layerT1 ? `${layerT1.pct_pixeles_validos.toFixed(2)}%` : '99.57%'}
+                    </strong>{' '}
+                    · Rango COG:{' '}
+                    <code className="ws-mono">
+                      {layerT1
+                        ? `[${layerT1.rango_datos_dB[0].toFixed(2)}, +${layerT1.rango_datos_dB[1].toFixed(2)} dB]`
+                        : '[-27.14, +9.95 dB]'}
+                    </code>
+                  </span>
+                </div>
+
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--info">GRANULE t2</span>
+                  <code className="ws-mono">{escena.t2SceneId}</code>
+                  <span className="ws-log-sep">|</span>
+                  <span>
+                    CRID: <strong>{escena.crid}</strong> ({escena.madurez}) · Píxeles válidos ROI:{' '}
+                    <strong>
+                      {layerT2 ? `${layerT2.pct_pixeles_validos.toFixed(2)}%` : '99.61%'}
+                    </strong>{' '}
+                    · Rango COG:{' '}
+                    <code className="ws-mono">
+                      {layerT2
+                        ? `[${layerT2.rango_datos_dB[0].toFixed(2)}, +${layerT2.rango_datos_dB[1].toFixed(2)} dB]`
+                        : '[-28.83, +9.78 dB]'}
+                    </code>
+                  </span>
+                </div>
+
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--warn">CALIBRACIÓN</span>
+                  <code className="ws-mono">
+                    noiseCorrectionApplied = False | shadowMaskingApplied = False | rfiMitigationApplied = True
+                  </code>
+                  <span className="ws-log-sep">|</span>
+                  {scaleCheck && (
+                    <span className={scaleCheck.valid ? 'ws-log-ok' : 'ws-log-warn'}>
+                      {scaleCheck.valid ? '✓ ' : '⚠️ '}
+                      {scaleCheck.message}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {logActiveTab === 'layers' && activeLayerEntry && (
+              <div className="ws-log-grid">
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--info">CAPA ACTIVA</span>
+                  <strong>{activeLayerEntry.id}:</strong> {activeLayerOption.title} · Paleta LUT:{' '}
+                  <strong>{activeColormapSpec.label}</strong>
+                </div>
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--info">PNG WEB</span>
+                  <code className="ws-mono">/{activeLayerEntry.png}</code> (
+                  {activeLayerEntry.forma_png[1]}×{activeLayerEntry.forma_png[0]} px ·{' '}
+                  {activeLayerEntry.crs_png}) ·{' '}
+                  <span className="ws-log-tag ws-log-tag--info">COG</span>{' '}
+                  <code className="ws-mono">/{activeLayerEntry.cog}</code> (
+                  {activeLayerEntry.forma_cog[1]}×{activeLayerEntry.forma_cog[0]} px ·{' '}
+                  {activeLayerEntry.crs_cog})
+                </div>
+                <div className="ws-log-row">
+                  <span className="ws-log-tag ws-log-tag--info">PROCEDENCIA</span>
+                  <span>
+                    Modo: <code>{activeManifest?.procedencia.modo ?? 'remoto'}</code> · Método:{' '}
+                    <code>{activeManifest?.procedencia.metodo ?? 'h5py sobre HTTPS'}</code> ·
+                    Identidad verificada contra catálogo ASF:{' '}
+                    <code>
+                      {String(
+                        activeManifest?.procedencia.identidad_verificada_contra_catalogo ?? true,
+                      )}
+                    </code>
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {logActiveTab === 'warnings' && (
+              <ul className="ws-log-warnings">
+                {(activeManifest?.advertencias ?? []).map((adv, idx) => (
+                  <li key={idx}>{adv}</li>
+                ))}
+                <li>
+                  Banderas de procesamiento leídas del HDF5: <code>noiseCorrectionApplied = False</code>,{' '}
+                  <code>shadowMaskingApplied = False</code>. Etapa 1 exploratoria; mapa de cambio{' '}
+                  <code>Δσ⁰</code> pendiente de Contrato C2.
+                </li>
+              </ul>
+            )}
+          </div>
+        )}
+      </section>
     </main>
   )
 }
