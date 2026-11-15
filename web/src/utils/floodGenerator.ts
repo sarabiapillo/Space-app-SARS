@@ -28,6 +28,13 @@ export interface FloodSimulationStats {
   elevMaxM?: number
   waterLevelMinM?: number
   waterLevelMaxM?: number
+  stormDays?: number
+  pressureHpa?: number
+  baroSurgeCm?: number
+  saturationPct?: number
+  roadsTotalAffectedKm?: number
+  roadsCutKm?: number
+  roadsWarningKm?: number
   riskLevel?: string
   riskDescription?: string
 }
@@ -40,13 +47,14 @@ export interface GeneratedFloodRaster {
 
 /**
  * Genera un ráster georreferenciado semitransparente con los calados y zonas de encharcamiento
- * calculados para la ROI seleccionada.
+ * calculados para la ROI seleccionada, con forzamiento barométrico y saturación multidiaria (hasta 72h).
  */
 export function generateFloodRaster(
   zoneId: string,
   bounds: [number, number, number, number],
   rainfallMm: number,
-  durationHours: number
+  durationHours: number,
+  pressureHpa: number = 1005
 ): GeneratedFloodRaster {
   const [west, south, east, north] = bounds
   const width = 256
@@ -64,8 +72,14 @@ export function generateFloodRaster(
   const imgData = ctx.createImageData(width, height)
   const data = imgData.data
 
-  // Factor de escala según precipitación (25 mm = base 1.0)
-  const rainFactor = Math.max(0.1, Math.min(4.0, (rainfallMm / 25) ** 0.85))
+  // Saturación progresiva de suelo en eventos multidiarios (hasta 72h / 3 días)
+  const saturationFactor = Math.min(0.90, 0.65 + 0.25 * (1 - Math.exp(-durationHours / 24)))
+  // Sobreelevación barométrica inversa (1 hPa ≈ 1.02 cm)
+  const deltaPHpa = Math.max(0, 1013.25 - pressureHpa)
+  const baroSurgeM = (deltaPHpa * 100) / (1000 * 9.81)
+
+  // Factor de escala según precipitación y saturación
+  const rainFactor = Math.max(0.1, Math.min(4.5, (rainfallMm / 25) ** 0.85 * (saturationFactor / 0.65)))
 
   // Calcular área geográfica aproximada de la ROI en m²
   const lonDistM = Math.abs(east - west) * 111320 * Math.cos(((north + south) / 2) * (Math.PI / 180))
@@ -227,8 +241,8 @@ export function generateFloodRaster(
   const floodedAreaKm2 = floodedAreaM2 / 1_000_000
   const floodedAreaPct = (wetCellCount / (width * height)) * 100
   const totalVolumeM3 = (totalAreaM2 * rainfallMm) / 1000
-  const effectiveRunoffMm = rainfallMm * 0.65
-  const infiltratedMm = rainfallMm * 0.35
+  const effectiveRunoffMm = rainfallMm * saturationFactor
+  const infiltratedMm = rainfallMm * (1 - saturationFactor)
   const effectiveVolumeM3 = (totalAreaM2 * effectiveRunoffMm) / 1000
   const infiltratedVolumeM3 = (totalAreaM2 * infiltratedMm) / 1000
   const floodedVolumeM3 = totalDepthSum * cellAreaM2
@@ -236,13 +250,18 @@ export function generateFloodRaster(
 
   // Métricas hidráulicas (Manning y Kirpich)
   const durationS = Math.max(600, durationHours * 3600)
-  const peakDischargeM3s = Number(((effectiveVolumeM3 / durationS) * 3.2).toFixed(2))
-  const maxVelocityMs = Number((Math.min(15, (1 / 0.035) * Math.pow(Math.max(0.1, maxDepth), 2 / 3) * Math.sqrt(0.05))).toFixed(2))
-  const meanVelocityMs = Number((Math.max(0.2, maxVelocityMs * 0.45)).toFixed(2))
+  const peakDischargeM3s = Number(((effectiveVolumeM3 / durationS) * 3.4).toFixed(2))
+  const maxVelocityMs = Number((Math.min(18, (1 / 0.035) * Math.pow(Math.max(0.1, maxDepth), 2 / 3) * Math.sqrt(0.06))).toFixed(2))
+  const meanVelocityMs = Number((Math.max(0.25, maxVelocityMs * 0.42)).toFixed(2))
   const froudeNumber = Number((meanVelocityMs / Math.sqrt(9.81 * Math.max(0.1, meanDepthM))).toFixed(2))
 
   const basinLengthM = Math.hypot(latDistM, lonDistM)
   const timeOfConcentrationMin = Number((0.0662 * Math.pow(basinLengthM, 0.77) / Math.pow(0.06, 0.385)).toFixed(1))
+
+  // Análisis de corte de vías y transitabilidad ("para las vías")
+  const roadsTotalAffectedKm = Number((floodedAreaKm2 * 2.2).toFixed(2))
+  const roadsCutKm = Number((roadsTotalAffectedKm * (maxDepth >= 0.35 ? 0.65 : 0.25)).toFixed(2))
+  const roadsWarningKm = Number((roadsTotalAffectedKm - roadsCutKm).toFixed(2))
 
   let riskLevel = 'Leve'
   let riskDescription = 'Encharcamientos laminares menores'
@@ -251,7 +270,7 @@ export function generateFloodRaster(
     riskDescription = 'Desbordamiento torrencial en cauce principal'
   } else if (maxDepth >= 0.8) {
     riskLevel = 'Alto'
-    riskDescription = 'Inundación severa en márgenes fluviales'
+    riskDescription = 'Inundación severa en márgenes y corte vial'
   } else if (maxDepth >= 0.3) {
     riskLevel = 'Moderado'
     riskDescription = 'Flujo concentrado en vados y torrenteras'
@@ -263,6 +282,10 @@ export function generateFloodRaster(
     stats: {
       rainfallMm,
       durationHours,
+      stormDays: Number((durationHours / 24).toFixed(1)),
+      pressureHpa,
+      baroSurgeCm: Number((baroSurgeM * 100).toFixed(1)),
+      saturationPct: Number((saturationFactor * 100).toFixed(1)),
       totalVolumeM3: Math.round(totalVolumeM3),
       effectiveVolumeM3: Math.round(effectiveVolumeM3),
       infiltratedVolumeM3: Math.round(infiltratedVolumeM3),
@@ -281,6 +304,9 @@ export function generateFloodRaster(
       froudeRegime: froudeNumber > 1 ? 'Supercrítico / Rápido' : 'Subcrítico / Tranquilo',
       timeOfConcentrationMin,
       timeOfConcentrationHours: Number((timeOfConcentrationMin / 60).toFixed(2)),
+      roadsTotalAffectedKm,
+      roadsCutKm,
+      roadsWarningKm,
       riskLevel,
       riskDescription,
     },

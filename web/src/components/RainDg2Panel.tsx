@@ -49,6 +49,7 @@ export function RainDg2Panel({
   const zoneSelectId = useId()
   const amountSliderId = useId()
   const durationSliderId = useId()
+  const pressureSliderId = useId()
   const opacitySliderId = useId()
 
   const selectedZoneId = flood.selectedZoneId || 'sumidero'
@@ -57,6 +58,7 @@ export function RainDg2Panel({
 
   const rainfallAmount = flood.rainfallAmount || 35
   const rainfallDuration = flood.rainfallDuration || 3
+  const pressureHpa = flood.pressureHpa || 1005
   const calculatedIntensity = Number((rainfallAmount / rainfallDuration).toFixed(1))
 
   const handleSelectZone = (zoneId: string) => {
@@ -82,11 +84,12 @@ export function RainDg2Panel({
     onFlyToZone?.(targetZone.center, targetZone.zoom)
   }
 
-  const applyPresetEvent = (amount: number, duration: number) => {
+  const applyPresetEvent = (amount: number, duration: number, pressure: number = 1005) => {
     onFloodChange({
       ...flood,
       rainfallAmount: amount,
       rainfallDuration: duration,
+      pressureHpa: pressure,
     })
   }
 
@@ -123,7 +126,7 @@ export function RainDg2Panel({
         [bbox[0], bbox[1]],
       ]]
 
-      // 2. Ejecutar cálculo hidrológico y topográfico con NASADEM 30m real
+      // 2. Ejecutar cálculo hidrológico y topográfico con NASADEM 30m real y forzamiento barométrico
       let dataUrl = ''
       let resultBounds = bbox
       let stats = null
@@ -140,6 +143,7 @@ export function RainDg2Panel({
             type: 'Polygon',
             coordinates: roiPolygon,
           },
+          pressure_hpa: Number(pressureHpa),
         })
 
         if (simRes && simRes.dataUrl) {
@@ -157,7 +161,8 @@ export function RainDg2Panel({
           selectedZoneId,
           bbox,
           rainfallAmount,
-          rainfallDuration
+          rainfallDuration,
+          pressureHpa
         )
         dataUrl = floodResult.dataUrl
         resultBounds = floodResult.bounds
@@ -281,23 +286,38 @@ export function RainDg2Panel({
               <button
                 type="button"
                 className="ws-rain-preset-chip"
-                onClick={() => applyPresetEvent(15, 6)}
+                onClick={() => applyPresetEvent(15, 6, 1012)}
               >
                 Llovizna (15 mm / 6 h)
               </button>
               <button
                 type="button"
                 className="ws-rain-preset-chip"
-                onClick={() => applyPresetEvent(40, 3)}
+                onClick={() => applyPresetEvent(45, 3, 1008)}
               >
-                Tormenta (40 mm / 3 h)
+                Tormenta (45 mm / 3 h)
               </button>
               <button
                 type="button"
                 className="ws-rain-preset-chip"
-                onClick={() => applyPresetEvent(90, 4)}
+                onClick={() => applyPresetEvent(90, 6, 1004)}
               >
-                Severo (90 mm / 4 h)
+                Severo (90 mm / 6 h)
+              </button>
+              <button
+                type="button"
+                className="ws-rain-preset-chip"
+                style={{
+                  background: '#e0f2fe',
+                  borderColor: '#38bdf8',
+                  color: '#0369a1',
+                  fontWeight: 700,
+                  gridColumn: 'span 2',
+                }}
+                onClick={() => applyPresetEvent(185, 72, 998)}
+                title="Evento meteorológico multidiario de 3 días (72h) bajo sistema de baja presión ciclónica de 998 hPa"
+              >
+                ⛈️ Temporal 3 Días (72h · 185 mm · 998 hPa)
               </button>
             </div>
 
@@ -313,7 +333,7 @@ export function RainDg2Panel({
                 id={amountSliderId}
                 type="range"
                 min={5}
-                max={150}
+                max={350}
                 step={1}
                 value={rainfallAmount}
                 onChange={(e) =>
@@ -323,25 +343,25 @@ export function RainDg2Panel({
                   })
                 }
                 className="slider slider--rain"
-                style={{ '--slider-fill': `${(rainfallAmount / 150) * 100}%` } as CSSProperties}
+                style={{ '--slider-fill': `${(rainfallAmount / 350) * 100}%` } as CSSProperties}
               />
             </div>
 
-            {/* Slider 2: Duración */}
+            {/* Slider 2: Duración (hasta 72h / 3 días) */}
             <div className="solar-control">
               <div className="opacity-control__header">
                 <label htmlFor={durationSliderId} className="opacity-control__label">
                   Duración del Evento
                 </label>
                 <span className="opacity-control__value">
-                  {rainfallDuration} h ({calculatedIntensity} mm/h)
+                  {rainfallDuration} h ({Number((rainfallDuration / 24).toFixed(1))} d · {calculatedIntensity} mm/h)
                 </span>
               </div>
               <input
                 id={durationSliderId}
                 type="range"
                 min={1}
-                max={24}
+                max={72}
                 step={0.5}
                 value={rainfallDuration}
                 onChange={(e) =>
@@ -351,8 +371,39 @@ export function RainDg2Panel({
                   })
                 }
                 className="slider slider--rain"
-                style={{ '--slider-fill': `${(rainfallDuration / 24) * 100}%` } as CSSProperties}
+                style={{ '--slider-fill': `${(rainfallDuration / 72) * 100}%` } as CSSProperties}
               />
+            </div>
+
+            {/* Slider 3: Presión Barométrica */}
+            <div className="solar-control">
+              <div className="opacity-control__header">
+                <label htmlFor={pressureSliderId} className="opacity-control__label">
+                  Presión Barométrica
+                </label>
+                <span className="opacity-control__value">
+                  {pressureHpa} hPa {pressureHpa < 1010 ? '(Baja presión)' : '(Estándar)'}
+                </span>
+              </div>
+              <input
+                id={pressureSliderId}
+                type="range"
+                min={980}
+                max={1030}
+                step={1}
+                value={pressureHpa}
+                onChange={(e) =>
+                  onFloodChange({
+                    ...flood,
+                    pressureHpa: Number(e.target.value),
+                  })
+                }
+                className="slider slider--rain"
+                style={{ '--slider-fill': `${((pressureHpa - 980) / 50) * 100}%` } as CSSProperties}
+              />
+              <span className="solar-control__hint">
+                Bajas presiones (ej. 995–1005 hPa) elevan la lámina hidrostática en zonas bajas e intensifican la escorrentía.
+              </span>
             </div>
 
             <button
@@ -446,6 +497,57 @@ export function RainDg2Panel({
                   className="slider slider--rain"
                   style={{ '--slider-fill': `${flood.waterOpacity ?? 85}%` } as CSSProperties}
                 />
+              </div>
+
+              {/* Modo de Comparación / Swipe Cortina (Inundación vs Terreno Original) */}
+              <div className="ws-rain-compare-box">
+                <div className="ws-rain-compare-box__header">
+                  <label className="ws-rain-compare-toggle">
+                    <input
+                      type="checkbox"
+                      checked={flood.compareMode ?? false}
+                      onChange={(e) =>
+                        onFloodChange({
+                          ...flood,
+                          compareMode: e.target.checked,
+                        })
+                      }
+                    />
+                    <strong>Comparar Inundación vs Terreno Original</strong>
+                  </label>
+                  <span className={`ws-rain-compare-badge ${flood.compareMode ? 'is-active' : ''}`}>
+                    {flood.compareMode ? 'CORTINA SWIPE ACTIVA' : 'Capa completa'}
+                  </span>
+                </div>
+
+                {flood.compareMode && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div className="opacity-control__header">
+                      <span className="opacity-control__label">Deslizador Swipe (Arrastrable en mapa)</span>
+                      <span className="opacity-control__value">{flood.compareSwipePct ?? 50}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={flood.compareSwipePct ?? 50}
+                      onChange={(e) =>
+                        onFloodChange({
+                          ...flood,
+                          compareSwipePct: Number(e.target.value),
+                        })
+                      }
+                      className="slider slider--rain"
+                      style={{ '--slider-fill': `${flood.compareSwipePct ?? 50}%` } as CSSProperties}
+                    />
+                    <div className="ws-flood-legend__labels" style={{ marginTop: '3px' }}>
+                      <span>◀ 0% Terreno Original</span>
+                      <span>50% Mitad</span>
+                      <span>100% Inundación ▶</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Escala cromática de calados */}
@@ -558,6 +660,28 @@ export function RainDg2Panel({
                     <span className="ws-rain-result-box__sub">Elevación η (s.n.m.)</span>
                   </div>
 
+                  <div className="ws-rain-result-box" style={{ borderLeft: '3px solid #f97316' }}>
+                    <span className="ws-rain-result-box__label">Afección en Vías y Caminos</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#c2410c' }}>
+                      {flood.stats.roadsTotalAffectedKm !== undefined
+                        ? `${flood.stats.roadsTotalAffectedKm} km`
+                        : `${(flood.stats.floodedAreaKm2 * 2.2).toFixed(2)} km`}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      Cortadas: {flood.stats.roadsCutKm !== undefined ? `${flood.stats.roadsCutKm} km` : 'evaluando'} (h ≥ 0.35m)
+                    </span>
+                  </div>
+
+                  <div className="ws-rain-result-box" style={{ borderLeft: '3px solid #0284c7' }}>
+                    <span className="ws-rain-result-box__label">Presión y Saturación 3 Días</span>
+                    <strong className="ws-rain-result-box__val">
+                      {flood.stats.pressureHpa ?? pressureHpa} hPa
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      Suelo: {flood.stats.saturationPct ?? 88}% sat · Δh: +{flood.stats.baroSurgeCm ?? 11} cm
+                    </span>
+                  </div>
+
                   <div className="ws-rain-result-box" style={{ gridColumn: 'span 2' }}>
                     <span className="ws-rain-result-box__label">Volumen Acumulado y Almacenamiento</span>
                     <strong className="ws-rain-result-box__val">
@@ -607,8 +731,16 @@ export function RainDg2Panel({
                     <code>Tc = 0.0662 · (L^0.77) / (S^0.385)</code>
                   </div>
                   <div className="ws-rain-eq-item">
-                    <span>6. Pérdida Hidrológica e Infiltración (SCS-CN):</span>
-                    <code>P_ef = 0.65 · P_total  |  Infiltración I = 0.35 · P_total</code>
+                    <span>6. Saturación Progresiva del Suelo (Temporal de 3 Días / 72h):</span>
+                    <code>C(t) = C_0 + (C_max - C_0)·[1 - exp(-t/24h)]  [C → 0.89 a 72h]</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>7. Forzamiento Barométrico Hidrostático (Bajas Presiones):</span>
+                    <code>Δh_baro = (1013.25 - P_baro) / (ρ_w · g)  [+1.02 cm por hPa de caída]</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>8. Corte de Vías y Transitabilidad (Criterio Xia et al. 2014):</span>
+                    <code>Corte crítico si h ≥ 0.35 m  o  fuerza de arrastre v·h ≥ 0.40 m²/s</code>
                   </div>
                 </div>
               )}

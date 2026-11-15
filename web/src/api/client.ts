@@ -486,6 +486,7 @@ export interface FloodPrepareRequest {
     type: 'Polygon'
     coordinates: number[][][]
   }
+  pressure_hpa?: number
   rainfall_profile?: {
     interval_count: number
     seed: number
@@ -583,6 +584,13 @@ export interface FloodSimulateResponse {
     elevMaxM?: number
     waterLevelMinM?: number
     waterLevelMaxM?: number
+    stormDays?: number
+    pressureHpa?: number
+    baroSurgeCm?: number
+    saturationPct?: number
+    roadsTotalAffectedKm?: number
+    roadsCutKm?: number
+    roadsWarningKm?: number
     riskLevel?: string
     riskDescription?: string
   }

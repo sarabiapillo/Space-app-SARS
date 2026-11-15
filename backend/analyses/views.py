@@ -71,7 +71,8 @@ class FloodScenarioSimulateView(APIView):
 
     def post(self, request):
         try:
-            normalized = normalize_request(request.data)
+            data_to_normalize = {k: v for k, v in request.data.items() if k in ("rainfall", "roi")}
+            normalized = normalize_request(data_to_normalize)
         except InputValidationError as exc:
             return Response({"errors": exc.errors}, status=400)
 
@@ -81,10 +82,14 @@ class FloodScenarioSimulateView(APIView):
         rainfall_mm = amount_m * 1000.0
         duration_hours = max(0.1, duration_s / 3600.0)
         roi = normalized.get("roi")
+        try:
+            pressure_hpa = float(request.data.get("pressure_hpa", 1013.25))
+        except (ValueError, TypeError):
+            pressure_hpa = 1013.25
 
         try:
             from .simulate import compute_topographic_flood
-            result = compute_topographic_flood(roi, rainfall_mm, duration_hours)
+            result = compute_topographic_flood(roi, rainfall_mm, duration_hours, pressure_hpa=pressure_hpa)
             return Response(result, status=200)
         except Exception as exc:
             return Response(

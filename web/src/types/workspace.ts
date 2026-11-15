@@ -125,6 +125,9 @@ export interface FloodSimulationState {
   selectedZoneId: string
   rainfallAmount: number
   rainfallDuration: number
+  pressureHpa?: number
+  compareMode?: boolean
+  compareSwipePct?: number
   rasterUrl: string | null
   rasterBounds: [number, number, number, number] | null
   showRasterOnMap: boolean
@@ -132,6 +135,10 @@ export interface FloodSimulationState {
   stats?: {
     rainfallMm: number
     durationHours: number
+    stormDays?: number
+    pressureHpa?: number
+    baroSurgeCm?: number
+    saturationPct?: number
     totalVolumeM3: number
     effectiveVolumeM3?: number
     infiltratedVolumeM3?: number
@@ -154,6 +161,9 @@ export interface FloodSimulationState {
     elevMaxM?: number
     waterLevelMinM?: number
     waterLevelMaxM?: number
+    roadsTotalAffectedKm?: number
+    roadsCutKm?: number
+    roadsWarningKm?: number
     riskLevel?: string
     riskDescription?: string
   } | null

@@ -332,6 +332,7 @@ export function MapCanvas({
 
   const [swipePct, setSwipePct] = useState<number>(50)
   const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
+  const [isDraggingFloodSwipe, setIsDraggingFloodSwipe] = useState(false)
   const [manifestT1, setManifestT1] = useState<ExploreWebManifest | null>(null)
   const [manifestT2, setManifestT2] = useState<ExploreWebManifest | null>(null)
   const [colorizedT1Url, setColorizedT1Url] = useState<string>(NISAR_IMAGE_URL)
@@ -1190,7 +1191,9 @@ export function MapCanvas({
       [bounds[0], bounds[1]], // SW: [west, south]
     ]
 
-    const opacity = ((activeFlood.waterOpacity ?? 85) / 100) * 0.9
+    const opacity = activeFlood.compareMode
+      ? 0
+      : ((activeFlood.waterOpacity ?? 85) / 100) * 0.9
 
     const existingSource = map.getSource(FLOOD_CALC_SOURCE) as ImageSource | undefined
     if (existingSource) {
@@ -1231,6 +1234,7 @@ export function MapCanvas({
     activeFlood.rasterBounds,
     activeFlood.showRasterOnMap,
     activeFlood.waterOpacity,
+    activeFlood.compareMode,
   ])
 
   const handleFlyToZone = useCallback(
@@ -1480,6 +1484,61 @@ export function MapCanvas({
       window.removeEventListener('mouseup', onMouseUp)
     }
   }, [isDraggingSwipe, esquinasX, esquinasW])
+
+  // Deslizador comparativo interactivo: Inundación Simulada vs Terreno Original
+  const floodBounds = activeFlood.rasterBounds
+  const floodNW =
+    floodBounds && floodBounds.length === 4
+      ? projectLngLat([floodBounds[0], floodBounds[3]], viewport)
+      : [0, 0]
+  const floodSE =
+    floodBounds && floodBounds.length === 4
+      ? projectLngLat([floodBounds[2], floodBounds[1]], viewport)
+      : [0, 0]
+  const floodX = Math.min(floodNW[0], floodSE[0])
+  const floodY = Math.min(floodNW[1], floodSE[1])
+  const floodW = Math.max(1, Math.abs(floodSE[0] - floodNW[0]))
+  const floodH = Math.max(1, Math.abs(floodSE[1] - floodNW[1]))
+  const floodSwipePct = activeFlood.compareSwipePct ?? 50
+  const floodSwipeScreenX = floodX + (floodSwipePct / 100) * floodW
+
+  useEffect(() => {
+    if (!isDraggingFloodSwipe) return
+
+    const prevCursor = document.body.style.cursor
+    const prevSelect = document.body.style.userSelect
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+
+    const onMouseMove = (e: MouseEvent) => {
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const localX = e.clientX - rect.left
+      const ratio = ((localX - floodX) / Math.max(1, floodW)) * 100
+      const nextPct = Math.min(98, Math.max(2, Number(ratio.toFixed(1))))
+      if (onFloodChange) {
+        onFloodChange({
+          ...activeFlood,
+          compareSwipePct: nextPct,
+        })
+      }
+    }
+
+    const onMouseUp = () => {
+      setIsDraggingFloodSwipe(false)
+    }
+
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+
+    return () => {
+      document.body.style.cursor = prevCursor
+      document.body.style.userSelect = prevSelect
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [isDraggingFloodSwipe, floodX, floodW, activeFlood, onFloodChange])
 
   // Arrastre del cuadro flotante de herramientas de dibujo dentro del lienzo del mapa
   useEffect(() => {
@@ -2008,6 +2067,42 @@ export function MapCanvas({
             </g>
           )}
 
+          {/* Deslizador Comparativo: Inundación Simulada vs Terreno Original Base */}
+          {activeFlood.compareMode && activeFlood.rasterUrl && (
+            <g>
+              <defs>
+                <clipPath id="flood-compare-clip">
+                  <rect
+                    x={floodSwipeScreenX}
+                    y={floodY}
+                    width={Math.max(0, floodX + floodW - floodSwipeScreenX)}
+                    height={floodH}
+                  />
+                </clipPath>
+              </defs>
+              <image
+                href={activeFlood.rasterUrl}
+                x={floodX}
+                y={floodY}
+                width={floodW}
+                height={floodH}
+                preserveAspectRatio="none"
+                opacity={((activeFlood.waterOpacity ?? 85) / 100) * 0.95}
+                clipPath="url(#flood-compare-clip)"
+                style={{ pointerEvents: 'none' }}
+              />
+              <line
+                x1={floodSwipeScreenX}
+                y1={floodY}
+                x2={floodSwipeScreenX}
+                y2={floodY + floodH}
+                stroke="#00ffff"
+                strokeWidth={2.5}
+                strokeDasharray="none"
+              />
+            </g>
+          )}
+
           {/* Delimitación exacta del polígono ROI oficial de Chiapas (2687 × 5504 px a 10 m en EPSG:32615) */}
           <polygon
             points={NISAR_FOOTPRINT.map((pt) => projectLngLat(pt, viewport))
@@ -2361,6 +2456,44 @@ export function MapCanvas({
             <div className="swipe-handle-overlay__knob">↔</div>
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
               t2 · {escena.t2} ▶
+            </span>
+          </div>
+        )}
+
+        {/* Control interactivo sobre la ROI cuando está activo el Deslizador Comparativo de Inundación */}
+        {activeFlood.compareMode && activeFlood.rasterUrl && (
+          <div
+            className="swipe-handle-overlay swipe-handle-overlay--flood"
+            style={{
+              left: `${floodSwipeScreenX}px`,
+              top: `${Math.max(24, floodY)}px`,
+              height: `${Math.max(48, Math.min(viewport.height - 48, floodH))}px`,
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              setIsDraggingFloodSwipe(true)
+            }}
+            role="slider"
+            aria-label="Deslizador Comparativo Inundación vs Terreno Original"
+            aria-valuemin={2}
+            aria-valuemax={98}
+            aria-valuenow={Math.round(floodSwipePct)}
+            tabIndex={0}
+            title="Arrastra para comparar Terreno Original (izquierda) vs Inundación Simulada (derecha)"
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                onFloodChange?.({ ...activeFlood, compareSwipePct: Math.max(2, floodSwipePct - 5) })
+              } else if (e.key === 'ArrowRight') {
+                onFloodChange?.({ ...activeFlood, compareSwipePct: Math.min(98, floodSwipePct + 5) })
+              }
+            }}
+          >
+            <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--left">
+              ◀ Terreno Original
+            </span>
+            <div className="swipe-handle-overlay__knob">💧</div>
+            <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
+              Inundación ({activeFlood.stats?.stormDays ?? (Math.round(activeFlood.rainfallDuration / 24) || 3)}d · {activeFlood.rainfallAmount}mm) ▶
             </span>
           </div>
         )}
