@@ -59,6 +59,26 @@ conda activate nisar
 cd C:\terrapulse
 ```
 
+### Obtener los datos después de clonar
+
+`data/` no está en git, así que un repo recién clonado no tiene recortes. Los datos se generan desde el servidor de ASF:
+
+```
+conda activate nisar
+cd C:\terrapulse
+python -m pipeline.catalog
+python -m pipeline.download NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001 NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001
+```
+
+- `pipeline.catalog` va **primero**: `download` busca las escenas en `data/catalog/`. Sin catálogo falla con "No hay catálogos".
+- `pipeline.download` lee el `.h5` **directamente del servidor** y baja solo los bloques de la ROI (~230 MB por escena). **No hace falta descargar el `.h5` completo** (~7 GB).
+- Resultado: `data/raw/<scene_id>/` con 5 `.tif` y `scene.json` por escena. Tarda ~3–4 minutos y debe terminar con `COMPARABLE`. Los `scene_id` del par también están en `config.yaml → pair`.
+- Los valores de los píxeles, la malla y la cobertura salen idénticos para todo el equipo. En `scene.json` solo cambian la fecha de creación y, si se trabaja en otro commit, el `code_version`.
+- Para que `code_version` no termine en `-dirty`, ejecutarlo con el árbol de git limpio (`git status --short` sin salida).
+- Si ASF reprocesa una escena, su `scene_id` cambia y el comando no la encontrará: revisar el catálogo nuevo y no mezclar versiones (CRID).
+
+El `.h5` completo solo hace falta para `pipeline.etapa1` (inspección opcional, §5.3) o para trabajar sin internet con `--h5-local`. También se puede compartir la carpeta `data/raw/` (~460 MB) por fuera de git; cada `scene.json` conserva su procedencia.
+
 ## 5. Flujo
 
 ```
@@ -225,7 +245,7 @@ Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 28 casos (de 4
 
 ## 11. Limitaciones y pendientes
 
-- **`code_version` de los recortes actuales:** los cuatro recortes P05023 se generaron antes del commit del código, así que su `scene.json` dice `2123249-dirty`. Para trazabilidad completa, volver a ejecutar `pipeline.download` sobre el par (~3 min) y así registrar el commit `7274228` o posterior.
+- **`code_version` de los recortes:** el par T62 se regeneró el 2026-11-15 con el árbol limpio y registra `19de237`. Los recortes de respaldo (T55) y la escena P05036 conservan versiones anteriores con `-dirty`; regenerarlos si se van a usar.
 - **Mínimo de cobertura:** lo fija P3.
 - **Línea base para el z-score (Fase 2):** recortar más fechas de la pila T62 P05023 con `pipeline.download <scene_id>` (~1.5 min por fecha), cuando P2 diga cuántas necesita.
 - **Pila T156/F80:** su cobertura de la ROI no se ha verificado.
