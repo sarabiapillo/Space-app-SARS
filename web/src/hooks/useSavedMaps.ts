@@ -3,6 +3,7 @@ import {
   DANGER_CIRCLE_DEFAULT_LABEL,
   DEFAULT_SOLAR,
   ESCENA_CHIAPAS,
+  LEGACY_CIRCLE_LABELS,
   WARN_CIRCLE_DEFAULT_LABEL,
   createInitialCopies,
 } from '../mocks/initialWorkspaces'
@@ -41,8 +42,7 @@ function normalizeAnnotation(raw: unknown): MapAnnotation | null {
     const defaultLabel =
       a.kind === 'peligro' ? DANGER_CIRCLE_DEFAULT_LABEL : WARN_CIRCLE_DEFAULT_LABEL
     const rawLabel = typeof a.label === 'string' ? a.label.trim() : ''
-    const isLegacyGeneric =
-      rawLabel === '' || rawLabel === 'Zona de Peligro' || rawLabel === 'Zona de Advertencia'
+    const isLegacyGeneric = rawLabel === '' || LEGACY_CIRCLE_LABELS.includes(rawLabel)
     return {
       id: a.id,
       kind: a.kind,
@@ -61,7 +61,8 @@ function normalizeSolar(raw: unknown): SolarSimulationState {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SOLAR }
   const s = raw as Record<string, unknown>
   return {
-    enabled: typeof s.enabled === 'boolean' ? s.enabled : DEFAULT_SOLAR.enabled,
+    // El simulador solar no aplica a un radar activo (NISAR): siempre apagado, aunque se haya guardado encendido.
+    enabled: false,
     sunAngle: isNumber(s.sunAngle) ? Math.max(0, Math.min(180, s.sunAngle)) : DEFAULT_SOLAR.sunAngle,
     radiationIntensity: isNumber(s.radiationIntensity)
       ? Math.max(0, Math.min(100, s.radiationIntensity))

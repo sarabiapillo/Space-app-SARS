@@ -90,18 +90,6 @@ export interface C4RunJson {
     c1_layers_available: string[]
     masks_applied: string[]
     threshold_method: string
-    cumsum_forest_ref_db: number
-    lband_biomass_saturation_mg_ha: number
-  }
-  etapa1_roi_reference_stats: {
-    reference_scene_id: string
-    valid_pixels_in_roi: number
-    hhhh_gamma0_mean_db: number
-    hhhh_sigma0_mean_db: number
-    hvhv_gamma0_mean_db: number
-    hvhv_sigma0_mean_db: number
-    incidence_angle_mean_deg: number
-    valid_roi_coverage_pct: number
   }
   cogs: {
     t1_db: string
@@ -110,7 +98,8 @@ export interface C4RunJson {
     zscore: string
     change_mask: string
   }
-  code_version: string
+  /** null mientras no exista la corrida: no se inventa un commit. */
+  code_version: string | null
   isSyntheticMock: boolean
 }
 
@@ -147,7 +136,7 @@ export interface C4ChangeSummary {
   unit: 'dB (γ⁰/σ⁰)'
   status: 'exploratorio'
   c2_status: 'pendiente_en_data_processed'
-  created_at: string
+  created_at: string | null
   isSyntheticMock: boolean
 }
 
@@ -158,7 +147,7 @@ export interface C4ChangeDetail extends C4ChangeSummary {
 
 export interface C4ChangeReport {
   change_id: string
-  generated_at: string
+  generated_at: string | null
   title: string
   roi: C4Roi
   run: C4RunJson
@@ -167,7 +156,7 @@ export interface C4ChangeReport {
     observation: string
     inference: string
     what_delta_does_not_prove: string
-    handbook_reference: string
+    handbook_reference: string | null
   }
   isSyntheticMock: boolean
 }
@@ -324,7 +313,7 @@ export const MOCK_CHANGES: readonly C4ChangeSummary[] = Object.freeze([
     unit: 'dB (γ⁰/σ⁰)',
     status: 'exploratorio',
     c2_status: 'pendiente_en_data_processed',
-    created_at: '2026-11-15T02:43:39Z',
+    created_at: null,
     isSyntheticMock: true,
   },
   {
@@ -344,7 +333,7 @@ export const MOCK_CHANGES: readonly C4ChangeSummary[] = Object.freeze([
     unit: 'dB (γ⁰/σ⁰)',
     status: 'exploratorio',
     c2_status: 'pendiente_en_data_processed',
-    created_at: '2026-11-14T23:33:37Z',
+    created_at: null,
     isSyntheticMock: true,
   },
 ])
@@ -391,18 +380,6 @@ export function buildMockChangeDetail(changeId: string): C4ChangeDetail {
           'shadowMaskingApplied=False en GCOV original (aplicar con DEM en preprocess.py)',
         ],
         threshold_method: 'Pendiente de ejecución de preprocess.py y change.py (Contrato C2)',
-        cumsum_forest_ref_db: -13.0,
-        lband_biomass_saturation_mg_ha: 100,
-      },
-      etapa1_roi_reference_stats: {
-        reference_scene_id: RAW_SCENE_IDS.T62_POST_20261028,
-        valid_pixels_in_roi: 14699442,
-        hhhh_gamma0_mean_db: -8.06,
-        hhhh_sigma0_mean_db: -9.79,
-        hvhv_gamma0_mean_db: -13.5,
-        hvhv_sigma0_mean_db: -15.23,
-        incidence_angle_mean_deg: 43.89,
-        valid_roi_coverage_pct: base.roi_valid_pct ?? 99.59,
       },
       cogs: {
         t1_db: `/data/processed/${base.id}/t1_db.tif`,
@@ -411,7 +388,7 @@ export function buildMockChangeDetail(changeId: string): C4ChangeDetail {
         zscore: `/data/processed/${base.id}/zscore.tif`,
         change_mask: `/data/processed/${base.id}/change_mask.tif`,
       },
-      code_version: '19de237',
+      code_version: null,
       isSyntheticMock: true,
     },
     validation: {
@@ -441,7 +418,7 @@ export function buildMockChangeReport(changeId: string): C4ChangeReport {
   const detail = buildMockChangeDetail(changeId)
   return {
     change_id: detail.id,
-    generated_at: '2026-11-15T02:45:00Z',
+    generated_at: null,
     title: `Reporte Reproducible TerraPulse AI — ${detail.stack} (${detail.t1_date} → ${detail.t2_date})`,
     roi: MOCK_ROIS[0],
     run: detail.run,
@@ -450,11 +427,11 @@ export function buildMockChangeReport(changeId: string): C4ChangeReport {
       observation:
         'Recortes GCOV reales (Contrato C1 en data/raw/) en malla UTM EPSG:32615 a 10 × 10 m (2687 × 5504 px) con capas HHHH.tif, HVHV.tif, mask.tif, numberOfLooks.tif y rtcGammaToSigmaFactor.tif.',
       inference:
-        'Hipótesis física según NISAR Handbook (2025): caída especular HH/HV en agua abierta (N2O), doble rebote agua-tronco en HH para vegetación inundada (N2IV) o variación volumétrica del dosel en HV (anomalía CUMSUM).',
+        'Ninguna todavía: no hay mapa de cambio (C2) ni validación (C3), y el fenómeno de estudio aún no se ha decidido.',
       what_delta_does_not_prove:
         'Un cambio en retrodispersión Δγ⁰/Δσ⁰ describe un cambio en la respuesta radar, no identifica por sí solo la causa física. El mapa de cambio Δσ⁰ está pendiente de ejecución del Contrato C2 en data/processed/.',
-      handbook_reference:
-        'NISAR Science Users’ Handbook, 2nd Edition (Oct 2025), JPL / NASA-ISRO, DOI: 10.48577/jpl.UD4HV3 (§5.2–§5.3 GCOV & RTC Factor, §6.2–§6.4 Ecosystems & Inundation).',
+      // Sin cita hasta verificarla contra docs/ (referencia, sección y DOI).
+      handbook_reference: null,
     },
     isSyntheticMock: true,
   }

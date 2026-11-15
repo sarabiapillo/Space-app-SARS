@@ -55,7 +55,7 @@ export function ExploradorFeature({ activeStackId, onSelectStack }: ExploradorSt
         </div>
         <ul className="c1-layers-list">
           {C1_RAW_LAYERS.map((layer) => (
-            <li key={layer.id} className="c1-layers-item" title={layer.handbookRef}>
+            <li key={layer.id} className="c1-layers-item" title={layer.h5Path}>
               <code>{layer.archivo}</code>
               <span>{layer.descripcion}</span>
             </li>

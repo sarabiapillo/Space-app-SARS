@@ -113,6 +113,28 @@ new Chart(canvas, {
 
 Según la regla de interfaz del plan (§6), toda gráfica muestra unidad, fecha (`escena.fecha_inicio`) y fuente (`escena.granuleId`, `version_codigo`). Además lleva el aviso de "una sola fecha".
 
+### 4.1 Implementación aplicada en el panel (2026-11-15): ventana de dibujo
+
+La conversión de arriba (una categoría por bin) **no representaba la distribución**: el eje abarcaba de −38 a +30 dB porque solo se quitan los bins con 0 píxeles, y el 90 % de la masa (p5–p95) queda en ~11 dB, el **16 % del ancho**. En el sidebar (360 px) son ~0.48 px por bin, así que Chart.js además redondeaba y perdía bins.
+
+Reglas que usa ahora `web/src/components/Etapa1ChartsPanel.tsx` (los números siguen saliendo de `graficas.json`, sin recalcular nada):
+
+- **Ventana**: p0.2–p99.8 de la CDF, la misma regla que `pipeline/etapa1_figuras.histograms` (`ax.set_xlim(cdf 0.002, cdf 0.998)`), calculada con **todas** las series para que el eje no se mueva al cambiar de polarización. En el par T62 queda en [−24.0, 7.5] dB (31.5 dB en lugar de 68.4) y el pie declara el % de píxeles que queda fuera (0.46 %).
+- **Eje X lineal** con un punto por bin en su centro (`{x, y}`), dibujado como escalón (`stepped: 'middle'`), igual que `ax.step(..., where='mid')` de la figura C. Así el ancho del canvas no altera los valores y no hay reindexado a categorías.
+- **Referencias** con un plugin propio (sin dependencias nuevas): franja p5–p95 y líneas de media (sólida) y mediana (discontinua), como anota la figura C.
+- **Máscara**: eje 0–100 % con el valor numérico escrito sobre cada barra. Con 99.39 % válido, las categorías de 0.39 %, 0.22 % y 0.00 % son invisibles en la barra pero legibles en la etiqueta.
+- **Incidencia**: eje Y fijado al span real (0.4002° en 10 000 m). Con el eje desde 0 la curva parece plana.
+
+Verificación del cambio: `tsc -b` y `vite build` sin errores; el panel carga t1 y t2 sin errores de consola y declara las ventanas [−24.00, 7.20] dB (t1) y [−24.00, 7.50] dB (t2).
+
+**Revisión del mismo día, contra las figuras C, D y E:**
+
+- **Histograma**: ahora hay un panel por polarización con su propia ventana p0.2–p99.8, igual que la figura C (t2: HH [−18.7, 7.5] dB y HV [−24.0, −1.7] dB). La curva es negra, en escalón y sin relleno. Las referencias son rojas: media de los dB (sólida), mediana (discontinua) y **dB de la media lineal** (punteada, `dB_de_la_media`). La franja p5–p95 es azul claro. El título incluye `n` y la leyenda los valores. En el sidebar la leyenda va fuera del área de trazado para no tapar el pico. Los ticks son múltiplos de 5 dB.
+- **Máscara e incidencia**: siguen como barras/dona y línea. **No se pueden replicar las figuras D y E con `graficas.json`**, porque no contiene sus datos:
+  - `mascara_roi` solo guarda **4 porcentajes**. El mapa D necesita la malla de categorías (2687 × 5504 px). Esa malla está en `geotiff/mascara.tif`, pero no en el JSON.
+  - `incidencia_por_altura` solo guarda **21 medias** (una por capa de altura). El mapa E usa la malla 2-D `angulo` de la capa de 500 m, que `nisar_h5.read_incidence` lee del `.h5` pero **solo se dibuja en el PNG; no se guarda en ningún archivo**.
+  - Para replicarlas hace falta que P1 exporte esas mallas (ver §6 pendiente). Mostrar el PNG en la web no sirve: no se puede inspeccionar ni rastrear valor por valor.
+
 ## 5. Pendiente de decidir
 
 | Decisión | Quién |

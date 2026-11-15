@@ -3,6 +3,7 @@ import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { MapCanvas } from './components/MapCanvas'
 import { DuplicateMapModal } from './components/DuplicateMapModal'
+import { TeamLandingPage } from './components/TeamLandingPage'
 import { useSavedMaps } from './hooks/useSavedMaps'
 import {
   DEFAULT_SOLAR,
@@ -40,6 +41,7 @@ function App() {
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
   const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
+  const [teamPageOpen, setTeamPageOpen] = useState(false)
 
   // Controles de estación de trabajo científica compartidos entre Ribbon Bar y Lienzo
   const [exploreLayerId, setExploreLayerId] = useState<ExploreLayerId>('gamma0_HHHH_ml2_dB')
@@ -247,6 +249,7 @@ function App() {
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
         onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
+        onOpenTeamPage={() => setTeamPageOpen(true)}
       />
 
       <div className="app__body">
@@ -301,6 +304,8 @@ function App() {
           onCancel={closeModal}
         />
       )}
+
+      {teamPageOpen && <TeamLandingPage onClose={() => setTeamPageOpen(false)} />}
     </div>
   )
 }

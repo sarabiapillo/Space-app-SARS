@@ -2755,6 +2755,77 @@ button:disabled {
   gap: 4px;
 }
 
+/* ---------- Histograma por polarización (estilo de la figura C) ---------- */
+
+.ws-hist-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.ws-hist-panel {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ws-hist-panel__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  text-align: center;
+}
+
+.ws-hist-panel__plot {
+  position: relative;
+  border: 1px solid #0f172a;
+  background: #ffffff;
+}
+
+/* Fuera del área de trazado: en el sidebar (360 px) una leyenda flotante tapa el pico. */
+.ws-hist-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  column-gap: 8px;
+  margin: 0;
+  padding: 4px 6px;
+  list-style: none;
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: #0f172a;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.ws-hist-legend li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.ws-hist-legend__line {
+  display: inline-block;
+  width: 16px;
+  border-top: 1.5px solid #d62728;
+}
+
+.ws-hist-legend__line--dashed {
+  border-top-style: dashed;
+}
+
+.ws-hist-legend__line--dotted {
+  border-top-style: dotted;
+}
+
+.ws-hist-legend__band {
+  display: inline-block;
+  width: 16px;
+  height: 8px;
+  background: rgba(31, 119, 180, 0.12);
+  border: 1px solid rgba(31, 119, 180, 0.25);
+}
+
 /* ---------- Gráficas Etapa 1 en modo compacto dentro del Sidebar ---------- */
 
 .ws-charts-panel--compact {
@@ -2860,4 +2931,409 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+/* ---------- Acceso y Landing institucional del equipo (MonitosCH) ---------- */
+
+.ws-menubar__right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ws-menubar__team {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 8px 0 3px;
+  border: 1px solid #4b5563;
+  border-radius: 2px;
+  background: #1f2937;
+  color: #f3f4f6;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  transition: background-color 0.1s, border-color 0.1s;
+}
+
+.ws-menubar__team:hover {
+  background: #3399ff;
+  border-color: #3399ff;
+  color: #ffffff;
+}
+
+.ws-menubar__team-label {
+  white-space: nowrap;
+}
+
+/* Contenedor del emblema: reemplazable por `/monitosch-logo.png` en `web/public/`. */
+.team-logo-slot {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid #6b7280;
+  background: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.team-logo-slot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ws-menubar__team:hover .team-logo-slot {
+  border-color: #ffffff;
+}
+
+.team-landing {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+}
+
+.team-landing__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 32px;
+  padding: 0 12px;
+  background: #2b3038;
+  border-bottom: 1px solid #1f2937;
+  color: #f3f4f6;
+}
+
+.team-landing__bar-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.team-landing__back {
+  flex: 0 0 auto;
+  background: #3399ff;
+  border-color: #3399ff;
+  color: #ffffff;
+}
+
+.team-landing__back:hover {
+  background: #1a85ff;
+  border-color: #1a85ff;
+}
+
+.team-landing__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 16px 32px;
+}
+
+.team-landing__sheet {
+  max-width: 1080px;
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  box-shadow: var(--shadow-sm);
+}
+
+/* --- Hero --- */
+
+.team-landing__hero {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 22px;
+  padding: 24px;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+@media (max-width: 760px) {
+  .team-landing__hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.team-landing__hero-media {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Variante grande del mismo contenedor reemplazable (`team-logo-slot`). */
+.team-logo-slot--hero {
+  width: 100%;
+  max-width: 210px;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-color: #cbd5e1;
+  font-size: 26px;
+  letter-spacing: 0.06em;
+}
+
+.team-landing__logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.team-logo-slot--hero img {
+  object-fit: contain;
+}
+
+.team-landing__logo-fallback {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #cbd5e1;
+}
+
+.team-landing__logo-caption {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #64748b;
+  text-align: center;
+}
+
+.team-landing__hero-body {
+  min-width: 0;
+}
+
+.team-landing__eyebrow {
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #3399ff;
+}
+
+.team-landing__title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: #2b3038;
+}
+
+.team-landing__subtitle {
+  margin: 8px 0 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #1e293b;
+}
+
+.team-landing__creed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #1a5fa8;
+}
+
+.team-landing__creed svg {
+  flex: 0 0 auto;
+  color: #3399ff;
+}
+
+.team-landing__description {
+  margin: 12px 0 0;
+  max-width: 72ch;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #475569;
+}
+
+.team-landing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* --- Integrantes --- */
+
+.team-landing__section {
+  padding: 20px 24px;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.team-landing__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.team-landing__section-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #2b3038;
+}
+
+.team-landing__section-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.team-landing__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 900px) {
+  .team-landing__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .team-landing__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.team-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  transition: border-color 0.1s, background-color 0.1s;
+}
+
+.team-card:hover {
+  border-color: #3399ff;
+  background: #ffffff;
+}
+
+.team-card__avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 52px;
+  width: 52px;
+  height: 52px;
+  overflow: hidden;
+  border: 1px solid #bcd9f7;
+  background: #e8f2ff;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #1a5fa8;
+}
+
+.team-card__avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 18%;
+}
+
+.team-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.team-card__name {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #1e293b;
+}
+
+.team-card__role {
+  align-self: flex-start;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.team-card__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: #64748b;
+}
+
+/* --- Pie técnico --- */
+
+.team-landing__footer {
+  padding: 16px 24px;
+  background: #f8fafc;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: #475569;
+}
+
+.team-landing__footer p {
+  margin: 0 0 6px;
+}
+
+.team-landing__footer p:last-child {
+  margin-bottom: 0;
+}
+
+.team-landing__footer strong {
+  color: #2b3038;
+}
+
+.team-landing__footer code {
+  padding: 0 4px;
+  background: #e5e7eb;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #1e293b;
+}
+
+.team-landing__footer-note {
+  padding-left: 8px;
+  border-left: 2px solid #cbd5e1;
+  font-size: 10.5px;
+  color: #64748b;
 }

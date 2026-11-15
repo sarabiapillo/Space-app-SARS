@@ -9,20 +9,27 @@ import type {
 import { buildAnnotationsGeoJSON } from '../utils/geojson'
 
 /**
- * Etiquetas y tooltips oficiales basados en el NISAR Science Users' Handbook
- * (2nd Ed., Oct 2025, DOI: 10.48577/jpl.UD4HV3) y `docs/plan-de-trabajo.md` §6.
+ * Etiquetas de las anotaciones dibujadas a mano. Son marcas del usuario, no resultados: aún no
+ * hay mapa de cambio (C2) ni validación (C3), así que no pueden nombrar anomalías ni causas
+ * (AGENTS.md §2).
  */
-export const DANGER_CIRCLE_DEFAULT_LABEL =
-  'Hipótesis N2O / N2IV: Caída especular o Doble rebote HH'
+export const DANGER_CIRCLE_DEFAULT_LABEL = 'Zona marcada (rojo) · anotación manual'
 
 export const DANGER_CIRCLE_TOOLTIP =
-  'NISAR Science Users’ Handbook §6.4 (2025, DOI: 10.48577/jpl.UD4HV3): En agua abierta (OW) cae la retrodispersión HH/HV por reflexión especular; en vegetación inundada (IV) aumenta fuertemente HH y la razón HH/HV por doble rebote agua-tronco. Hipótesis exploratoria sujeta a validación independiente.'
+  'Círculo dibujado por el usuario. No es una detección ni un resultado del análisis.'
 
-export const WARN_CIRCLE_DEFAULT_LABEL =
-  'Anomalía CUMSUM L-HV (Umbral bosque -13 dB)'
+export const WARN_CIRCLE_DEFAULT_LABEL = 'Zona marcada (ámbar) · anotación manual'
 
 export const WARN_CIRCLE_TOOLTIP =
-  'NISAR Science Users’ Handbook §6.2–§6.3 (2025, DOI: 10.48577/jpl.UD4HV3): Variación en dispersión volumétrica del dosel en canal cruzado HV (umbral de referencia bosque -13 dB) o humedad superficial del suelo (modelo Oh et al., 1992); límite de saturación de biomasa L-Band en 100 Mg/ha.'
+  'Círculo dibujado por el usuario. No es una detección ni un resultado del análisis.'
+
+/** Etiquetas que versiones anteriores guardaron en localStorage y que afirmaban resultados inexistentes. */
+export const LEGACY_CIRCLE_LABELS: readonly string[] = [
+  'Zona de Peligro',
+  'Zona de Advertencia',
+  'Hipótesis N2O / N2IV: Caída especular o Doble rebote HH',
+  'Anomalía CUMSUM L-HV (Umbral bosque -13 dB)',
+]
 
 /** WKT oficial de la ROI en Chiapas (`pipeline/config.yaml` y `data/raw/<scene_id>/scene.json`). */
 export const CHIAPAS_ROI_WKT =
@@ -59,7 +66,8 @@ export interface C1LayerSpec {
   dtype: 'float32' | 'uint8'
   nodata: string
   descripcion: string
-  handbookRef: string
+  /** Ruta del dataset en el .h5 (`pipeline/nisar_h5.open_grid`). */
+  h5Path: string
 }
 
 /**
@@ -72,7 +80,7 @@ export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
     dtype: 'float32',
     nodata: 'NaN',
     descripcion: 'Potencia lineal γ⁰ co-polarizada HH (sin dB, sin máscara; 2687 × 5504 px a 10 m).',
-    handbookRef: 'NISAR Handbook §5.2 (GCOV Backscatter Covariance)',
+    h5Path: 'science/LSAR/GCOV/grids/frequencyA/HHHH',
   },
   {
     id: 'HVHV',
@@ -80,7 +88,7 @@ export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
     dtype: 'float32',
     nodata: 'NaN',
     descripcion: 'Potencia lineal γ⁰ polarización cruzada HV (sensible a volumen de dosel; sin dB).',
-    handbookRef: 'NISAR Handbook §6.2 (Forests & Biomass L-HV)',
+    h5Path: 'science/LSAR/GCOV/grids/frequencyA/HVHV',
   },
   {
     id: 'mask',
@@ -89,7 +97,7 @@ export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
     nodata: 'null',
     descripcion:
       'Máscara de validez original (0 = no válido, 255 = fuera de adquisición, otro = subfranja válida).',
-    handbookRef: 'NISAR Handbook §5.3 (GCOV Mask Layer)',
+    h5Path: 'science/LSAR/GCOV/grids/frequencyA/mask',
   },
   {
     id: 'numberOfLooks',
@@ -97,7 +105,7 @@ export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
     dtype: 'float32',
     nodata: 'NaN',
     descripcion: 'Número efectivo de looks radiométricos por celda en malla UTM EPSG:32615.',
-    handbookRef: 'NISAR Handbook §5.2 (Equivalent Number of Looks)',
+    h5Path: 'science/LSAR/GCOV/grids/frequencyA/numberOfLooks',
   },
   {
     id: 'rtcGammaToSigmaFactor',
@@ -106,7 +114,7 @@ export const C1_RAW_LAYERS: readonly C1LayerSpec[] = Object.freeze([
     nodata: 'NaN',
     descripcion:
       'Factor de conversión radiométrica (σ⁰ = γ⁰ · factor) entre retrodispersión corregida por terreno RTC (γ⁰) y elipsoidal (σ⁰).',
-    handbookRef: 'NISAR Handbook §5.3 (RTC Area Normalization Factor)',
+    h5Path: 'science/LSAR/GCOV/grids/frequencyA/rtcGammaToSigmaFactor',
   },
 ])
 
@@ -546,24 +554,9 @@ const DIA = 24 * 60 * MINUTO
 
 /** Copias iniciales de ejemplo si `localStorage` está vacío, posicionadas dentro de la ROI real. */
 export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
-  const c1Annotations: MapAnnotation[] = [
-    {
-      id: 'init-warn-malpaso',
-      kind: 'advertencia',
-      center: [-93.22, 16.81],
-      radiusKm: 3.4,
-      label: WARN_CIRCLE_DEFAULT_LABEL,
-    },
-  ]
-  const c2Annotations: MapAnnotation[] = [
-    {
-      id: 'init-danger-grijalva',
-      kind: 'peligro',
-      center: [-93.02, 16.73],
-      radiusKm: 3.8,
-      label: DANGER_CIRCLE_DEFAULT_LABEL,
-    },
-  ]
+  // Sin anotaciones precargadas: un círculo sobre Malpaso o el Grijalva sugería un hallazgo.
+  const c1Annotations: MapAnnotation[] = []
+  const c2Annotations: MapAnnotation[] = []
 
   return [
     {
