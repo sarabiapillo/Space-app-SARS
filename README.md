@@ -235,10 +235,10 @@ terrapulse/
 │   ├── config/
 │   ├── scenes/
 │   └── analyses/
-└── web/                 # Frontend (React + MapLibre), pendiente
+└── web/                 # Frontend React + TypeScript + Vite + MapLibre; API aún con mocks
 ```
 
-`pipeline/` no depende de Django, así que el procesamiento SAR se puede probar desde la terminal sin levantar el servidor.
+`pipeline/` no depende de Django, así que el procesamiento SAR se puede probar desde la terminal sin levantar el servidor. El [flujo propuesto de simulación DG2 no urbana](docs/flujo-dg2-simulacion-inundacion.tex) reutiliza ese frontend y propone evaluar LISFLOOD-FP como solver externo; todavía no hay simulación hidráulica implementada ni licencia del artefacto verificada.
 
 ## 11. Caso de estudio: ROI y escenas
 
