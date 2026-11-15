@@ -24,7 +24,7 @@ P1 **no** convierte a dB, no aplica máscaras ni calcula cambios: eso es de P2. 
 | Misma malla confirmada | ✅ |
 | Cobertura de la ROI medida | ✅ 99.57 % y 99.61 % |
 | Par anotado en `config.yaml` | ✅ |
-| Pruebas | ✅ 44 casos pasan con `pytest` (ver §9) |
+| Pruebas | ✅ 51 casos pasan con `pytest` (ver §9) |
 | Mínimo de cobertura aceptable | ⏳ Lo fija P3 |
 
 ## 3. Archivos de P1
@@ -39,8 +39,9 @@ P1 **no** convierte a dB, no aplica máscaras ni calcula cambios: eso es de P2. 
 | `pipeline/catalog.py` | CLI: consulta la fuente, agrupa en pilas y guarda el catálogo en JSON |
 | `pipeline/download.py` | CLI: recorta escenas del catálogo y compara el par |
 | `pipeline/nisar_h5.py` | Lectura por ventanas de los `.h5` NISAR (malla, ventana de la ROI, lectura por franjas, dB, multilook) |
-| `pipeline/etapa1.py`, `etapa1_figuras.py` | CLI de inspección de una escena local (figuras y valores de control) |
-| `pipeline/tests/test_sources.py`, `test_nisar_h5.py`, `test_subset.py` | Pruebas con datos sintéticos |
+| `pipeline/etapa1.py`, `etapa1_figuras.py` | CLI de inspección de una escena, local o remota (figuras, valores de control y capas web) |
+| `pipeline/web_export.py` | COG, PNG en Web Mercator y manifiesto `capas.json` para la interfaz web ([p1-etapa1-web.md](p1-etapa1-web.md)) |
+| `pipeline/tests/test_sources.py`, `test_nisar_h5.py`, `test_subset.py`, `test_etapa1.py` | Pruebas con datos sintéticos |
 
 `pipeline/compat.py` (comparabilidad) lo usa P1, pero es de P3.
 
@@ -77,7 +78,7 @@ python -m pipeline.download NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T
 - Para que `code_version` no termine en `-dirty`, ejecutarlo con el árbol de git limpio (`git status --short` sin salida).
 - Si ASF reprocesa una escena, su `scene_id` cambia y el comando no la encontrará: revisar el catálogo nuevo y no mezclar versiones (CRID).
 
-El `.h5` completo solo hace falta para `pipeline.etapa1` (inspección opcional, §5.3) o para trabajar sin internet con `--h5-local`. También se puede compartir la carpeta `data/raw/` (~460 MB) por fuera de git; cada `scene.json` conserva su procedencia.
+El `.h5` completo solo hace falta para la vista general de `pipeline.etapa1` (figura A, §5.3) o para trabajar sin internet con `--h5-local`. El resto de la inspección también se hace en remoto. También se puede compartir la carpeta `data/raw/` (~460 MB) por fuera de git; cada `scene.json` conserva su procedencia.
 
 ## 5. Flujo
 
@@ -89,7 +90,7 @@ config.yaml ──► pipeline.catalog ──► data/catalog/*.json
                                           │                    (5 .tif + scene.json)
                                           └─► comparación del par (COMPARABLE / NO COMPARABLE)
 
-.h5 local ──► pipeline.etapa1 ──► data/explore/<granuleId>/   (opcional, inspección)
+.h5 (local o remoto) ──► pipeline.etapa1 ──► data/explore/<granuleId>/   (inspección + web/)
 ```
 
 Diagrama detallado: artefacto "Flujo de datos P1" (privado, compartido desde la página).
@@ -142,10 +143,11 @@ Volver a ejecutar sobre la misma escena reescribe las capas y actualiza `scene.j
 ### 5.3 Inspección: `python -m pipeline.etapa1`
 
 ```
+python -m pipeline.etapa1 <scene_id> [--escala-web VMIN VMAX]          # remoto: solo la ROI
 python -m pipeline.etapa1 "H5 FILES\archivo.h5" [--sin-vista] [--sin-figuras]
 ```
 
-Solo con archivos locales. Escribe en `data/explore/<granuleId>/`: `metadatos.json`, `LEEME_validacion.txt` (comprobaciones a mano con sus valores), `geotiff/` (γ⁰, σ⁰, dB con multilook 2×2, máscara, factor, looks), `figuras/` y `control/` (píxeles y bloques elegidos con semilla fija). `--sin-vista` omite la vista general, que obliga a leer la escena completa.
+Acepta un `.h5` local o un `scene_id` del catálogo (lectura remota, con verificación de identidad). Escribe en `data/explore/<granuleId>/`: `metadatos.json`, `LEEME_validacion.txt` (comprobaciones a mano con sus valores), `geotiff/` (γ⁰, σ⁰, dB con multilook 2×2, máscara, factor, looks), `figuras/` y `control/` (píxeles y bloques elegidos con semilla fija). `--sin-vista` omite la vista general, que obliga a leer la escena completa; en remoto se omite siempre, salvo con `--vista-remota`. También escribe `web/` (COG, PNG en EPSG:3857 y `capas.json`) para la interfaz web. Detalle completo: [p1-etapa1-web.md](p1-etapa1-web.md). Guía paso a paso para el equipo: [guia-capas-web.md](guia-capas-web.md).
 
 ## 6. Contrato C1 (lo que recibe P2)
 
@@ -223,13 +225,14 @@ Catálogo del 2026-11-14 (`data/catalog/catalog_asf_GCOV_20261114T231456Z.json`)
 pytest
 ```
 
-Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 28 casos (de 44 en total):
+Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 35 casos (de 51 en total):
 
 | Archivo | Funciones de prueba | Qué cubre |
 |---|---|---|
 | `test_sources.py` | 4 | Normalización de resultados de ASF a `SceneMeta` |
 | `test_nisar_h5.py` | 17 | Malla, ventana de la ROI, lectura por franjas, potencia, dB, multilook, estadísticas |
-| `test_subset.py` | 7 | El recorte copia valores exactos y la georreferencia; cobertura sobre el polígono; rechazo por identidad y por capa inexistente; acumulación de capas en `scene.json`; detección de mallas desplazadas; ruta local de `ASFSource` |
+| `test_subset.py` | 9 | El recorte copia valores exactos y la georreferencia; cobertura sobre el polígono; rechazo por identidad y por capa inexistente; acumulación de capas en `scene.json`; detección de mallas desplazadas; ruta local de `ASFSource`; credenciales del `.env` |
+| `test_etapa1.py` | 5 | `etapa1` local y remoto (valores idénticos, procedencia, identidad), capas web (COG = GeoTIFF, PNG con transparencia, esquinas, escala fija) |
 
 ## 10. Problemas frecuentes
 
@@ -251,4 +254,4 @@ Todas usan HDF5 **sintéticos** y no necesitan red. Las de P1 son 28 casos (de 4
 - **Pila T156/F80:** su cobertura de la ROI no se ha verificado.
 - **Antes del evento:** volver a correr `pipeline.catalog` por si aparecen fechas nuevas (por ejemplo, T62 P05036 para emparejar la escena del 2026-10-28).
 - **Advertencias del producto** que P2 debe atender: sin corrección de ruido (`noiseCorrectionApplied = False`), sin máscara de sombra/layover (`shadowMaskingApplied = False`), potencias con mantisa de 16 bits (~5 cifras significativas). Productos PROVISIONAL: calibrados y parcialmente validados, no completamente validados.
-- `etapa1.py` solo trabaja con archivos locales.
+- `etapa1.py` en remoto no genera la vista general (figura A) salvo con `--vista-remota`.
