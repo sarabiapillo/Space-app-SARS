@@ -1,6 +1,6 @@
 # Gráficas de la Etapa 1 en la web (Chart.js) y en la base de datos — propuesta de P1
 
-Estado: **la parte de P1 está hecha; lo demás es una propuesta** para que la acepten o cambien P4, P5 y P6 (contrato nuevo, ver `docs/plan-de-trabajo.md` §3). Fecha: 2026-11-15.
+Estado: **hechos la exportación (P1) y el guardado en la base (§3, revisión pendiente de P4)**; API de gráficas implementada ([api.md](api.md)); Chart.js en el frontend es propuesta para P5 y P6 (contrato nuevo, ver `docs/plan-de-trabajo.md` §3). Fecha: 2026-11-15.
 
 ## 1. Qué cambió en P1
 
@@ -53,28 +53,42 @@ Reglas del formato:
 - Se quitan los bins vacíos de los extremos, sin perder ningún conteo: `sum(conteos) == total_en_rango`. Los píxeles fuera de −60…30 dB se cuentan en `fuera_de_rango`.
 - No lleva colores ni opciones de Chart.js. El formato es independiente de la librería. La presentación la decide el frontend.
 
-## 3. Propuesta para P4 (base de datos y API)
+## 3. Guardado en la base de datos (P4) — implementado el 2026-11-15
 
-Modelo en `backend/scenes/` (o en una app nueva), una fila por gráfica:
+> Se implementó a pedido del equipo, aunque `backend/**` es de P4. P4 debe revisarlo antes del merge.
 
-```python
-class SceneChart(models.Model):
-    scene = models.ForeignKey(Scene, on_delete=models.CASCADE, related_name="charts")
-    chart_id = models.CharField(max_length=64)          # "histograma_gamma0_dB", …
-    format_version = models.CharField(max_length=32)    # "graficas-etapa1-1"
-    data = models.JSONField()                           # la entrada completa de "graficas"
-    code_version = models.CharField(max_length=64)
-    source_file = models.CharField(max_length=512)      # ruta de graficas.json (trazabilidad)
-    created_at = models.DateTimeField(auto_now_add=True)
+**Modelos** (`backend/scenes/models.py`, migración `scenes/0001_initial`):
 
-    class Meta:
-        unique_together = ("scene", "chart_id", "code_version")
+| Modelo | Qué guarda | Clave |
+|---|---|---|
+| `ROI` | Nombre y polígono (EPSG:4326) | Se reutiliza si la geometría es igual |
+| `Scene` | granuleId, producto, trayectoria, marco, dirección, polarizaciones, frecuencia, CRID, madurez (del catálogo), fecha de inicio y huella (`boundingPolygon` del `.h5`, en 2D) | `name` (granuleId) único |
+| `SceneInspection` | Una corrida de `etapa1`: versión del código, fecha, % válido en la ROI, `estadisticas_roi`, procedencia, advertencias y carpeta de origen | Única por (escena, versión del código) |
+| `SceneChart` | Una entrada de `graficas.json` **tal cual** en `data` (`jsonb`), con `chart_id`, versión del formato y archivo de origen | Única por (inspección, `chart_id`) |
+
+**Carga** (desde `backend/`, con PostGIS levantado):
+
+```
+python manage.py migrate
+python manage.py load_explore <granuleId> [<granuleId> ...]
+python manage.py load_explore --todas            # todas las carpetas de data/explore/
 ```
 
-- `JSONField` usa `jsonb` en PostgreSQL. Un histograma pesa unos pocos KB por polarización, así que no hace falta una tabla por bin.
-- **Carga:** `python manage.py load_explore <granuleId>` lee `graficas.json` y crea o actualiza `Scene` y `SceneChart`. Es el mismo patrón que `load_run`. Django no llama a `etapa1`.
-- **Re-ejecución:** con `unique_together` sobre `code_version`, una corrida con código nuevo agrega filas y conserva las anteriores. P4 decide si prefiere sobrescribir.
-- **Endpoint:** `GET /api/scenes/{id}/charts` y `GET /api/scenes/{id}/charts/{chart_id}` devuelven `data` tal cual, más `code_version` y `source_file`. Se documenta en `docs/api.md` (C4).
+- Lee `metadatos.json` y `graficas.json`. No abre los `.h5` ni llama al pipeline.
+- **Misma versión del código:** reemplaza la inspección y sus gráficas. **Otra versión:** agrega una inspección nueva y conserva las anteriores.
+- Se detiene sin guardar nada (transacción) en estos casos:
+  - falta `graficas.json` (carpetas anteriores al 2026-11-15);
+  - las gráficas son de otra escena;
+  - `graficas.json` y `metadatos.json` son de corridas distintas (otra versión del código);
+  - el formato no es conocido.
+- Una carga local (sin catálogo) no borra una madurez ya conocida, y la madurez nunca se deduce del CRID.
+- Las tablas se pueden ver en el panel `/admin/`.
+
+**Verificación:**
+- **Pruebas:** `python manage.py test scenes` corre 9 pruebas con salidas sintéticas sobre PostGIS.
+- **Datos reales:** se cargó la salida real de `etapa1` de 2026-06-18. Escena T62/F10 ASCENDING, HH+HV, P05023 PROVISIONAL, 99.574 % válido. Las 3 gráficas pesan 8.3 KB, 0.8 KB y 1.1 KB, y el histograma HH suma los 14 694 370 píxeles válidos.
+
+**API (P4):** `GET /api/scenes/{scene_id}/charts` y `GET /api/scenes/{scene_id}/charts/{chart_id}` ya están implementados; ver [api.md](api.md). `ChangeResult` y `load_run` esperan a que P2 produzca C2. Crear la base en Docker: [bd-docker.md](bd-docker.md).
 
 ## 4. Propuesta para P5 / P6 (Chart.js)
 
@@ -104,5 +118,5 @@ Según la regla de interfaz del plan (§6), toda gráfica muestra unidad, fecha 
 | Decisión | Quién |
 |---|---|
 | Aprobar Chart.js como la librería única de gráficas | P5 (elige) y P6 (aprueba) |
-| Aceptar o cambiar el formato de `graficas.json` y el modelo `SceneChart` | P4, P5 |
-| ¿Se conservan las filas de corridas anteriores o se sobrescriben? | P4 |
+| Aceptar o cambiar el formato de `graficas.json` y los modelos de §3 | P4, P5 |
+| ¿Conservar las inspecciones de versiones anteriores del código (hoy sí) o sobrescribirlas? | P4 |
