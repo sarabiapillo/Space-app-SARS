@@ -1,0 +1,90 @@
+import type { GeoJSONFeatureCollection } from '../utils/geojson'
+
+/**
+ * Tipos del espacio de trabajo de mapas de TerraPulse AI.
+ */
+
+/** Carpetas disponibles para organizar las copias editables. */
+export type Carpeta = 'Mis Análisis' | 'Zonas de Riesgo'
+
+export const CARPETAS: readonly Carpeta[] = ['Mis Análisis', 'Zonas de Riesgo']
+
+/** Coordenada geográfica en el orden que usa MapLibre: [longitud, latitud] (EPSG:4326). */
+export type LngLat = [number, number]
+
+/** Las cuatro esquinas de una imagen georreferenciada: sup-izq, sup-der, inf-der, inf-izq. */
+export type Footprint = [LngLat, LngLat, LngLat, LngLat]
+
+/** Modo de visualización en la cabecera. */
+export type ViewMode = 'general' | 'editado'
+
+/** Herramientas de la barra flotante inferior en "Mapa Editado". */
+export type DrawTool = 'mover' | 'lapiz' | 'peligro' | 'advertencia' | 'poligono' | 'etiqueta'
+
+/** Figura o anotación dibujada por el usuario sobre una copia del mapa. */
+export type MapAnnotation =
+  | {
+      id: string
+      kind: 'lapiz'
+      points: LngLat[]
+    }
+  | {
+      id: string
+      kind: 'peligro' | 'advertencia'
+      center: LngLat
+      radiusKm: number
+      label: string
+    }
+  | {
+      id: string
+      kind: 'etiqueta'
+      position: LngLat
+      text: string
+    }
+
+/** Configuración de la Simulación Solar guardada por cada mapa. */
+export interface SolarSimulationState {
+  /** Si el panel y el efecto térmico están visibles/activos. */
+  enabled: boolean
+  /** Ángulo solar de 0° (06:00 Este) a 180° (18:00 Oeste). 90° = 12:00. */
+  sunAngle: number
+  /** Intensidad de calor / radiación proyectada (0 a 100%). */
+  radiationIntensity: number
+}
+
+/** Metadatos de la escena NISAR asociada al mapa. */
+export interface EscenaNisar {
+  granuleId: string
+  epsg: number
+  banda: string
+  fuente: string
+}
+
+export interface WorkspaceMap {
+  id: string
+  nombre: string
+  /** `null` solo para el Mapa General. */
+  carpeta: Carpeta | null
+  /** Fecha ISO 8601 de la última modificación. */
+  fechaModificacion: string
+  esEditable: boolean
+  /** Opacidad de la capa SAR superpuesta, de 0 a 100. */
+  opacidadSar: number
+  centro: LngLat
+  zoom: number
+  escena: EscenaNisar
+  /** Dibujos guardados en esta copia (lápiz, círculos, etiquetas). */
+  annotations: MapAnnotation[]
+  /** Colección GeoJSON de las figuras de esta copia persistida en `localStorage`. */
+  geojson: GeoJSONFeatureCollection
+  /** Polígono activo de recorte si el usuario aplicó "Recortar región". */
+  croppedRegion: LngLat[] | null
+  /** Configuración del Simulador Solar para esta copia. */
+  solar: SolarSimulationState
+}
+
+/** Vista de cámara del mapa. */
+export interface MapView {
+  centro: LngLat
+  zoom: number
+}
