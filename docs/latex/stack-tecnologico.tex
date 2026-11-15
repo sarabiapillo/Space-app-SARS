@@ -1,0 +1,283 @@
+% Versión LaTeX de docs/stack-tecnologico.md (2026-11-15). La fuente es el .md: si cambia, actualizar aquí.
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+
+\title{Stack tecnológico, arquitectura y recursos}
+\author{TerraPulse AI}
+\date{15 de noviembre de 2026 --- según el código de la rama \texttt{ETAPA-1}}
+
+\begin{document}
+\maketitle
+
+Resumen para el equipo. Las versiones son las del entorno \texttt{nisar} (\path{environment.yml}); los enlaces se
+comprobaron el 2026-11-15. Reglas del proyecto en \texttt{AGENTS.md}; API en \path{docs/api.md}; base de datos en
+\path{docs/bd-docker.md}.
+
+\tableofcontents
+
+% ---------------------------------------------------------------------------------------------
+\section{Vista general}
+
+\begin{lstlisting}
+ NASA / ASF (nube)          pipeline/ (Python puro)          backend/ (Django)          web/ (React)
++----------------------+   +---------------------------+   +----------------------+   +----------------+
+| ASF Search API       |-->| catalog.py  (pilas, pares)|   | load_explore         |   | Explorador     |
+| Earthdata Login      |   | download.py (recorte ROI) |-->|  Models  (PostGIS)   |-->| Comparador     |
+| .h5 NISAR por HTTPS  |-->| etapa1.py   (inspeccion)  |   |  Serializers (DRF)   |   | MapLibre +     |
+| (lectura por bloques)|   | graficas_datos/web_export |   |  Views -> /api/...   |   | Chart.js       |
++----------------------+   +---------------------------+   +----------------------+   +----------------+
+     asf_search,                escribe JSON y COG             lee data/ y sirve           consume la API
+     earthaccess, h5py          en data/                       JSON por REST               (JSON)
+\end{lstlisting}
+
+\textbf{Regla de arquitectura} (AGENTS.md §8): \path{pipeline/} no depende de Django.
+\begin{itemize}
+  \item El pipeline escribe archivos en \path{data/}. Django los carga en la base y los sirve; nunca abre un \texttt{.h5}.
+  \item Así el procesamiento SAR se prueba desde la terminal, sin servidor.
+\end{itemize}
+
+% ---------------------------------------------------------------------------------------------
+\section{Librerías de Python que usa el código}
+
+\subsection{Datos NISAR y geoespacial (\texttt{pipeline/})}
+
+\begin{longtable}{p{0.15\linewidth}p{0.10\linewidth}p{0.38\linewidth}p{0.29\linewidth}}
+\toprule
+\textbf{Librería} & \textbf{Versión} & \textbf{Para qué la usamos} & \textbf{Dónde} \\
+\midrule
+\endhead
+\textbf{h5py} & 3.16.0 (HDF5 2.2.0) & Leer los \texttt{.h5} de NISAR por ventanas, locales o remotos. Es la única vía: el GDAL del entorno no trae drivers HDF5/NISAR & \path{nisar_h5.py}, \path{sources/subset.py}, \path{sources/asf.py}, \path{etapa1.py} \\
+\textbf{NumPy} & 2.4.6 & Potencia, dB ($10\log_{10}$), multilook, máscaras, estadísticas, histogramas & casi todo \path{pipeline/} \\
+\textbf{rasterio} (sobre GDAL 3.12.3) & 1.4.4 & Escribir GeoTIFF y COG, reproyectar a EPSG:3857 y escribir los PNG web & \path{sources/subset.py}, \path{etapa1.py}, \path{web_export.py}, \path{nisar_h5.py} \\
+\textbf{Shapely} & 2.2.0 & Geometría de la ROI (WKT \flecha{} polígono) y su intersección con la malla & \path{nisar_h5.py} \\
+\textbf{pyproj} & 3.7.2 & Transformar la ROI de EPSG:4326 al UTM del producto (EPSG:32615) y de vuelta & \path{nisar_h5.py} \\
+\textbf{matplotlib} & 3.11.2 & Figuras PNG de inspección (A--E). Se importa solo si se piden figuras & \path{etapa1_figuras.py} \\
+\bottomrule
+\end{longtable}
+
+Documentación: \url{https://docs.h5py.org/} \textperiodcentered{} \url{https://numpy.org/doc/} \textperiodcentered{}
+\url{https://rasterio.readthedocs.io/} \textperiodcentered{} \url{https://gdal.org/} \textperiodcentered{}
+\url{https://shapely.readthedocs.io/} \textperiodcentered{} \url{https://pyproj4.github.io/pyproj/} \textperiodcentered{}
+\url{https://matplotlib.org/}
+
+\subsection{Acceso a datos de la NASA (\texttt{pipeline/sources/})}
+
+\begin{longtable}{p{0.15\linewidth}p{0.10\linewidth}p{0.42\linewidth}p{0.25\linewidth}}
+\toprule
+\textbf{Librería} & \textbf{Versión} & \textbf{Para qué} & \textbf{Dónde} \\
+\midrule
+\endhead
+\textbf{asf\_search} & 14.1.0 & Consultar el catálogo de ASF: productos GCOV que intersectan la ROI, con trayectoria, marco, CRID y madurez & \path{sources/asf.py} \\
+\textbf{earthaccess} & 0.17.0 & Iniciar sesión en Earthdata Login (\texttt{.env} o \texttt{.netrc}) y obtener una sesión HTTPS autenticada & \path{sources/asf.py} \\
+\textbf{fsspec} & 2026.9.0 & Viene con earthaccess. Abre el \texttt{.h5} remoto como si fuera un archivo y pide solo los bytes de la ROI (bloques de 8\,MiB) & indirecto, vía \path{earthaccess.get_fsspec_https_session()} \\
+\bottomrule
+\end{longtable}
+
+Documentación: \url{https://docs.asf.alaska.edu/asf_search/basics/} \textperiodcentered{}
+\url{https://earthaccess.readthedocs.io/} \textperiodcentered{} \url{https://filesystem-spec.readthedocs.io/}
+
+\subsection{Backend y base de datos (\texttt{backend/})}
+
+\begin{longtable}{p{0.22\linewidth}p{0.16\linewidth}p{0.54\linewidth}}
+\toprule
+\textbf{Librería} & \textbf{Versión} & \textbf{Para qué} \\
+\midrule
+\endhead
+\textbf{Django} & 5.2.19 & Framework web: modelos, migraciones, comandos de gestión (\path{load_explore}), panel \path{/admin/} \\
+\textbf{GeoDjango} (\path{django.contrib.gis}) & incluido en Django & Campos geométricos (\texttt{PolygonField}) y consultas espaciales (\path{footprint__intersects}) sobre PostGIS \\
+\textbf{Django REST Framework} & 3.18.3 & Serializers y vistas de la API JSON (\path{/api/...}) \\
+\textbf{psycopg} & 3.3.8 & Driver de PostgreSQL para Django \\
+\textbf{PostgreSQL 16 + PostGIS 3.4} & imagen \path{postgis/postgis:16-3.4} & Base de datos con tipos y funciones espaciales \\
+\bottomrule
+\end{longtable}
+
+Documentación: \url{https://docs.djangoproject.com/en/5.2/} \textperiodcentered{}
+\url{https://docs.djangoproject.com/en/5.2/ref/contrib/gis/} \textperiodcentered{}
+\url{https://www.django-rest-framework.org/} \textperiodcentered{} \url{https://www.psycopg.org/psycopg3/docs/} \textperiodcentered{}
+\url{https://postgis.net/documentation/}
+
+\subsection{Utilidades y pruebas}
+
+\begin{longtable}{p{0.20\linewidth}p{0.10\linewidth}p{0.62\linewidth}}
+\toprule
+\textbf{Librería} & \textbf{Versión} & \textbf{Para qué} \\
+\midrule
+\endhead
+\textbf{PyYAML} & 6.0.3 & Leer \path{pipeline/config.yaml} (ROI, comparabilidad, par de trabajo) \\
+\textbf{python-dotenv} & --- & Cargar \texttt{.env} (credenciales de Earthdata y de la base) sin escribirlas en el código \\
+\textbf{pytest} & 9.2.0 & 53 pruebas del pipeline con HDF5 sintéticos (\texttt{pytest}) \\
+\texttt{unittest} de Django & --- & 16 pruebas del backend sobre PostGIS (\path{python manage.py test scenes}) \\
+\bottomrule
+\end{longtable}
+
+Documentación: \url{https://pyyaml.org/wiki/PyYAMLDocumentation} \textperiodcentered{}
+\url{https://pypi.org/project/python-dotenv/} \textperiodcentered{} \url{https://docs.pytest.org/}
+
+\subsection{Instaladas pero aún sin uso en el código}
+
+\begin{longtable}{p{0.22\linewidth}p{0.70\linewidth}}
+\toprule
+\textbf{Librería} & \textbf{Plan} \\
+\midrule
+\endhead
+\textbf{xarray / rioxarray} & Posible uso en \path{preprocess.py} / \path{change.py} (P2) para pilas de fechas. \url{https://docs.xarray.dev/} \\
+\textbf{geopandas} & Posible uso con capas vectoriales auxiliares (P3) \\
+\textbf{Celery + Redis} & Tareas en segundo plano, solo si el tiempo de cómputo lo justifica (plan, Fase 2). \url{https://docs.celeryq.dev/} \\
+\bottomrule
+\end{longtable}
+
+\subsection{Frontend (no es Python; como referencia)}
+
+\begin{longtable}{p{0.26\linewidth}p{0.30\linewidth}p{0.36\linewidth}}
+\toprule
+\textbf{Herramienta} & \textbf{Uso} & \textbf{Documentación} \\
+\midrule
+\endhead
+React + TypeScript + Vite & Aplicación web (P5) & \url{https://react.dev/} \url{https://vite.dev/} \\
+MapLibre GL JS & Mapa, ROI y capas PNG/COG & \url{https://maplibre.org/maplibre-gl-js/docs/} \\
+Chart.js & Gráficas (\textbf{propuesta}, pendiente de aprobación de P5/P6) & \url{https://www.chartjs.org/docs/latest/} \\
+TiTiler & Servir los COG como teselas (contrato C5, P6) & \url{https://developmentseed.org/titiler/} \\
+Formato COG & GeoTIFF optimizado para la nube & \url{https://cogeo.org/} \\
+\bottomrule
+\end{longtable}
+
+% ---------------------------------------------------------------------------------------------
+\section{Arquitectura: el patrón MVC en el proyecto}
+
+\textbf{MVC} (Modelo--Vista--Controlador) separa los \textbf{datos} (Modelo), la \textbf{presentación} (Vista) y la
+\textbf{lógica que los conecta} (Controlador). Django usa una variante llamada \textbf{MTV} (Modelo--Template--Vista):
+\begin{itemize}
+  \item la \emph{View} de Django hace de controlador;
+  \item el \emph{Template} hace de vista.
+\end{itemize}
+
+Como el proyecto es una \textbf{API JSON con un frontend aparte}, no usamos templates. La capa de presentación es React, y la
+``vista'' de Django devuelve JSON.
+
+\begin{longtable}{p{0.20\linewidth}p{0.47\linewidth}p{0.25\linewidth}}
+\toprule
+\textbf{Capa MVC} & \textbf{En TerraPulse} & \textbf{Archivos} \\
+\midrule
+\endhead
+\textbf{Modelo} (datos y reglas) & Modelos de Django sobre PostGIS: \texttt{ROI}, \texttt{Scene}, \texttt{SceneInspection}, \texttt{SceneChart}. Definen tablas, tipos espaciales y restricciones (una inspección por escena y versión del código) & \path{backend/scenes/models.py}, \path{migrations/} \\
+\textbf{Controlador} (recibe la petición y decide) & \emph{Views} de DRF: validan filtros (\texttt{track}, \texttt{maturity}\dots), consultan los modelos y devuelven 200/400/404. \path{urls.py} dirige cada ruta a su vista & \path{backend/scenes/views.py}, \path{urls.py}, \path{config/urls.py} \\
+\textbf{Vista} (presentación) & Dos niveles. \textbf{Serializers:} convierten los modelos a JSON con los nombres del contrato C4. \textbf{React + MapLibre + Chart.js:} dibujan ese JSON & \path{backend/scenes/serializers.py}, \path{web/src/} \\
+\bottomrule
+\end{longtable}
+
+Otras piezas que no son MVC, pero que hay que conocer:
+
+\begin{itemize}
+  \item \textbf{Comando de carga} (\path{load_explore}): es la entrada de datos. Lee los JSON del pipeline y escribe en los modelos dentro de una transacción.
+  \item \textbf{Patrón puerto--adaptador en \path{pipeline/sources/}:} \path{base.py} define el contrato \texttt{DataSource} / \texttt{SceneMeta}, y \path{asf.py} lo implementa para ASF. El resto del pipeline no importa \path{asf_search}, así que para cambiar de fuente basta crear otro módulo y cambiar \texttt{source:} en \path{config.yaml}.
+  \item \textbf{Contratos entre equipos} (C1--C5, \emph{Plan de trabajo} §3): formatos de archivo y de API acordados. Permiten que cada rol trabaje con datos simulados sin esperar a los demás.
+\end{itemize}
+
+Recorrido de una petición:
+
+\begin{lstlisting}
+GET /api/scenes/{id}/charts
+  -> config/urls.py -> scenes/urls.py          (ruta)
+  -> views.SceneCharts.get()                   (controlador: escena e inspeccion mas reciente)
+  -> models.SceneInspection / SceneChart       (modelo: consulta a PostGIS)
+  -> serializers.ChartSerializer               (vista: JSON)
+  -> web/src/api/client.ts -> Chart.js         (presentacion)
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------------------------
+\section{APIs y servicios}
+
+\subsection{Externas (NASA / ASF) que consume el pipeline}
+
+\begin{longtable}{p{0.24\linewidth}p{0.46\linewidth}p{0.22\linewidth}}
+\toprule
+\textbf{Servicio} & \textbf{Cómo lo usamos} & \textbf{Autenticación} \\
+\midrule
+\endhead
+\textbf{ASF Search API} (vía \path{asf_search}) & \path{python -m pipeline.catalog}: busca productos NISAR GCOV sobre la ROI y guarda el catálogo en \path{data/catalog/} & No requiere \\
+\textbf{Earthdata Login (URS)} & \path{earthaccess.login()}: obtiene la sesión para descargar & Usuario y contraseña de Earthdata en \texttt{.env} o \texttt{.netrc} \\
+\textbf{Descarga HTTPS de ASF} (archivos \texttt{.h5}) & \path{download.py} y \path{etapa1.py} abren el \texttt{.h5} por HTTPS y piden por rangos de bytes solo los bloques de la ROI y los metadatos, sin bajar el archivo completo (\aprox{}7\,GB) & Sesión de Earthdata \\
+\bottomrule
+\end{longtable}
+
+\subsection{Interna: API REST de TerraPulse (contrato C4)}
+
+Solo lectura y en JSON. Detalle y ejemplos en \path{docs/api.md}.
+
+\begin{longtable}{p{0.55\linewidth}p{0.37\linewidth}}
+\toprule
+\textbf{Endpoint} & \textbf{Devuelve} \\
+\midrule
+\endhead
+\path{GET /api/rois} & Regiones de interés (WKT y GeoJSON) \\
+\texttt{GET /api/scenes?roi=\&track=\&frame=\&direction=\&maturity=\&crid=} & Escenas NISAR \\
+\texttt{GET /api/scenes/\{scene\_id\}} & Detalle con huella e inspecciones \\
+\texttt{GET /api/scenes/\{scene\_id\}/charts[/\{chart\_id\}]} & Datos de las gráficas, con versión del código y advertencias \\
+\path{/api/changes}, \path{/api/compat} & Pendientes (esperan a C2 de P2 y C3 de P3) \\
+\bottomrule
+\end{longtable}
+
+% ---------------------------------------------------------------------------------------------
+\section{Recursos públicos de la NASA y la misión}
+
+\begin{longtable}{p{0.24\linewidth}p{0.42\linewidth}p{0.26\linewidth}}
+\toprule
+\textbf{Recurso} & \textbf{Enlace} & \textbf{Para qué} \\
+\midrule
+\endhead
+Misión NISAR (JPL) & \url{https://nisar.jpl.nasa.gov/} & Descripción de la misión \\
+Documentación NISAR en ASF & \url{https://nisar-docs.asf.alaska.edu/} & Formato de productos, calibración, madurez \\
+Productos NISAR & \url{https://nisar-docs.asf.alaska.edu/products-overview/} & GCOV, GSLC, GUNW, etc. \\
+Disponibilidad & \url{https://nisar-docs.asf.alaska.edu/availability-overview/} & Qué datos hay y desde cuándo \\
+ASF Data Search (Vertex) & \url{https://search.asf.alaska.edu/} & Buscar escenas en el navegador \\
+NASA Earthdata & \url{https://www.earthdata.nasa.gov/} & Portal general de datos de la NASA \\
+Earthdata Search & \url{https://search.earthdata.nasa.gov/} & Buscar datos de cualquier DAAC \\
+Earthdata Login (perfil) & \url{https://urs.earthdata.nasa.gov/} & Crear cuenta y autorizar aplicaciones (p.\,ej., GES DISC) \\
+HyP3 (ASF) & \url{https://hyp3-docs.asf.alaska.edu/} & Procesamiento SAR bajo demanda \\
+OpenSARLab (ASF) & \url{https://asf.alaska.edu/asf-services-opensarlab/} & Notebooks SAR en la nube \\
+ISCE3 & \url{https://github.com/isce-framework/isce3} & Software con el que se procesan los productos NISAR \\
+Reto Space Apps 2026 & \url{https://www.spaceappschallenge.org/2026/challenges/earth-system-trend-detective/} & Enunciado del reto \\
+\bottomrule
+\end{longtable}
+
+\textbf{Fuentes auxiliares candidatas} para la validación (P3; ver \emph{Metodología}):
+
+\begin{longtable}{p{0.26\linewidth}p{0.38\linewidth}p{0.28\linewidth}}
+\toprule
+\textbf{Fuente} & \textbf{Enlace} & \textbf{DAAC} \\
+\midrule
+\endhead
+GPM IMERG (precipitación) & \url{https://gpm.nasa.gov/data/imerg} & GES DISC: \url{https://disc.gsfc.nasa.gov/} \\
+HLS (Landsat + Sentinel-2 armonizados) & \url{https://www.earthdata.nasa.gov/data/projects/hls} & LP DAAC: \url{https://lpdaac.usgs.gov/} \\
+OPERA (DSWx, DIST) & \url{https://www.earthdata.nasa.gov/data/projects/opera} & PO.DAAC: \url{https://podaac.jpl.nasa.gov/} \textperiodcentered{} LP DAAC \\
+\bottomrule
+\end{longtable}
+
+\begin{nota}
+Comparar con OPERA mide \textbf{acuerdo} entre productos, no exactitud (AGENTS.md §5).
+\end{nota}
+
+% ---------------------------------------------------------------------------------------------
+\section{Infraestructura}
+
+\begin{longtable}{p{0.26\linewidth}p{0.40\linewidth}p{0.26\linewidth}}
+\toprule
+\textbf{Pieza} & \textbf{Uso} & \textbf{Documentación} \\
+\midrule
+\endhead
+Conda (Miniforge), entorno \texttt{nisar} & Python 3.11 y librerías geoespaciales compiladas (GDAL, PROJ, HDF5) & \url{https://github.com/conda-forge/miniforge} \\
+Docker / Docker Compose & PostGIS en local (\path{docs/bd-docker.md}); despliegue previsto en AWS EC2 & \url{https://docs.docker.com/compose/} \\
+Git + GitHub & Ramas por rol (\texttt{p1/\dots}, \texttt{p4/\dots}), PR con revisión & --- \\
+\bottomrule
+\end{longtable}
+
+% ---------------------------------------------------------------------------------------------
+\section{Limitaciones conocidas del stack}
+
+\begin{itemize}
+  \item \textbf{GDAL 3.12} no tiene los drivers HDF5/NISAR; AGENTS.md pide $\geq$ 3.13. Por eso toda la lectura de \texttt{.h5} se hace con h5py, y el fragmento \texttt{gdalwarp} que genera Vertex no funciona en este entorno.
+  \item \textbf{Matplotlib y Chart.js conviven:} los PNG de \path{figuras/} son para revisar y documentar; \path{graficas.json} es para la web. Ambos salen de los mismos números.
+  \item \textbf{Los PNG son solo para ver.} Los valores se leen de los GeoTIFF/COG (AGENTS.md §5).
+\end{itemize}
+
+\end{document}
