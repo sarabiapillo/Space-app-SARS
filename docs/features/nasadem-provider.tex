@@ -1,0 +1,27 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\title{Proveedor reutilizable de archivos NASADEM}
+\author{TerraPulse AI}
+\date{}
+\begin{document}
+\maketitle
+
+\section{Objetivo}
+El módulo \texttt{pipeline/elevation/nasadem.py} permite obtener archivos ZIP originales del producto \texttt{NASADEM\_HGT}, versión \texttt{001}, para una región de interés (ROI) en EPSG:4326. No produce GeoTIFF, mosaicos, recortes, normales del terreno ni resultados solares. El módulo \texttt{pipeline/solar/nasadem.py} reexporta la interfaz anterior para conservar las importaciones existentes.
+
+\section{Uso}
+Desde Python, el consumidor construye \texttt{NASADEMProvider(cache\_dir=Path("data/raw/dem/nasadem\_hgt/001"))} y llama a \texttt{provider.acquire\_roi(roi)}. La entrada puede ser un \texttt{Polygon} o \texttt{MultiPolygon} GeoJSON, o la tupla geográfica \texttt{(west, south, east, north)}. El resultado es una tupla ordenada de registros inmutables \texttt{NASADEMGranule} con \texttt{tile\_id}, \texttt{granule\_ur}, \texttt{short\_name}, \texttt{version} y \texttt{path} al ZIP original. La guía ejecutable y las advertencias de integración están en \texttt{docs/nasadem-provider.md}.
+
+\section{Implementación}
+Primero se valida geometría, coordenadas finitas y cobertura latitudinal de \(-56^\circ\) a \(60^\circ\). Si se recibe GeoJSON se calcula su rectángulo envolvente. Se enumeran cuadrículas de un grado que tienen intersección de área positiva con la geometría: un borde compartido sin área dentro de la cuadrícula vecina no exige otra tesela. Por cada tesela faltante o sin constancia local se consulta CMR con \texttt{earthaccess}, colección \texttt{NASADEM\_HGT} versión \texttt{001}, y se exige un solo \texttt{GranuleUR} coincidente. La autenticación no interactiva se intenta mediante variables Earthdata y después mediante \texttt{.netrc}, solo si se necesita consultar o descargar.
+
+Las descargas ocurren en un directorio temporal dentro de la caché; el nombre del ZIP y el único miembro HGT deben coincidir con la tesela. Se leen todos los bytes HGT para comprobar tamaño de 3601 por 3601 muestras de dos bytes y CRC del ZIP; solo después se publica el archivo sin sobrescribir destinos existentes. Se guarda un recibo local con identidad nominal CMR y huella SHA-256 del HGT. En aciertos de caché se verifican el ZIP y el recibo. Un ZIP previo sin recibo requiere corroboración CMR antes de reutilizarse. Un ZIP o recibo corrupto detiene la operación y no se reemplaza a ciegas. Si falla una tesela del lote, las teselas válidas anteriores pueden permanecer en caché.
+
+\section{Limitaciones}
+El uso está limitado a una caché local exclusiva de un proceso: no hay coordinación entre varios workers ni garantía de funcionamiento en Windows o sistemas de archivos compartidos. El recibo enlaza metadatos CMR y un hash local; no es una firma ni un checksum oficial que autentique los bytes frente a NASA. No se interpretan bounding boxes con longitudes invertidas para cruzar el antimeridiano. La falta de granular CMR para una tesela requerida se comunica como falta de cobertura, sin rellenar elevaciones. Cachés derivadas L2/L3 y procesamiento del terreno quedan fuera de esta entrega. Las credenciales no se guardan en el repositorio.
+
+\section{Verificación}
+Con mocks y ZIP sintéticos, la verificación independiente ejecutó \texttt{pytest -q pipeline/tests/test\_elevation\_nasadem.py pipeline/tests/test\_solar\_nasadem.py pipeline/tests/test\_solar\_acquire.py}: 45 pruebas aprobadas, 8 advertencias, salida cero. \texttt{pytest -q} aprobó 171 pruebas con 182 advertencias, salida cero. Estos resultados no equivalen a una nueva ejecución de red: el equipo informó previamente una descarga real de \texttt{n16w094}, que no se repitió para esta unidad. La compilación LaTeX está pendiente si no hay compilador instalado.
+
+\end{document}
