@@ -16,6 +16,7 @@ import {
   DEFAULT_EXPLORE_ESQUINAS_LONLAT,
   RAW_SCENE_IDS,
   checkPairCompat,
+  type ExploreChartsManifest,
   type ExploreLayerEntry,
   type ExploreLayerId,
   type ExploreWebManifest,
@@ -29,6 +30,7 @@ export type {
   C4ChangeSummary,
   C4ChangeDetail,
   C4ChangeReport,
+  ExploreChartsManifest,
   ExploreLayerId,
   ExploreLayerEntry,
   ExploreWebManifest,
@@ -238,11 +240,36 @@ function buildDefaultExploreManifest(granuleId: string): ExploreWebManifest {
   }
 }
 
+interface ExploreDiskIndex {
+  scenes: Record<string, { hasCapas: boolean; hasGraficas: boolean }>
+}
+
+let exploreIndexPromise: Promise<ExploreDiskIndex | null> | null = null
+
+async function getExploreDiskIndex(): Promise<ExploreDiskIndex | null> {
+  if (!exploreIndexPromise) {
+    exploreIndexPromise = fetch('/data/explore/_index.json', {
+      headers: { Accept: 'application/json' },
+    })
+      .then(async (res) => {
+        if (!res.ok) return null
+        return (await res.json()) as ExploreDiskIndex
+      })
+      .catch(() => null)
+  }
+  return exploreIndexPromise
+}
+
 /**
  * Consulta el manifiesto `/data/explore/<granuleId>/web/capas.json` (`explore-web-1`, `docs/p1-etapa1-web.md` §4 y §5).
  */
 export async function fetchExploreManifest(granuleId: string): Promise<ExploreWebManifest> {
   try {
+    const idx = await getExploreDiskIndex()
+    if (idx && !idx.scenes[granuleId]?.hasCapas) {
+      return buildDefaultExploreManifest(granuleId)
+    }
+
     const res = await fetch(`/data/explore/${encodeURIComponent(granuleId)}/web/capas.json`, {
       headers: { Accept: 'application/json' },
     })
@@ -315,5 +342,62 @@ export function verifyExploreScaleMatch(
     vminT2,
     vmaxT2,
     message: `Advertencia de escala: t1 (${vminT1}..${vmaxT1} dB) ≠ t2 (${vminT2}..${vmaxT2} dB). Ejecutar con el mismo --escala-web.`,
+  }
+}
+
+export interface ExploreChartsFetchResult {
+  manifest: ExploreChartsManifest | null
+  sourceUrl: string
+  error: string | null
+}
+
+/**
+ * Carga `/data/explore/<granuleId>/graficas.json` (`graficas-etapa1-1`, `docs/p1-graficas-chartjs.md`).
+ * Nunca inventa series si el archivo no existe para esa escena; devuelve `manifest: null` y el motivo.
+ */
+export async function fetchExploreCharts(granuleId: string): Promise<ExploreChartsFetchResult> {
+  const sourceUrl = `/data/explore/${encodeURIComponent(granuleId)}/graficas.json`
+  try {
+    const idx = await getExploreDiskIndex()
+    if (idx && !idx.scenes[granuleId]?.hasGraficas) {
+      return {
+        manifest: null,
+        sourceUrl,
+        error: `La escena ${granuleId} aún no tiene graficas.json en data/explore/. Ejecuta \`python -m pipeline.etapa1\` para generarlo (disponible actualmente para T62/F10 t1 y t2).`,
+      }
+    }
+
+    const res = await fetch(sourceUrl, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!res.ok) {
+      return {
+        manifest: null,
+        sourceUrl,
+        error: `HTTP ${res.status}: no existe graficas.json en disco para ${granuleId}. Ejecuta \`python -m pipeline.etapa1\` para generarlo.`,
+      }
+    }
+    const json = (await res.json()) as ExploreChartsManifest
+    if (!json || !Array.isArray(json.graficas) || json.graficas.length === 0) {
+      return {
+        manifest: null,
+        sourceUrl,
+        error: `El archivo ${sourceUrl} no contiene el arreglo \`graficas\`.`,
+      }
+    }
+    return {
+      manifest: json,
+      sourceUrl,
+      error: null,
+    }
+  } catch (err) {
+    return {
+      manifest: null,
+      sourceUrl,
+      error:
+        err instanceof Error
+          ? `No se pudo leer ${sourceUrl}: ${err.message}`
+          : `Error al leer ${sourceUrl}`,
+    }
   }
 }
