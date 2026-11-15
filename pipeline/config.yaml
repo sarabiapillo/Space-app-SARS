@@ -16,17 +16,33 @@ search:
   platform: NISAR
   product: GCOV           # preferido para retrodispersión (AGENTS.md §5)
   frequency: A            # banda L
-  start: null             # YYYY-MM-DD
-  end: null               # YYYY-MM-DD
+  start: null             # YYYY-MM-DD. Se deja abierto a propósito: catalog.py debe seguir
+  end: null               # viendo todas las pilas (p. ej. fechas P05036 nuevas).
 
-# Criterios de comparabilidad: deben coincidir en ambas escenas.
+# Criterios de comparabilidad de la pila elegida: deben coincidir en ambas escenas.
+# Verificados el 2026-11-14 con el catálogo (data/catalog/catalog_asf_GCOV_20261114T231456Z.json)
+# y en el .h5 de cada escena (data/raw/<scene_id>/scene.json, `python -m pipeline.download`).
 comparability:
-  track: null
-  frame: null
-  direction: null         # ASCENDING | DESCENDING
-  polarization: null      # leer de metadatos; no asumir
-  crid: null
-  maturity: null          # BETA | PROVISIONAL (no mezclar)
+  track: 62
+  frame: 10
+  direction: ASCENDING    # ASCENDING | DESCENDING
+  polarization: [HH, HV]  # Frequency A, leídas del .h5 (listOfPolarizations)
+  crid: P05023
+  maturity: PROVISIONAL   # BETA | PROVISIONAL | VALIDATED (no mezclar)
+  grid: {epsg: 32615, spacing_m: 10}   # malla idéntica en ambas fechas (comprobado en el .h5)
+
+# Par de trabajo de la Fase 1 (pila GCOV T62/F10 ASC P05023 PROVISIONAL, 10 fechas).
+# Elegido por cobertura: T62 cubre ~99.6 % de la ROI; T55/F80 solo ~50 % (mitad este,
+# al este de lon ≈ -93.14). El par T55 2026-06-18 / 2026-10-16 queda en data/raw/ como respaldo.
+pair:
+  t1:
+    scene_id: NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001
+    date: "2026-06-18"
+    roi_valid_pct: 99.57  # píxeles válidos (capa mask) dentro del polígono ROI
+  t2:
+    scene_id: NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001
+    date: "2026-10-16"
+    roi_valid_pct: 99.61
 
 paths:
   catalog: data/catalog

@@ -6,9 +6,9 @@ Plataforma abierta que procesa observaciones de radar de la misión NASA–ISRO 
 
 Proyecto para NASA Space Apps 2026 (*Be an Earth System Trend Detective*). Caso de estudio: Chiapas, México.
 
-> **Estado:** configuración inicial. Todavía no hay resultados ni un par de escenas comparables confirmado.
+> **Estado (2026-11-14):** hay un par GCOV comparable recortado a la ROI (T62/F10, 2026-06-18 → 2026-10-16, ~99.6 % de cobertura). Todavía no hay mapa de cambio ni validación. Detalle en [docs/metodologia.md](docs/metodologia.md).
 
-Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md).
+Plan del equipo, roles y reglas de ramas: [docs/plan-de-trabajo.md](docs/plan-de-trabajo.md). Adquisición de datos (P1), cómo correr los scripts y formato de los recortes: [docs/p1-datos.md](docs/p1-datos.md).
 
 Antes de contribuir, lee [AGENTS.md](AGENTS.md). Ahí están las reglas científicas y de trabajo del proyecto, que aplican a personas y a agentes de IA por igual.
 
@@ -22,10 +22,11 @@ Antes de contribuir, lee [AGENTS.md](AGENTS.md). Ahí están las reglas científ
 4. [Configurar variables de entorno](#4-configurar-variables-de-entorno)
 5. [Levantar la base de datos (PostGIS)](#5-levantar-la-base-de-datos-postgis)
 6. [Preparar Django](#6-preparar-django)
-7. [Configurar el acceso a datos NISAR (Earthdata)](#7-configurar-el-acceso-a-datos-nisar-earthdata)
+7. [Cuentas y acceso a datos (Earthdata)](#7-cuentas-y-acceso-a-datos-earthdata)
 8. [Verificar la instalación](#8-verificar-la-instalación)
 9. [Problemas frecuentes](#9-problemas-frecuentes)
 10. [Estructura del proyecto](#10-estructura-del-proyecto)
+11. [Caso de estudio: ROI y escenas](#11-caso-de-estudio-roi-y-escenas)
 
 ---
 
@@ -116,13 +117,32 @@ python manage.py runserver
 
 Abre http://127.0.0.1:8000/admin/ para comprobar que el servidor responde.
 
-## 7. Configurar el acceso a datos NISAR (Earthdata)
+## 7. Cuentas y acceso a datos (Earthdata)
 
-GDAL, `asf_search` y `earthaccess` se autentican con un archivo `.netrc` que vive en tu carpeta personal, **fuera del repositorio**.
+Una sola cuenta **NASA Earthdata Login** da acceso a todo lo que usa el proyecto: NISAR (ASF) y las fuentes auxiliares candidatas (precipitación, óptico, OPERA). Algunos archivos (DAAC) piden además autorizarlos una vez en tu perfil.
+
+| Datos | Archivo (DAAC) | Qué hay que hacer además de la cuenta |
+|---|---|---|
+| NISAR GCOV (fuente principal) | ASF | Iniciar sesión una vez en https://search.asf.alaska.edu/ y aceptar los términos de uso |
+| GPM IMERG (precipitación) | GES DISC | **Autorizar la aplicación** "NASA GESDISC DATA ARCHIVE" en https://urs.earthdata.nasa.gov/ → *Applications* → *Authorized Apps* → *Approve More Applications*. Sin esto la descarga devuelve **403 Forbidden** |
+| HLS (óptico, Landsat/Sentinel-2) y OPERA DIST | LP DAAC | Nada adicional (comprobado el 2026-11-14) |
+| OPERA DSWx (agua superficial) | PO.DAAC | Nada adicional (comprobado el 2026-11-14) |
+
+Recursos de agencias socias del reto (**opcionales**, no se usan hoy; ver [docs/metodologia.md](docs/metodologia.md)): **SAOCOM** (CONAE) requiere registrarse en su catálogo con un perfil *ONE CLICK*; **RCM** y **RADARSAT-1** (CSA) tienen sus propias condiciones de acceso. Son sitios no estadounidenses: cada uno tiene sus condiciones de uso de datos y hay que respetarlas.
+
+El pipeline acepta las credenciales de dos formas. Si están las dos, **gana `.env`**:
+
+- **`.env` (recomendado en servidor):** agrega a tu `.env` (ver paso 4)
+  ```
+  EARTHDATA_USERNAME=tu_usuario
+  EARTHDATA_PASSWORD='tu_contraseña'
+  ```
+  Usa comillas simples si la contraseña tiene caracteres especiales. En un servidor (Docker, EC2) es mejor definirlas como variables de entorno del sistema: las variables del sistema tienen prioridad y el archivo no las sobrescribe.
+- **`.netrc` (cómodo en tu computadora):** un archivo en tu carpeta personal, **fuera del repositorio**:
 
 1. Crea una cuenta en https://urs.earthdata.nasa.gov/ si aún no tienes una.
-2. Inicia sesión una vez en https://search.asf.alaska.edu/ con esa cuenta y acepta los términos de uso que te pida ASF.
-3. Crea el archivo con este contenido, usando tus datos:
+2. Haz las autorizaciones de la tabla anterior (como mínimo, la de ASF).
+3. Si usas `.netrc`, créalo con este contenido, usando tus datos:
 
    ```
    machine urs.earthdata.nasa.gov login TU_USUARIO password TU_CONTRASEÑA
@@ -134,6 +154,8 @@ GDAL, `asf_search` y `earthaccess` se autentican con un archivo `.netrc` que viv
    | Linux / macOS | `~/.netrc`, y luego ejecuta `chmod 600 ~/.netrc` |
 
    En Windows, revisa que el Bloc de notas no lo guarde como `.netrc.txt`.
+
+   > En Windows, `earthaccess` busca `_netrc` (con guion bajo) en lugar de `.netrc`. No hace falta duplicar el archivo: el pipeline usa `.netrc` automáticamente si no existe `_netrc`.
 
 > ⚠️ **Nunca** copies `.netrc` dentro del proyecto ni pegues su contenido en el código, los issues o los commits.
 
@@ -148,6 +170,14 @@ docker compose ps
 pytest                      # pruebas del pipeline
 python -m pipeline.catalog  # consulta el catálogo NISAR sobre la ROI (no requiere .netrc)
 ```
+
+Para probar el acceso con tu `.netrc`, recorta el par de trabajo a `data/raw/` (unos 3–4 minutos; solo se descargan los bloques de la ROI, no los ~7 GB de cada producto):
+
+```bash
+python -m pipeline.download NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001 NISAR_L2_PR_GCOV_033_062_A_010_4005_DHDH_A_20261016T114006_20261016T114041_P05023_N_F_J_001
+```
+
+Al final debe imprimir `COMPARABLE`.
 
 Checklist:
 
@@ -173,7 +203,13 @@ No existe el archivo `.env` o le falta esa variable. Consulta el [paso 4](#4-con
 Activa el entorno con `conda activate nisar` en lugar de llamar directamente al `python.exe` del entorno. La activación define `GDAL_DATA` y el `PATH`.
 
 **El driver NISAR de GDAL no aparece**
-AGENTS.md recomienda GDAL ≥ 3.13, que incluye el driver NISAR. Puedes comprobar tu versión con `gdalinfo --version`. Las versiones anteriores pueden leer los archivos `.h5` mediante el driver HDF5 genérico (`HDF5:"archivo.h5"://ruta/al/dataset`).
+El GDAL del entorno (3.12 de conda-forge) no trae el driver NISAR ni el HDF5 genérico, así que `gdalwarp` no puede leer los `.h5`. No hace falta: el pipeline lee los `.h5` con `h5py` (`pipeline/nisar_h5.py`, `pipeline/sources/subset.py`), tanto locales como remotos.
+
+**`Sin credenciales de Earthdata` o `No se pudo iniciar sesión en Earthdata`**
+Revisa que exista `%USERPROFILE%\.netrc` (o `~/.netrc`) con la línea del paso 7 y que el usuario y la contraseña sean correctos. El mensaje de error incluye el motivo que dio Earthdata.
+
+**`403 Forbidden` al descargar precipitación (GPM IMERG)**
+Falta autorizar la aplicación de GES DISC en tu perfil de Earthdata (tabla del paso 7).
 
 ## 10. Estructura del proyecto
 
@@ -189,7 +225,12 @@ terrapulse/
 │   ├── raw/
 │   └── processed/
 ├── pipeline/            # Procesamiento SAR en Python puro (sin Django)
-│   └── config.yaml      # ROI y criterios de comparabilidad
+│   ├── config.yaml      # ROI, comparabilidad y par de trabajo
+│   ├── catalog.py       # consulta el catálogo y agrupa pilas
+│   ├── download.py      # recorta escenas a la ROI en data/raw/
+│   ├── nisar_h5.py      # lectura por ventanas de los .h5 NISAR
+│   ├── etapa1.py        # inspección de una escena (figuras y control)
+│   └── sources/         # fuentes de datos intercambiables (ASF) y recorte
 ├── backend/             # Django + GeoDjango + DRF
 │   ├── config/
 │   ├── scenes/
@@ -198,6 +239,24 @@ terrapulse/
 ```
 
 `pipeline/` no depende de Django, así que el procesamiento SAR se puede probar desde la terminal sin levantar el servidor.
+
+## 11. Caso de estudio: ROI y escenas
+
+**ROI** (Chiapas, México; EPSG:4326; en `pipeline/config.yaml`):
+
+```
+POLYGON((-93.3919 16.6539,-92.8757 16.6539,-92.8757 16.8964,-93.3919 16.8964,-93.3919 16.6539))
+```
+
+Cobertura de la ROI por pila GCOV P05023 PROVISIONAL (píxeles válidos dentro del polígono, según la capa `mask` del producto; verificado el 2026-11-14):
+
+| Pila | Dirección | Cobertura de la ROI | Uso |
+|---|---|---|---|
+| **T62 / F10** | Ascendente | **~99.6 %** | **Par de trabajo:** 2026-06-18 → 2026-10-16 |
+| T55 / F80 | Descendente | ~50 % (solo al este de lon ≈ −93.14) | Respaldo |
+| T156 / F80 | Descendente | Sin verificar | — |
+
+En la malla de los recortes (EPSG:32615, UTM 15N, 10 m), la ROI ocupa 2687 × 5504 px. El detalle de escenas, comparabilidad y fuentes de validación candidatas está en [docs/metodologia.md](docs/metodologia.md).
 
 ## Referencias
 

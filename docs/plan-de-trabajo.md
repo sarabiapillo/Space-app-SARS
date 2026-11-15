@@ -1,6 +1,6 @@
 # Plan de trabajo — TerraPulse AI
 
-Equipo de 6 integrantes. Actualizado: 2026-11-11.
+Equipo de 6 integrantes. Actualizado: 2026-11-14.
 
 Cada integrante tiene **una responsabilidad única** y es **dueño de un conjunto de archivos que nadie más edita**. Así cada quien trabaja en su rama y los merges no chocan. Los equipos se comunican mediante **contratos** (formatos de archivo y de API) que se acuerdan en la Fase 0. Mientras el contrato no cambie, nadie depende del código de otro para avanzar.
 
@@ -21,18 +21,21 @@ Reglas del proyecto: [AGENTS.md](../AGENTS.md). Instalación: [README.md](../REA
 | Fuente de datos | Capa intercambiable: contrato `DataSource` / `SceneMeta` y fuente ASF (búsqueda) | `pipeline/sources/` |
 | Comparabilidad | `check_pair`: bloquea si difieren producto, trayectoria, marco, dirección, polarización, CRID o madurez (o si alguno es desconocido) | `pipeline/compat.py` |
 | Catálogo | `python -m pipeline.catalog`: consulta, agrupa en pilas y guarda un JSON trazable | `pipeline/catalog.py` |
-| Pruebas | 20 pruebas `pytest` (compat y normalización de metadatos) | `pipeline/tests/` |
-| Documentación | README de instalación, AGENTS.md actualizado, propuesta en PDF | `README.md`, `AGENTS.md`, `docs/` |
+| Lectura e inspección (Etapa 1) | Lectura por ventanas de los `.h5` (GCOV/GSLC); inspección de una escena con GeoTIFF, figuras, estadísticas y valores de control para revisar a mano | `pipeline/nisar_h5.py`, `pipeline/etapa1.py`, `pipeline/etapa1_figuras.py` |
+| Recorte a la ROI | `python -m pipeline.download`: recorta escenas a la ROI leyendo el `.h5` remoto por HTTPS (solo los bloques de la ROI) o local; verifica la identidad contra el catálogo, calcula la cobertura de la ROI y compara la malla del par | `pipeline/sources/subset.py`, `pipeline/sources/asf.py`, `pipeline/download.py` |
+| **Par de trabajo** | GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, recortado a `data/raw/` con formato C1 | `pipeline/config.yaml → pair` |
+| Pruebas | 44 pruebas `pytest` (compat, metadatos, lectura `.h5`, recorte) | `pipeline/tests/` |
+| Documentación | README (cuentas y DAAC), AGENTS.md, metodología en borrador con fuentes auxiliares candidatas | `README.md`, `AGENTS.md`, `docs/` |
 
-**Hallazgo clave.** Sobre la ROI de Chiapas hay **3 pilas GCOV comparables**, todas con CRID P05023, madurez PROVISIONAL y polarización HH+HV:
+**Hallazgos clave.**
 
-- T55/F80, descendente: 10 fechas.
-- T62/F10, ascendente: 10 fechas.
-- T156/F80, descendente: 8 fechas.
+- Sobre la ROI hay **3 pilas GCOV** con CRID P05023, madurez PROVISIONAL y HH+HV, de junio a octubre de 2026, cada 12 días: T55/F80 descendente (10 fechas), T62/F10 ascendente (10 fechas) y T156/F80 descendente (8 fechas). El CRID cambió a P05036 el 2026-10-23, así que **no se deben formar pares que crucen esa fecha**.
+- **Cobertura real de la ROI** (verificada en el `.h5`): T62/F10 cubre **~99.6 %**; T55/F80 solo **~50 %** (la mitad este). Por eso el par de trabajo es T62 y no T55, que era el plan original. T156 no se ha verificado.
+- Los recursos oficiales del reto para NISAR son **Earthdata Search y ASF Vertex**, los mismos que ya usa el pipeline: no hace falta una fuente nueva para el evento.
 
-Van de junio a octubre de 2026, cada 12 días. El CRID cambió a P05036 el 2026-10-23, así que **no se deben formar pares que crucen esa fecha**. El detalle está en [AGENTS.md §4](../AGENTS.md).
+El detalle está en [AGENTS.md §4](../AGENTS.md) y [metodologia.md](metodologia.md).
 
-**Lo que falta, en una frase:** recortar un par real a la ROI, convertirlo a dB, calcular el cambio, validarlo, servirlo por API, mostrarlo en el mapa y exportar un reporte reproducible.
+**Lo que falta, en una frase:** convertir el par a dB, calcular el cambio, decidir el fenómeno y validarlo, servirlo por API, mostrarlo en el mapa y exportar un reporte reproducible.
 
 ---
 
@@ -42,7 +45,7 @@ Van de junio a octubre de 2026, cada 12 días. El CRID cambió a P05036 el 2026-
 
 | # | Rol | Responsabilidad única | Archivos que le pertenecen (solo él/ella los edita) | Rama base |
 |---|---|---|---|---|
-| **P1** | **Datos y adquisición** | Conseguir recortes NISAR reales de la ROI y sus metadatos, desde ASF hoy y desde la fuente del evento después | `pipeline/sources/**`, `pipeline/catalog.py`, `pipeline/inspect.py`, `pipeline/config.yaml`, `pipeline/tests/test_sources.py`, `pipeline/tests/test_inspect.py` | `p1/...` |
+| **P1** | **Datos y adquisición** | Conseguir recortes NISAR reales de la ROI y sus metadatos (ASF / Earthdata) | `pipeline/sources/**`, `pipeline/catalog.py`, `pipeline/download.py`, `pipeline/nisar_h5.py`, `pipeline/etapa1.py`, `pipeline/etapa1_figuras.py`, `pipeline/config.yaml`, `pipeline/tests/test_sources.py`, `pipeline/tests/test_subset.py`, `pipeline/tests/test_nisar_h5.py` | `p1/...` |
 | **P2** | **Procesamiento SAR** | Convertir los recortes en dB, aplicar máscaras y producir los mapas de cambio | `pipeline/preprocess.py`, `pipeline/masks.py`, `pipeline/change.py`, `pipeline/run.py`, `pipeline/processing.yaml`, `pipeline/tests/test_preprocess.py`, `pipeline/tests/test_change.py` | `p2/...` |
 | **P3** | **Ciencia, validación y documentación** | Elegir el fenómeno, validar con datos independientes y documentar qué significa cada resultado y qué no | `pipeline/compat.py`, `pipeline/validate.py`, `pipeline/auxiliary/**`, `pipeline/tests/test_compat.py`, `pipeline/tests/test_validate.py`, `docs/metodologia.md`, `docs/comparacion.md`, `AGENTS.md`, `README.md` | `p3/...` |
 | **P4** | **Backend y API** | Guardar escenas y resultados en PostGIS y exponerlos por REST, incluidos los reportes | `backend/**` (modelos, serializers, vistas, `urls.py`, `settings.py`, comandos de gestión, migraciones), `docs/api.md` | `p4/...` |
@@ -78,7 +81,7 @@ Cada quien trabaja contra el contrato con datos simulados (*mocks*) sin esperar 
 
 | ID | Contrato | Lo produce | Lo consume | Formato |
 |---|---|---|---|---|
-| **C1** | Recorte de escena | P1 | P2 | `data/raw/<scene_id>/<capa>.tif` (GeoTIFF, EPSG de la escena, nodata definido) + `data/raw/<scene_id>/scene.json` (= `SceneMeta.to_dict()` + capa, ROI, comando GDAL usado, fecha de descarga) |
+| **C1** | Recorte de escena | P1 | P2 | `data/raw/<scene_id>/<capa>.tif` (GeoTIFF en el EPSG de la escena; capas `HHHH`, `HVHV`, `mask`, `numberOfLooks`, `rtcGammaToSigmaFactor`; potencias en lineal con nodata NaN, sin dB, máscara ni multilook) + `data/raw/<scene_id>/scene.json` (`scene` = `SceneMeta.to_dict()`, `identificacion_h5`, `roi`, `malla` con ventana y transformación, `capas`, `cobertura_roi`, `procedencia` con método y URL, `code_version`, fechas). *Cambio 2026-11-14:* `procedencia` reemplaza al "comando GDAL usado", porque el recorte se hace con h5py |
 | **C2** | Resultado de cambio | P2 | P3, P4, P6 | Carpeta `data/processed/<run_id>/` con `t1_db.tif`, `t2_db.tif`, `delta_db.tif`, `zscore.tif`, `change_mask.tif` (COG) y `run.json` (escenas, reporte de `compat`, parámetros, máscaras, estadísticas, `code_version`) |
 | **C3** | Validación | P3 | P4, P6 | `data/processed/<run_id>/validation.json`: fuente auxiliar, fecha, resolución, métricas (precisión, recall, F1, IoU) **o** `"status": "exploratorio"` si no hay etiquetas |
 | **C4** | API REST | P4 | P5, P6 | Documentada en `docs/api.md`: `GET /api/rois`, `GET /api/scenes?roi=&track=&maturity=`, `GET /api/changes`, `GET /api/changes/{id}` (con `run.json` y `validation.json` incrustados), `GET /api/compat?t1=&t2=`, `GET /api/changes/{id}/report` |
@@ -120,13 +123,13 @@ Las fechas se definen cuando se confirme el calendario del evento. Las fases son
 
 ### Fase 1: Un par real, de principio a fin (antes del evento)
 
-**Objetivo:** un mapa de Δσ⁰ real de un par de la pila T55/F80 (2026-06-18 → 2026-10-16, P05023), visible en la web.
+**Objetivo:** un mapa de Δσ⁰ real del par T62/F10 ASC (2026-06-18 → 2026-10-16, P05023), visible en la web. *Antes era T55/F80; se cambió porque T55 solo cubre ~50 % de la ROI.*
 
 | Rol | Tareas | Listo cuando… |
 |---|---|---|
-| **P1** | Implementar `ASFSource.fetch_subset` (gdalwarp remoto con `.netrc`, solo Frequency A). Crear `inspect.py`: lee del `.h5` la resolución, el CRS, las capas disponibles, la máscara y la cobertura real de la ROI (% de píxeles válidos). Descargar HHHH y HVHV de las fechas elegidas a `data/raw/`. Tener listo el borrador de `sources/event.py`. | Hay 2 recortes que cumplen C1, `inspect` confirma la misma malla y una cobertura de la ROI por encima del mínimo que fije P3, y hay pruebas |
+| **P1** | ✅ `ASFSource.fetch_subset` (h5py remoto con `.netrc`, solo Frequency A; `gdalwarp` no sirve con el GDAL del entorno). ✅ Inspección: `etapa1.py` y `scene.json` cubren resolución, CRS, capas, máscara y cobertura real de la ROI (sustituyen al `inspect.py` previsto). ✅ Recortes de las dos fechas en `data/raw/`. ✅ Par en `config.yaml`. ~~Borrador de `sources/event.py`~~: no hace falta (ver Fase 3). | ✅ 2 recortes que cumplen C1, misma malla confirmada, cobertura ~99.6 % y pruebas. **Falta:** que P3 fije el mínimo de cobertura |
 | **P2** | `preprocess.py`: GCOV (potencia) → dB y manejo de nodata/ceros. `masks.py`: máscara del producto (layover/sombra) y pendiente con DEM. `change.py`: Δ en dB, razón, z-score respecto a la pila, umbral por estadística de la región. `run.py` orquesta todo y escribe C2. | `python -m pipeline.run --t1 … --t2 …` genera C2; hay pruebas de la conversión a dB y de Δ con arreglos sintéticos |
-| **P3** | **Decidir el fenómeno** con los criterios de AGENTS.md §4 y documentarlo. Elegir **una** fuente auxiliar (precipitación, Sentinel-2 o inventario de eventos) y escribir su descarga en `pipeline/auxiliary/`. Implementar `validate.py` (precisión, recall, F1 e IoU, o modo exploratorio). Escribir `metodologia.md` en paralelo. | Fenómeno decidido y escrito; `validate.py` con pruebas; fuente auxiliar descargable de forma reproducible |
+| **P3** | **Decidir el fenómeno** con los criterios de AGENTS.md §4 y documentarlo (apoyo: NISAR StoryMaps y White Papers de la lista del reto). Fijar el **% mínimo de cobertura de la ROI**. Elegir **una** fuente auxiliar entre las candidatas ya encontradas en Earthdata (GPM IMERG, HLS, OPERA DSWx/DIST; ver `metodologia.md`) y escribir su descarga en `pipeline/auxiliary/`. Implementar `validate.py` (precisión, recall, F1 e IoU, o modo exploratorio). Escribir `metodologia.md` en paralelo. | Fenómeno decidido y escrito; `validate.py` con pruebas; fuente auxiliar descargable de forma reproducible |
 | **P4** | Modelos `ROI`, `Scene`, `ChangeResult` (AGENTS.md §8). Serializers y endpoints de C4 (con filtros). Comando `python manage.py load_run <run_id>` que lee C2/C3 y los guarda. `GET /api/compat` usando `pipeline.compat`. | Endpoints funcionando con el mock de C2; pruebas de API; `docs/api.md` completo |
 | **P5** | **Explorador:** mapa MapLibre con el polígono de la ROI, lista de escenas desde `/api/scenes` y filtros por trayectoria, fecha y madurez. **Comparador:** elegir t1 y t2, mostrar la insignia de comparabilidad (errores en rojo, advertencias en ámbar, desde `/api/compat`), deslizador antes/después y capa Δσ⁰ con leyenda en dB. | Funciona con mocks; cada vista muestra fecha, producto, polarización, unidad y escala (propuesta §9.2) |
 | **P6** | Servicio TiTiler en `docker-compose.yml` (C5). **Laboratorio:** histograma de Δσ⁰, estadísticas y tabla de parámetros, con cada cifra enlazada a su `run.json`. Preparar el despliegue (Dockerfiles en `infra/`). | TiTiler sirve un COG de prueba; el Laboratorio funciona con el mock |
@@ -142,13 +145,15 @@ Las fechas se definen cuando se confirme el calendario del evento. Las fases son
 | **P5** | Conectar con la API real (quitar mocks). Panel de advertencias que distinga observación, inferencia y predicción, con el texto de P3. |
 | **P6** | **Exportación:** descarga de GeoTIFF, PNG del mapa y reporte PDF/HTML generado con `/api/changes/{id}/report`. Cada cifra del reporte se puede rastrear hasta su `run.json`. |
 
-### Fase 3: Evento (adaptación a los recursos de los organizadores)
+### Fase 3: Evento (recursos del reto)
+
+Los recursos oficiales del reto para NISAR son **Earthdata Search y ASF Vertex**, los mismos que ya usa el pipeline. Ya no se espera una fuente distinta, así que esta fase se centra en actualizar datos y desplegar.
 
 | Rol | Tareas |
 |---|---|
-| **P1** | Implementar `sources/event.py` con lo que entreguen los organizadores y cambiar `source:` en `config.yaml`. **Es el único cambio necesario en la cadena de datos.** |
-| **P2** | Volver a correr `run.py` con la nueva fuente y comparar contra el resultado de ASF. |
-| **P3** | Revisar si cambia la comparabilidad o la validación con los nuevos datos; actualizar la metodología. |
+| **P1** | Volver a correr `pipeline.catalog` por si hay fechas nuevas (por ejemplo, P05036 de T62, que daría pareja a la escena del 2026-10-28). Solo si los organizadores entregan otra fuente: crear un módulo en `sources/` y cambiar `source:` en `config.yaml`. |
+| **P2** | Solo si cambian los datos: volver a correr `run.py` y comparar contra el resultado anterior. |
+| **P3** | Revisar si cambia la comparabilidad o la validación con datos nuevos; actualizar la metodología. Otros sensores del reto (RCM, RADARSAT-1, SAOCOM) no se mezclan con NISAR (AGENTS.md §5). |
 | **P4–P6** | Desplegar (P6), cargar resultados (P4) y pulir la interfaz (P5). |
 
 ### Fase 4: Cierre y presentación
@@ -205,10 +210,13 @@ web/
 
 | Riesgo | Afecta a | Mitigación |
 |---|---|---|
-| El recorte remoto con GDAL 3.12 falla (no tiene driver NISAR) | P1 → todos | Probar el recorte primero (es la tarea 1 de P1). Plan B: driver HDF5 genérico o actualizar GDAL (P6) |
+| ~~El recorte remoto con GDAL 3.12 falla (no tiene driver NISAR)~~ | P1 → todos | **Resuelto:** GDAL 3.12 tampoco trae HDF5; el recorte se hace con h5py (remoto y local) |
+| Una pila intersecta la ROI pero no la cubre | P1, P3 | `download.py` calcula la cobertura real en el `.h5`; así se descartó T55 (~50 %) |
+| GES DISC devuelve 403 (precipitación) | P3 | Autorizar la aplicación de GES DISC en el perfil de Earthdata (README §7) |
 | Smart App Control bloquea DLL en Windows | Quien use Windows | Trabajar en WSL2 o Docker; P6 documenta la alternativa |
 | No hay etiquetas para validar | P3 | Marcar como exploratorio y contrastar cualitativamente con la fuente auxiliar (AGENTS.md §6) |
-| La fuente del evento tiene otro formato | P1 | Capa `sources/` ya aislada; `inspect.py` detecta diferencias |
+| La fuente del evento tiene otro formato | P1 | Riesgo bajo: los recursos del reto son ASF/Earthdata. Si cambia, la capa `sources/` está aislada y `subset.py` se reutiliza |
+| Contrastar con OPERA se reporta como exactitud | P3 | Reportarlo como **acuerdo** con OPERA, no como exactitud (metodologia.md) |
 | Alguien edita archivos ajenos | Todos | CODEOWNERS + revisión obligatoria |
 | Se cambia un contrato sin avisar | Todos | Solo por PR revisado por productor y consumidores |
 
@@ -216,7 +224,7 @@ web/
 
 ## 8. Resumen rápido por persona
 
-- **P1, Datos:** "Consigo los recortes reales y sus metadatos, hoy de ASF y en el evento de donde nos digan."
+- **P1, Datos:** "Consigo los recortes reales y sus metadatos desde ASF/Earthdata, y verifico que de verdad cubren la ROI."
 - **P2, Procesamiento:** "Convierto los recortes en dB y en mapas de cambio trazables."
 - **P3, Ciencia:** "Decido qué medimos, lo valido con datos independientes y escribo qué significa y qué no."
 - **P4, Backend:** "Guardo todo en PostGIS y lo sirvo por una API documentada, incluidos los datos del reporte."
