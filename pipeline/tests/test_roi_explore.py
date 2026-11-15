@@ -68,3 +68,47 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     assert all(c['escala']['vmin_dB'] == -22 for c in result['manifests'][0]['capas'])
     assert remote.opened[0][1]['cache_type'] == 'blockcache'
     assert not list(run.rglob('*.h5'))
+
+
+def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
+    """La ROI devuelve sus gráficas (incidencia, retrodispersión, máscara) y deja una copia en disco."""
+    import json
+    from dataclasses import replace
+    from shapely import wkt
+    from shapely.geometry import mapping
+    from pipeline.tests.test_subset import make_gcov, scene as synthetic_scene, ROI as synthetic_roi
+    from pipeline.tests.test_etapa1 import add_radar_grid, FakeHTTPS
+    from pipeline import sources, roi_explore
+    from pipeline.sources import asf
+
+    h5, _ = make_gcov(tmp_path / 'synthetic.h5')
+    add_radar_grid(h5)
+    selected = replace(synthetic_scene(), url='https://example.invalid/synthetic.h5')
+
+    class Source:
+        def search(self, roi, product):
+            return [selected]
+    monkeypatch.setattr(sources, 'get_source', lambda _: Source())
+    monkeypatch.setattr(asf, 'earthdata_https_fs', lambda: FakeHTTPS(h5))
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'graficas-roi')
+    run = tmp_path / 'abc123'
+    run.mkdir()
+    roi_explore.write_json(run / 'request.json', {'roi': mapping(wkt.loads(synthetic_roi))})
+    roi_explore.prepare(run)
+
+    result = json.loads((run / 'result.json').read_text(encoding='utf-8'))
+    assert len(result['charts']) == 1
+    entry = result['charts'][0]
+    assert entry['granuleId'] == result['manifests'][0]['escena']['granuleId']
+    ids = {g['id'] for g in entry['manifest']['graficas']}
+    assert ids == {'histograma_gamma0_dB', 'mascara_roi', 'incidencia_por_altura'}
+    # La máscara es la de la ROI dibujada, no la de Chiapas
+    meta_roi = json.loads((run / 'layers' / entry['granuleId'] / 'metadatos.json').read_text(encoding='utf-8'))['roi']
+    assert wkt.loads(meta_roi['wkt_4326']).equals(wkt.loads(synthetic_roi))
+
+    copy = tmp_path / 'graficas-roi' / 'abc123'
+    assert result['copia_disco'] == copy.resolve().as_posix()
+    assert json.loads((copy / entry['granuleId'] / 'graficas.json').read_text(encoding='utf-8')) == entry['manifest']
+    assert (copy / entry['granuleId'] / 'metadatos.json').is_file()
+    summary = json.loads((copy / 'roi.json').read_text(encoding='utf-8'))
+    assert summary['id'] == 'abc123' and summary['escenas'] == [entry['granuleId']]

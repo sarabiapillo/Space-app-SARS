@@ -56,23 +56,29 @@ class SceneDetail(generics.RetrieveAPIView):
         Prefetch("inspections", queryset=SceneInspection.objects.select_related("roi").prefetch_related("charts")))
 
 
-def pick_inspection(scene: Scene, code_version: str | None) -> SceneInspection:
-    """La inspección más reciente de la escena, o la de ``code_version`` si se pide."""
+def pick_inspection(scene: Scene, code_version: str | None, roi: str | None = None) -> SceneInspection:
+    """La inspección más reciente de la escena; se puede filtrar por ``code_version`` y por ``roi`` (id)."""
     qs = scene.inspections.select_related("roi")
-    insp = qs.filter(code_version=code_version).first() if code_version else qs.first()   # ordering: -created_utc
+    if roi:
+        if not roi.isdigit():
+            raise ValidationError({"roi": "Debe ser el id numérico de /api/rois"})
+        qs = qs.filter(roi_id=int(roi))
+    if code_version:
+        qs = qs.filter(code_version=code_version)
+    insp = qs.first()   # ordering: -created_utc
     if insp is None:
-        if code_version:
-            raise NotFound(f"La escena no tiene una inspección con code_version={code_version!r}")
+        if code_version or roi:
+            raise NotFound(f"La escena no tiene una inspección con code_version={code_version!r} y roi={roi!r}")
         raise NotFound("La escena no tiene inspecciones cargadas (python manage.py load_explore)")
     return insp
 
 
 class SceneCharts(APIView):
-    """GET /api/scenes/{scene_id}/charts[?code_version=]"""
+    """GET /api/scenes/{scene_id}/charts[?code_version=&roi=]"""
 
     def get(self, request, scene_id):
         scene = get_object_or_404(Scene, name=scene_id)
-        insp = pick_inspection(scene, request.query_params.get("code_version"))
+        insp = pick_inspection(scene, request.query_params.get("code_version"), request.query_params.get("roi"))
         return Response({
             "scene_id": scene.name,
             "inspection": InspectionSummarySerializer(insp).data,
@@ -81,11 +87,11 @@ class SceneCharts(APIView):
 
 
 class SceneChartDetail(APIView):
-    """GET /api/scenes/{scene_id}/charts/{chart_id}[?code_version=]"""
+    """GET /api/scenes/{scene_id}/charts/{chart_id}[?code_version=&roi=]"""
 
     def get(self, request, scene_id, chart_id):
         scene = get_object_or_404(Scene, name=scene_id)
-        insp = pick_inspection(scene, request.query_params.get("code_version"))
+        insp = pick_inspection(scene, request.query_params.get("code_version"), request.query_params.get("roi"))
         chart = SceneChart.objects.filter(inspection=insp, chart_id=chart_id).first()
         if chart is None:
             raise NotFound(f"No hay gráfica {chart_id!r} en la inspección {insp.code_version}")

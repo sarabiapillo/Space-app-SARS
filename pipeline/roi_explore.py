@@ -4,10 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
 from .compat import check_pair
+
+
+# Copia de las gráficas de cada ROI: data/graficas-roi/<id del trabajo>/<granuleId>/ (ver docs/api-roi-jobs.md).
+COPY_ROOT = Path(__file__).resolve().parents[1] / 'data' / 'graficas-roi'
 
 
 class RoiPreparationError(ValueError):
@@ -87,7 +92,7 @@ def prepare(run_dir):
                          'scenes': [s.to_dict() for s in scenes]})
     config = run_dir / 'config.yaml'
     config.write_text(yaml.safe_dump({'roi': {'wkt': wkt}, 'source': 'asf'}), encoding='utf-8')
-    manifests = []
+    manifests, charts = [], []
     for index, scene in enumerate(selected):
         progress(f'Leyendo bloques HTTPS del H5 y preparando capas ({index + 1}/{len(selected)})…')
         out = inspect_scene([scene.scene_id, '--catalogo', str(catalog), '--config', str(config),
@@ -97,6 +102,11 @@ def prepare(run_dir):
         if not any(layer['pct_pixeles_validos'] > 0 for layer in manifest['capas']):
             raise RoiPreparationError('La escena intersecta la ROI, pero no contiene píxeles válidos en ella.')
         manifests.append(manifest)
+        charts_file = out / 'graficas.json'
+        if charts_file.is_file():
+            charts.append({'granuleId': manifest['escena']['granuleId'],
+                           'fecha': str(manifest['escena'].get('fecha_inicio', ''))[:10],
+                           'manifest': json.loads(charts_file.read_text(encoding='utf-8'))})
     comparable = False
     if len(manifests) == 2:
         a, b = manifests
@@ -107,10 +117,40 @@ def prepare(run_dir):
             paths = [next(c['cog'] for c in m['capas'] if c['id'] == layer_id) for m in manifests]
             with rasterio.open(root / paths[0]) as x, rasterio.open(root / paths[1]) as y:
                 comparable &= (x.crs == y.crs and x.transform == y.transform and x.shape == y.shape)
+    progress('Guardando copia de las gráficas de la ROI…')
+    copy_dir = save_chart_copy(run_dir, wkt, [run_dir / 'layers' / m['escena']['granuleId'] for m in manifests])
     write_json(run_dir / 'result.json', {'manifests': manifests, 'comparable': comparable,
+        'charts': charts, 'copia_disco': copy_dir,
         'message': 'Capas listas. Inspección exploratoria; no identifica causas.' if comparable else
         'Capas listas. No hay un par con malla comparable; deslizador deshabilitado.'})
     write_json(run_dir / 'status.json', {'status': 'ready', 'message': 'Capas listas.'})
+
+
+def save_chart_copy(run_dir, wkt, scene_dirs):
+    """Copia graficas.json y metadatos.json de cada escena a COPY_ROOT/<id>/ más un resumen roi.json.
+
+    Es la copia que se conserva aunque se limpie data/roi-runs/ (caché). Devuelve la ruta relativa
+    al repo, o la absoluta si COPY_ROOT está fuera de él.
+    """
+    from .catalog import code_version
+    dest = COPY_ROOT / Path(run_dir).name
+    scenes = []
+    for src in scene_dirs:
+        if not (src / 'graficas.json').is_file():
+            continue
+        target = dest / src.name
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ('graficas.json', 'metadatos.json'):
+            if (src / name).is_file():
+                shutil.copy2(src / name, target / name)
+        scenes.append(src.name)
+    dest.mkdir(parents=True, exist_ok=True)
+    write_json(dest / 'roi.json', {'id': Path(run_dir).name, 'roi_wkt_4326': wkt, 'escenas': scenes,
+                                   'creado_utc': datetime.now(timezone.utc).isoformat(),
+                                   'version_codigo': code_version()})
+    root = Path(__file__).resolve().parents[1]
+    resolved = dest.resolve()
+    return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else resolved.as_posix()
 
 
 if __name__ == '__main__':

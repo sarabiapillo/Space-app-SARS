@@ -3093,6 +3093,7 @@ export function MapCanvas({
             center={view.centro}
             croppedRegion={croppedRegion}
             onFlyToZone={handleFlyToZone}
+            roiLayers={roiLayers}
           />
         )}
       </div>

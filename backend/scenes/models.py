@@ -47,7 +47,11 @@ class Scene(models.Model):
 
 
 class SceneInspection(models.Model):
-    """Una corrida de la Etapa 1 sobre una escena y una ROI (``metadatos.json``)."""
+    """Una corrida de la Etapa 1 sobre una escena y una ROI (``metadatos.json``).
+
+    La misma escena puede inspeccionarse sobre varias ROI (las que el usuario dibuja en el mapa):
+    hay una inspección por (escena, ROI, versión del código).
+    """
 
     scene = models.ForeignKey(Scene, on_delete=models.CASCADE, related_name="inspections")
     roi = models.ForeignKey(ROI, on_delete=models.PROTECT, related_name="inspections")
@@ -61,8 +65,9 @@ class SceneInspection(models.Model):
     loaded_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        # Volver a cargar la misma versión del código reemplaza; otra versión agrega una fila nueva.
-        constraints = [models.UniqueConstraint(fields=["scene", "code_version"], name="uniq_inspection_version")]
+        # Volver a cargar la misma ROI y versión del código reemplaza; otra ROI u otra versión agrega una fila.
+        constraints = [models.UniqueConstraint(fields=["scene", "roi", "code_version"],
+                                               name="uniq_inspection_roi_version")]
         ordering = ["-created_utc"]
 
     def __str__(self):

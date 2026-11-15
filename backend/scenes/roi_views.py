@@ -37,10 +37,43 @@ def job_dir(job_id):
     return path
 
 
+def copy_to_database(path):
+    """Carga en PostGIS la copia de disco de las gráficas de la ROI (mismo código que load_explore).
+
+    Si la base no está disponible, lo deja anotado en copia.json; el trabajo y la copia en disco
+    siguen siendo válidos.
+    """
+    from scenes.management.commands.load_explore import Command as LoadExplore
+
+    result = json.loads((path / 'result.json').read_text(encoding='utf-8'))
+    copy_dir = ROOT / result['copia_disco'] if result.get('copia_disco') else None
+    loaded, errors = [], []
+    folders = sorted(p for p in copy_dir.iterdir() if p.is_dir()) if copy_dir and copy_dir.is_dir() else []
+    for folder in folders:
+        try:
+            insp, n_charts, _ = LoadExplore().load(folder, f'roi-{path.name[:12]}')
+            loaded.append({'granuleId': folder.name, 'code_version': insp.code_version,
+                           'roi_id': str(insp.roi_id), 'graficas': n_charts})
+        except Exception as exc:  # base apagada, credenciales, etc.: no exponer detalles
+            errors.append(f'{folder.name}: {type(exc).__name__}')
+    write_json(path / 'copia.json', {
+        'disco': result.get('copia_disco'),
+        'base_datos': 'ok' if loaded and not errors else ('parcial' if loaded else 'no disponible'),
+        'escenas': loaded, 'errores': errors,
+    })
+
+
 def run_job(path):
     try:
         subprocess.run([sys.executable, '-m', 'pipeline.roi_explore', str(path)], cwd=ROOT,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800, check=True)
+        try:
+            copy_to_database(path)
+        except Exception:  # la copia en base nunca invalida un trabajo terminado
+            write_json(path / 'copia.json', {'base_datos': 'no disponible', 'escenas': [], 'errores': []})
+        finally:
+            from django.db import connection
+            connection.close()   # este hilo del pool no debe dejar conexiones abiertas
     except (OSError, subprocess.SubprocessError):
         status = json.loads((path / 'status.json').read_text(encoding='utf-8'))
         if status['status'] != 'error':
@@ -106,6 +139,9 @@ class RoiStatus(APIView):
                         relative = (ROOT / layer[kind]).resolve().relative_to(path.resolve()).as_posix()
                         layer[kind] = f'api/roi-jobs/{job_id}/assets/{relative}'
             data.update(result)
+            copia = path / 'copia.json'
+            data['copia'] = (json.loads(copia.read_text(encoding='utf-8')) if copia.is_file()
+                             else {'disco': result.get('copia_disco'), 'base_datos': 'guardando'})
         return Response(data)
 
 

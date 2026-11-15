@@ -94,7 +94,7 @@ python manage.py createsuperuser   # opcional: para entrar a /admin/
 |---|---|---|
 | `scenes_roi` | `ROI` | Nombre y polígono de la región (EPSG:4326) |
 | `scenes_scene` | `Scene` | Una escena NISAR: granuleId, producto, trayectoria, marco, dirección, polarizaciones, frecuencia, banda, EPSG, CRID, madurez, fecha y huella |
-| `scenes_sceneinspection` | `SceneInspection` | Una corrida de `etapa1`: versión del código, % válido en la ROI, estadísticas, procedencia, advertencias y carpeta de origen |
+| `scenes_sceneinspection` | `SceneInspection` | Una corrida de `etapa1`: versión del código, % válido en la ROI, estadísticas, procedencia, advertencias y carpeta de origen. Una por (escena, ROI, versión del código), desde la migración `0002_inspeccion_por_roi` |
 | `scenes_scenechart` | `SceneChart` | Cada gráfica de `graficas.json` tal cual (`jsonb`) |
 
 Los modelos están en `backend/scenes/models.py`. `ChangeResult` (resultados de cambio, C2) se agregará cuando P2 produzca `run.json`.

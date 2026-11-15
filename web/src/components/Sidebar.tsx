@@ -30,6 +30,7 @@ import { type GcovStackSpec } from '../mocks/initialWorkspaces'
 import { ExploradorFeature } from '../features/explorador'
 import { ComparadorFeature } from '../features/comparador'
 import { Etapa1ChartsPanel } from './Etapa1ChartsPanel'
+import { RoiChartsSection } from './RoiChartsSection'
 import { formatRelative } from '../utils/time'
 
 interface SidebarProps {
@@ -372,6 +373,8 @@ export function Sidebar({
               {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% de píxeles válidos en el recorte · {layer.pixel_m} m
             </p>)}
           </article>)}
+          <h3>Gráficas NISAR de la ROI</h3>
+          <RoiChartsSection roiLayers={roiLayers} compact />
           <p>Los resultados se conservan por región. Duplica el mapa para guardar otra ROI.</p>
         </section> : <>
         {/* Nodo 2: Catálogo ASF (3 Pilas GCOV Chiapas) + Capas Contrato C1 (data/raw) */}

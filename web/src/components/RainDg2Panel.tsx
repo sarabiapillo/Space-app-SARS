@@ -21,6 +21,7 @@ import { SOLAR_PRESET_ZONES } from './RightPanel'
 import type { EscenaNisar, FloodSimulationState, LngLat } from '../types/workspace'
 import { simulateFloodScenario } from '../api/client'
 import { generateFloodRaster } from '../utils/floodGenerator'
+import { FloodCharts } from './FloodCharts'
 
 interface RainDg2PanelProps {
   escena: EscenaNisar
@@ -214,6 +215,8 @@ export function RainDg2Panel({
       let dataUrl = ''
       let resultBounds = bbox
       let stats = null
+      let charts = null
+      let statsSource: 'backend' | 'local' = 'backend'
 
       try {
         const simRes = await simulateFloodScenario({
@@ -234,6 +237,7 @@ export function RainDg2Panel({
           dataUrl = simRes.dataUrl
           resultBounds = simRes.bounds
           stats = simRes.stats
+          charts = simRes.charts ?? null
         }
       } catch (backendErr) {
         console.warn('Simulación remota NASADEM derivando a generador topográfico local:', backendErr)
@@ -251,6 +255,7 @@ export function RainDg2Panel({
         dataUrl = floodResult.dataUrl
         resultBounds = floodResult.bounds
         stats = floodResult.stats
+        statsSource = 'local'
       }
 
       // 3. Actualizar estado y superponer en el mapa MapLibre
@@ -261,6 +266,8 @@ export function RainDg2Panel({
         rasterBounds: resultBounds,
         showRasterOnMap: true,
         stats: stats ?? undefined,
+        charts,
+        statsSource,
       })
 
       // 4. Enfocar suavemente el mapa en el área calculada
@@ -787,6 +794,9 @@ export function RainDg2Panel({
                   </div>
                 </div>
               )}
+
+              {/* Gráficas generadas con el resultado de la simulación de la zona / ROI seleccionada */}
+              {flood.stats && <FloodCharts flood={flood} />}
 
               {/* Botón interactivo para ver y revisar las ecuaciones físicas */}
               <button

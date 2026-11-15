@@ -85,6 +85,21 @@ Errores del sobre usan `400` y prefijo `rainfall_profile`: objeto nulo/no objeto
 
 JSON malformado, claves JSON repetidas o media type no compatible usan errores estándar de DRF (400/415); método distinto de POST responde 405. No incluir credenciales ni rutas locales en solicitudes o respuestas.
 
+## Gráficas del simulador (2026-11-15)
+
+`POST /api/flood-scenarios/simulate/` devuelve además `charts.depth_classes`: área y % del área mojada por clase de calado (0.03–0.10, 0.10–0.30, 0.30–0.80, 0.80–1.50 y ≥ 1.50 m, los mismos cortes que la paleta del ráster), con `cell_size_m` y `wet_threshold_m` (0.03 m). La suma de las clases es `stats.floodedAreaKm2`.
+
+El panel **Simulador de Lluvia & Encharcamientos** dibuja con Chart.js (`web/src/components/FloodCharts.tsx`), al terminar cada simulación:
+
+| Gráfica | Datos | Nota que muestra |
+|---|---|---|
+| Balance hídrico | `totalVolumeM3`, `infiltratedVolumeM3`, `effectiveVolumeM3`, `floodedVolumeM3` | Infiltrado + escorrentía = lluvia total |
+| Distribución de calados | `charts.depth_classes` | Solo con el backend NASADEM; con el generador local de respaldo dice "no disponible" |
+| Vías afectadas | `roadsCutKm`, `roadsWarningKm` | Estimación por densidad vial típica, no inventario de caminos |
+| Hietograma | `rainfallMm`, `durationHours` | Intensidad uniforme: supuesto del modelo, no registro de lluvia |
+
+Cada gráfica indica si las cifras vienen del backend (DEM NASADEM 30 m) o del generador local de respaldo. Prueba: `backend/analyses/test_flood_charts.py` (DEM sintético). Prueba real en Windows (2026-11-15), ROI de 0.036° cerca de Tuxtla, 80 mm en 6 h: 8 s, 2.292 km² mojados, que coinciden con la suma de las 5 clases.
+
 ## Estado inicial y límites científicos
 
 La fuente elegida para una futura observación de extensión de agua es NISAR. La intención no es aún un estado inicial de profundidad: clasificación de agua no validada, profundidad y tratamiento de clases desconocidas siguen siendo cuestiones separadas y pendientes. No infiera que «sin agua detectada» significa seco, ni derive profundidad, DEM, infiltración o fronteras del perfil sintético.

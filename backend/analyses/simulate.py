@@ -144,6 +144,18 @@ def compute_topographic_flood(
     mean_depth_m = float(total_depth[wet_mask].mean()) if wet_count > 0 else 0.0
     total_flood_volume_m3 = float((total_depth[wet_mask] * cell_area).sum())
 
+    # Distribución de calados en las celdas mojadas, con los mismos cortes que la paleta del ráster PNG.
+    depth_classes = []
+    edges = [0.03, 0.10, 0.30, 0.80, 1.50, None]
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        sel = (total_depth >= lo) if hi is None else ((total_depth >= lo) & (total_depth < hi))
+        n = int(sel.sum())
+        depth_classes.append({
+            "desde_m": lo, "hasta_m": hi, "celdas": n,
+            "area_km2": round(n * cell_area / 1e6, 4),
+            "pct_mojado": round(100.0 * n / wet_count, 2) if wet_count else 0.0,
+        })
+
     q_peak_m3_s = float(q_discharge.max())
     v_max_m_s = float(velocity[wet_mask].max()) if wet_count > 0 else 0.0
     v_mean_m_s = float(velocity[wet_mask].mean()) if wet_count > 0 else 0.0
@@ -280,6 +292,11 @@ def compute_topographic_flood(
             "roadsWarningKm": roads_warning_km,
             "riskLevel": risk_level,
             "riskDescription": risk_description,
+        },
+        "charts": {
+            "depth_classes": depth_classes,
+            "cell_size_m": cell_size,
+            "wet_threshold_m": 0.03,
         },
         "hydro_equations": {
             "continuity": "∂t h + ∇·(h u) = r - i  (Conservación de masa bidimensional)",

@@ -140,7 +140,9 @@ Igual que un elemento de la lista. Agrega:
 
 ## `GET /api/scenes/{scene_id}/charts`
 
-Todas las gráficas de la inspección **más reciente**. Con `?code_version=<commit>` se pide una corrida concreta.
+Todas las gráficas de la inspección **más reciente**. Filtros opcionales:
+- `?code_version=<commit>`: una corrida concreta.
+- `?roi=<id>`: la inspección de una ROI concreta (id de `/api/rois`). La misma escena puede tener una inspección por cada ROI dibujada en el mapa (`/api/roi-jobs`, ver [api-roi-jobs.md](api-roi-jobs.md)); sin este filtro se devuelve la más reciente de cualquier ROI.
 
 ```json
 {

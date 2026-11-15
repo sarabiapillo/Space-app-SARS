@@ -167,6 +167,25 @@ export interface FloodSimulationState {
     riskLevel?: string
     riskDescription?: string
   } | null
+  /** Datos para las gráficas del simulador (solo los devuelve el backend NASADEM). */
+  charts?: FloodChartsData | null
+  /** De dónde salieron las cifras: cálculo del backend con NASADEM o generador local de respaldo. */
+  statsSource?: 'backend' | 'local'
+}
+
+/** Una clase de calado del ráster de inundación (mismos cortes que la paleta del mapa). */
+export interface FloodDepthClass {
+  desde_m: number
+  hasta_m: number | null
+  celdas: number
+  area_km2: number
+  pct_mojado: number
+}
+
+export interface FloodChartsData {
+  depth_classes: FloodDepthClass[]
+  cell_size_m: number
+  wet_threshold_m: number
 }
 
 /** Vista de cámara del mapa. */

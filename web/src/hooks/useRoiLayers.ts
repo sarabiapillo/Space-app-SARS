@@ -1,6 +1,22 @@
 import { useEffect, useState } from 'react'
 import type { LngLat } from '../types/workspace'
 import type { ExploreWebManifest } from '../api/client'
+import type { ExploreChartsManifest } from '../mocks/initialWorkspaces'
+
+/** Gráficas de una escena de la ROI (graficas.json generado por etapa1 sobre la ROI dibujada). */
+export interface RoiChartsEntry {
+  granuleId: string
+  fecha: string
+  manifest: ExploreChartsManifest
+}
+
+/** Dónde quedó la copia de las gráficas de la ROI (disco y PostGIS). */
+export interface RoiChartsCopy {
+  disco?: string | null
+  base_datos: 'ok' | 'parcial' | 'no disponible' | 'guardando'
+  escenas?: Array<{ granuleId: string; code_version: string; roi_id: string; graficas: number }>
+  errores?: string[]
+}
 
 export type RoiLayersState = ReturnType<typeof useRoiLayers>
 
@@ -8,7 +24,8 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
   const [state, setState] = useState<{
     key: string; loading: boolean; error: string | null; message: string;
     manifests: ExploreWebManifest[]; comparable: boolean
-  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false })
+    charts: RoiChartsEntry[]; copia: RoiChartsCopy | null
+  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, charts: [], copia: null })
   const [attempt, setAttempt] = useState(0)
   const geometry = JSON.stringify(region)
   const key = `${viewKey}:${geometry}:${attempt}`
@@ -19,7 +36,7 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
     const update = (data: Partial<typeof state>) => {
       if (!controller.signal.aborted) setState(previous => ({ ...previous, ...data, key }))
     }
-    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false })
+    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, charts: [], copia: null })
     async function json(url: string, body?: unknown) {
       const response = await fetch(url, {
         method: body ? 'POST' : 'GET', signal: controller.signal,
@@ -50,7 +67,17 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
                   img.onerror = () => reject(new Error('No se pudo cargar una imagen de la ROI.'))
                   img.src = `/${c.png}`
                 }))))
-              update({ loading: false, manifests: result.manifests, comparable: result.comparable, message: result.message })
+              update({ loading: false, manifests: result.manifests, comparable: result.comparable, message: result.message,
+                charts: Array.isArray(result.charts) ? result.charts : [], copia: result.copia ?? null })
+              // La copia en PostGIS se escribe justo después de terminar: consultar una vez más su estado.
+              if (result.copia?.base_datos === 'guardando') {
+                timer = setTimeout(async () => {
+                  try {
+                    const again = await json(`/api/roi-jobs/${id}`)
+                    if (again.copia) update({ copia: again.copia })
+                  } catch { /* el estado de la copia es informativo */ }
+                }, 2500)
+              }
               return
             }
             if (Date.now() > deadline) throw new Error('Se agotó el tiempo de espera. Reintenta la carga.')
@@ -73,5 +100,6 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
   const current = state.key === key
   return { ...state, loading: Boolean(region) && (!current || state.loading),
     error: current ? state.error : null, manifests: current ? state.manifests : [],
-    comparable: current && state.comparable, retry: () => setAttempt(n => n + 1) }
+    comparable: current && state.comparable, charts: current ? state.charts : [],
+    copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1) }
 }

@@ -16,6 +16,8 @@ import {
 import type { LngLat, SolarSimulationState } from '../types/workspace'
 import { getColormapSpec } from '../utils/colormapLut'
 import { runSolarSimulation, type SolarSimulationResponse } from '../api/client'
+import { RoiChartsSection } from './RoiChartsSection'
+import type { RoiLayersState } from '../hooks/useRoiLayers'
 
 export interface SolarZoneOption {
   id: string
@@ -116,6 +118,8 @@ interface SolarPanelProps {
   center?: LngLat
   croppedRegion?: LngLat[] | null
   onFlyToZone?: (center: LngLat, zoom?: number) => void
+  /** Capas y gráficas NISAR de la ROI dibujada (se generan solas con /api/roi-jobs). */
+  roiLayers?: RoiLayersState
 }
 
 /** Convierte el ángulo solar [0..180] en hora solar (06:00 a 18:00). */
@@ -145,6 +149,7 @@ export function RightPanel({
   center,
   croppedRegion,
   onFlyToZone,
+  roiLayers,
 }: SolarPanelProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -619,6 +624,13 @@ export function RightPanel({
               </div>
             )}
           </div>
+        )}
+
+        {/* Gráficas NISAR de la ROI: ángulo de incidencia, retrodispersión γ⁰ y máscara QA de subfranja */}
+        {roiLayers && croppedRegion && (
+          <section className="solar-roi-charts" aria-label="Gráficas NISAR de la ROI">
+            <RoiChartsSection roiLayers={roiLayers} region={croppedRegion} compact />
+          </section>
         )}
       </div>
     </aside>

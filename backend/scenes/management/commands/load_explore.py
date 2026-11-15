@@ -7,8 +7,8 @@
 Lee ``data/explore/<granuleId>/metadatos.json`` y ``graficas.json`` (los escribe
 ``python -m pipeline.etapa1``) y guarda la escena, la ROI, la inspección y sus gráficas.
 
-- Volver a cargar la misma versión del código reemplaza esa inspección y sus gráficas.
-- Una versión distinta agrega otra inspección y conserva las anteriores.
+- Volver a cargar la misma escena, ROI y versión del código reemplaza esa inspección y sus gráficas.
+- Otra ROI u otra versión agrega otra inspección y conserva las anteriores.
 - Si falta ``graficas.json`` (carpetas de antes del 2026-11-15), se detiene: hay que volver a correr etapa1.
 - No lee los .h5 ni llama al pipeline: solo los JSON que este produjo.
 """
@@ -130,9 +130,8 @@ class Command(BaseCommand):
         roi = ROI.objects.filter(geom__equals=roi_geom).first() or ROI.objects.create(name=roi_name, geom=roi_geom)
 
         insp, created = SceneInspection.objects.update_or_create(
-            scene=scene, code_version=meta["version_codigo"],
+            scene=scene, roi=roi, code_version=meta["version_codigo"],
             defaults={
-                "roi": roi,
                 "created_utc": parse_time(meta["creado_utc"]),
                 "pct_valid_in_roi": float(meta["roi"]["pct_validos_en_poligono"]),
                 "roi_stats": meta["estadisticas_roi"],

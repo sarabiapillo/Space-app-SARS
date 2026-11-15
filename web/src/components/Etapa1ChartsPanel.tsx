@@ -18,6 +18,7 @@ import { Bar, Doughnut, Line } from 'react-chartjs-2'
 import { AlertTriangle, BarChart3, CheckCircle2, FileJson, Info } from 'lucide-react'
 import { fetchExploreCharts, type ExploreChartsFetchResult } from '../api/client'
 import { ScientificFiguresViewer } from './ScientificFiguresViewer'
+import type { RoiChartsEntry } from '../hooks/useRoiLayers'
 import {
   RAW_SCENE_IDS,
   type ExploreHistogramChart,
@@ -40,6 +41,13 @@ ChartJS.register(
 
 interface Etapa1ChartsPanelProps {
   compact?: boolean
+  /**
+   * Gráficas de la ROI dibujada en el mapa (una entrada por fecha). Si viene con datos, el panel
+   * las usa en lugar del par fijo T62/F10 de data/explore/.
+   */
+  roiCharts?: RoiChartsEntry[]
+  /** Texto corto que identifica la ROI (p. ej. su caja en grados). */
+  roiLabel?: string
 }
 
 type DateChoice = 't1' | 't2'
@@ -192,9 +200,17 @@ const maskValueLabels: Plugin<'bar'> = {
   },
 }
 
-export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
+export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etapa1ChartsPanelProps) {
   const [dateChoice, setDateChoice] = useState<DateChoice>('t2')
-  const [viewMode, setViewMode] = useState<'matplotlib' | 'chartjs'>('matplotlib')
+  const [chosenViewMode, setViewMode] = useState<'matplotlib' | 'chartjs'>('matplotlib')
+  const [roiIndexChoice, setRoiIndex] = useState<number | null>(null)
+  const roiMode = Boolean(roiCharts && roiCharts.length > 0)
+  // Las capas de la ROI se generan sin figuras PNG (--sin-figuras): solo hay vista Chart.js.
+  const viewMode = roiMode ? 'chartjs' : chosenViewMode
+  const roiIndex = roiMode
+    ? Math.min(roiIndexChoice ?? roiCharts!.length - 1, roiCharts!.length - 1)
+    : 0
+  const roiEntry = roiMode ? roiCharts![roiIndex] : null
   const [polFilter, setPolFilter] = useState<PolFilter>('both')
   const [maskMode, setMaskMode] = useState<MaskChartMode>('bar')
   const [loaded, setLoaded] = useState<{
@@ -208,6 +224,7 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
   const targetDateLabel = dateChoice === 't1' ? '2026-06-18' : '2026-10-16'
 
   useEffect(() => {
+    if (roiMode) return
     let cancelled = false
     fetchExploreCharts(targetGranuleId).then((res) => {
       if (cancelled) return
@@ -216,12 +233,16 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
     return () => {
       cancelled = true
     }
-  }, [targetGranuleId])
+  }, [targetGranuleId, roiMode])
 
-  const loading = loaded?.granuleId !== targetGranuleId
-  const manifest = !loading ? (loaded?.result.manifest ?? null) : null
-  const sourceUrl = !loading ? (loaded?.result.sourceUrl ?? '') : ''
-  const error = !loading ? (loaded?.result.error ?? null) : null
+  const loading = roiMode ? false : loaded?.granuleId !== targetGranuleId
+  const manifest = roiEntry
+    ? roiEntry.manifest
+    : !loading ? (loaded?.result.manifest ?? null) : null
+  const sourceUrl = roiEntry
+    ? `ROI · ${roiEntry.granuleId}/graficas.json`
+    : !loading ? (loaded?.result.sourceUrl ?? '') : ''
+  const error = roiMode ? null : !loading ? (loaded?.result.error ?? null) : null
 
   const histogramChart = useMemo(
     () =>
@@ -513,13 +534,41 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
         <div className="ws-charts-panel__title">
           <BarChart3 size={14} className="ws-charts-panel__icon" />
           <div>
-            <strong>Gráficas Etapa 1 · T62/F10 (Chart.js)</strong>
+            <strong>
+              {roiMode ? 'Gráficas NISAR de la ROI (Chart.js)' : 'Gráficas Etapa 1 · T62/F10 (Chart.js)'}
+            </strong>
             <div className="ws-charts-panel__sub">
-              <code>graficas.json</code> · sin CSV de <code>control/</code>
+              {roiMode ? (
+                <>
+                  Ángulo de incidencia · retrodispersión γ⁰ · máscara QA de subfranja
+                  {roiLabel ? <> · ROI {roiLabel}</> : null}
+                </>
+              ) : (
+                <>
+                  <code>graficas.json</code> · sin CSV de <code>control/</code>
+                </>
+              )}
             </div>
           </div>
         </div>
 
+        {roiMode ? (
+          <div className="ws-charts-panel__controls">
+            <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap' }}>
+              {roiCharts!.map((entry, i) => (
+                <button
+                  key={entry.granuleId}
+                  type="button"
+                  className={`ws-tool-btn ws-tool-btn--mono ${i === roiIndex ? 'is-active' : ''}`}
+                  onClick={() => setRoiIndex(i)}
+                  title={entry.granuleId}
+                >
+                  t{i + 1} ({entry.fecha})
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
         <div className="ws-charts-panel__controls">
           <div style={{ display: 'flex', gap: '3px' }}>
             <button
@@ -559,6 +608,7 @@ export function Etapa1ChartsPanel({ compact = false }: Etapa1ChartsPanelProps) {
             </button>
           </div>
         </div>
+        )}
       </div>
 
       {viewMode === 'matplotlib' ? (

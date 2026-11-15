@@ -201,3 +201,72 @@ class ApiTests(TestCase):
     def test_read_only(self):
         r = self.client.post("/api/scenes", {}, content_type="application/json")
         self.assertEqual(r.status_code, 405)
+
+
+OTHER_ROI_WKT = "POLYGON((-93.1 16.7,-93.0 16.7,-93.0 16.8,-93.1 16.8,-93.1 16.7))"
+
+
+class RoiCopyTests(TestCase):
+    """Gráficas de ROI dibujadas en el mapa: una inspección por (escena, ROI) y copia a la base."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _with_roi(self, folder, wkt):
+        meta = json.loads((folder / "metadatos.json").read_text(encoding="utf-8"))
+        meta["roi"]["wkt_4326"] = wkt
+        (folder / "metadatos.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    def test_same_scene_two_rois_keeps_both(self):
+        d = write_explore(self.base)
+        call_command("load_explore", GRANULE, "--dir", str(self.base), stdout=StringIO())
+        self._with_roi(d, OTHER_ROI_WKT)
+        call_command("load_explore", GRANULE, "--dir", str(self.base), "--roi-nombre", "roi-dibujada", stdout=StringIO())
+        self.assertEqual(SceneInspection.objects.count(), 2)
+        self.assertEqual(ROI.objects.count(), 2)
+        other = ROI.objects.get(name="roi-dibujada")
+        r = self.client.get(f"/api/scenes/{GRANULE}/charts?roi={other.pk}", HTTP_ACCEPT="application/json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["inspection"]["roi_id"], str(other.pk))
+        self.assertEqual(self.client.get(f"/api/scenes/{GRANULE}/charts?roi=x").status_code, 400)
+        self.assertEqual(self.client.get(f"/api/scenes/{GRANULE}/charts?roi=999").status_code, 404)
+
+    def test_roi_job_copy_goes_to_database(self):
+        from scenes import roi_views
+        job = self.base / ("a" * 64)
+        job.mkdir()
+        copy = self.base / "graficas-roi" / job.name
+        self._with_roi(write_explore(copy), OTHER_ROI_WKT)
+        roi_views.write_json(job / "result.json", {"copia_disco": copy.as_posix(), "manifests": []})
+        roi_views.copy_to_database(job)
+        info = json.loads((job / "copia.json").read_text(encoding="utf-8"))
+        self.assertEqual(info["base_datos"], "ok")
+        self.assertEqual(info["escenas"][0]["granuleId"], GRANULE)
+        self.assertEqual(info["escenas"][0]["graficas"], 3)
+        self.assertEqual(ROI.objects.get().name, f"roi-{'a' * 12}")
+        self.assertEqual(SceneChart.objects.count(), 3)
+
+    def test_roi_job_copy_reports_bad_folder_without_failing(self):
+        from scenes import roi_views
+        job = self.base / ("b" * 64)
+        job.mkdir()
+        copy = self.base / "graficas-roi" / job.name
+        write_explore(copy, charts=False)                      # falta graficas.json
+        roi_views.write_json(job / "result.json", {"copia_disco": copy.as_posix(), "manifests": []})
+        roi_views.copy_to_database(job)
+        info = json.loads((job / "copia.json").read_text(encoding="utf-8"))
+        self.assertEqual(info["base_datos"], "no disponible")
+        self.assertEqual(info["errores"], [f"{GRANULE}: CommandError"])
+
+    def test_result_without_copy_does_not_scan_repo(self):
+        from scenes import roi_views
+        job = self.base / ("c" * 64)
+        job.mkdir()
+        roi_views.write_json(job / "result.json", {"manifests": []})
+        roi_views.copy_to_database(job)
+        self.assertEqual(json.loads((job / "copia.json").read_text(encoding="utf-8"))["escenas"], [])
+        self.assertEqual(Scene.objects.count(), 0)

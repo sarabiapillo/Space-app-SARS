@@ -492,6 +492,11 @@ export interface FloodSimulateResponse {
     riskLevel?: string
     riskDescription?: string
   }
+  charts?: {
+    depth_classes: Array<{ desde_m: number; hasta_m: number | null; celdas: number; area_km2: number; pct_mojado: number }>
+    cell_size_m: number
+    wet_threshold_m: number
+  }
   hydro_equations?: Record<string, string>
   model_metadata?: {
     topography_dem: string
