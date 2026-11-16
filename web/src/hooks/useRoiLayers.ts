@@ -3,6 +3,8 @@ import type { LngLat } from '../types/workspace'
 import type { RoiGeometry } from '../utils/roi'
 import type { ExploreWebManifest } from '../api/client'
 import type { ExploreChartsManifest } from '../mocks/initialWorkspaces'
+import { localizeText } from '../i18n/core.ts'
+import { useTranslation } from '../i18n/useTranslation.ts'
 
 /** Gráficas de una escena de la ROI (graficas.json generado por etapa1 sobre la ROI dibujada). */
 export interface RoiChartsEntry {
@@ -22,6 +24,7 @@ export interface RoiChartsCopy {
 export type RoiLayersState = ReturnType<typeof useRoiLayers>
 
 export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: string) {
+  useTranslation() // Subscribe for display-only changes; never restart the ROI job on language switch.
   const [state, setState] = useState<{
     key: string; loading: boolean; error: string | null; message: string;
     manifests: ExploreWebManifest[]; comparable: boolean
@@ -100,8 +103,9 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   const current = state.key === key
-  return { ...state, loading: Boolean(region) && (!current || state.loading),
-    error: current ? state.error : null, manifests: current ? state.manifests : [],
+  return { ...state, message: localizeText(state.message),
+    loading: Boolean(region) && (!current || state.loading),
+    error: current ? localizeText(state.error) : null, manifests: current ? state.manifests : [],
     comparable: current && state.comparable, charts: current ? state.charts : [],
     copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1) }
 }

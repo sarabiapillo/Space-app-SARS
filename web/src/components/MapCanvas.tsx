@@ -49,6 +49,8 @@ import {
 } from '../mocks/initialWorkspaces'
 import { verifyExploreScaleMatch } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
+import { useTranslation } from '../i18n/useTranslation.ts'
+import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
 import { geometryBounds, rectangleFromCorners, type AdministrativeGeometry } from '../utils/roi'
 import {
   colorizePngWithLut,
@@ -280,11 +282,31 @@ export function MapCanvas({
   gcovFootprint = null,
   onNotify,
 }: MapCanvasProps) {
+  const { t, localizeText, language, locale } = useTranslation()
+  const displayDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00Z`).toLocaleDateString(locale, { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' })
+    : localizeText(value)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapStageRef = useRef<HTMLDivElement>(null)
   const svgOverlayRef = useRef<SVGSVGElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const navigationRef = useRef<NavigationControl | null>(null)
+  useEffect(() => {
+    const nav = navigationRef.current
+    if (!nav) return
+    for (const [button, label] of [[nav._zoomInButton, language === 'en' ? 'Zoom in' : 'Acercar'], [nav._zoomOutButton, language === 'en' ? 'Zoom out' : 'Alejar']] as const) {
+      button.title = label
+      button.setAttribute('aria-label', label)
+    }
+    // MapLibre has no public live locale setter; update only its own attribution toggle.
+    const attribution = mapRef.current?.getContainer().querySelector<HTMLButtonElement>('.maplibregl-ctrl-attrib-button')
+    if (attribution) {
+      const label = language === 'en' ? 'Toggle attribution' : 'Mostrar u ocultar atribución'
+      attribution.title = label
+      attribution.setAttribute('aria-label', label)
+    }
+  }, [language, mapReady])
   const [viewport, setViewport] = useState<ViewportMetrics>({
     centro: view.centro,
     zoom: view.zoom,
@@ -302,7 +324,7 @@ export function MapCanvas({
     if (!key) return
     notifiedRoiKey.current = key
     const dates = roiLayers.manifests.map(manifest => manifest.escena.fecha_inicio?.slice(0, 10)).join(' → ')
-    onNotify('success', `${roiLayers.message} ${dates}`)
+    onNotify('success', `${localizeMapText(roiLayers.message)} ${dates}`)
   }, [hasAnalysisRoi, roiLayers.key, roiLayers.loading, roiLayers.error, roiLayers.manifests, roiLayers.message, onNotify])
 
   // Estado del cuadro flotante arrastrable de herramientas de dibujo
@@ -439,12 +461,15 @@ export function MapCanvas({
       center: initial.centro,
       zoom: initial.zoom,
       attributionControl: { compact: true },
+      locale: getLanguage() === 'en' ? { 'NavigationControl.ZoomIn': 'Zoom in', 'NavigationControl.ZoomOut': 'Zoom out', 'AttributionControl.ToggleAttribution': 'Toggle attribution' } : { 'NavigationControl.ZoomIn': 'Acercar', 'NavigationControl.ZoomOut': 'Alejar', 'AttributionControl.ToggleAttribution': 'Mostrar u ocultar atribución' },
       canvasContextAttributes: { preserveDrawingBuffer: true },
     })
     mapRef.current = map
 
     map.addControl(new ScaleControl({ unit: 'metric', maxWidth: 110 }), 'bottom-left')
-    map.addControl(new NavigationControl({ showCompass: false }), 'bottom-left')
+    const navigation = new NavigationControl({ showCompass: false })
+    map.addControl(navigation, 'bottom-left')
+    navigationRef.current = navigation
 
     const syncViewport = () => {
       const c = map.getCenter()
@@ -615,7 +640,7 @@ export function MapCanvas({
         } else {
           setLabelEditor({
             coord,
-            text: 'Zona de interés',
+            text: tr('Zona de interés', 'Region of interest'),
             targetAnnotationId: null,
           })
         }
@@ -871,6 +896,7 @@ export function MapCanvas({
       window.cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
       map.remove()
+      navigationRef.current = null
       mapRef.current = null
     }
   }, [])
@@ -901,10 +927,10 @@ export function MapCanvas({
     ...escena,
     t1: manifestT1?.escena.fecha_inicio?.slice(0, 10) ?? 'Sin datos',
     t2: manifestT2?.escena.fecha_inicio?.slice(0, 10) ?? 'Sin segunda fecha',
-    t1SceneId: manifestT1?.escena.granuleId ?? 'Sin datos',
-    t2SceneId: manifestT2?.escena.granuleId ?? 'Sin datos',
-    crid: manifestT1?.escena.crid ?? 'Sin datos',
-    madurez: manifestT1?.escena.madurez_catalogo ?? 'Desconocida',
+    t1SceneId: manifestT1?.escena.granuleId ?? t('Sin datos', 'No data'),
+    t2SceneId: manifestT2?.escena.granuleId ?? t('Sin datos', 'No data'),
+    crid: manifestT1?.escena.crid ?? t('Sin datos', 'No data'),
+    madurez: manifestT1?.escena.madurez_catalogo ?? t('Desconocida', 'Unknown'),
   } : escena
 
   const activeLayerOption =
@@ -924,7 +950,7 @@ export function MapCanvas({
     const key = `${roiLayers.key}:${dateViewMode}:${exploreLayerId}`
     if (notifiedMissingLayerKey.current === key) return
     notifiedMissingLayerKey.current = key
-    onNotify('error', 'La capa seleccionada no está disponible. Elige otra polarización o fecha.')
+    onNotify('error', tr('La capa seleccionada no está disponible. Elige otra polarización o fecha.', 'The selected layer is unavailable. Choose another polarization or acquisition date.'))
   }, [roiReady, activeLayerEntry, roiLayers.key, dateViewMode, exploreLayerId, onNotify])
 
   const scaleCheck =
@@ -1310,7 +1336,7 @@ export function MapCanvas({
       const anchor = getAnnotationAnchorCoord(selectedAnnotation)
       setLabelEditor({
         coord: anchor,
-        text: 'Trazo marcado',
+        text: t('Trazo marcado', 'Marked stroke'),
         targetAnnotationId: null,
       })
     }
@@ -1575,9 +1601,9 @@ export function MapCanvas({
   const isDg2 = activeDockWindow?.kind === 'agua'
   const activeDockLabel = activeDockWindow
     ? activeDockWindow.kind === 'agua'
-      ? `Agua / DG2 ${activeDockWindow.index}`
-      : `Graphics / Map Plot ${activeDockWindow.index}`
-    : 'Graphics / Map Plot 1'
+      ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: activeDockWindow.index })
+      : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
+    : t('Gráficos / Mapa 1', 'Graphics / Map Plot 1')
 
   // Cerrar el menú de «+» al hacer clic fuera o con Escape.
   useEffect(() => {
@@ -1755,16 +1781,16 @@ export function MapCanvas({
   ]
 
   return (
-    <main className="ws-center-dock" aria-label="Área Central de Estación de Trabajo">
+    <main className="ws-center-dock" aria-label={t('Área Central de Estación de Trabajo', 'Central workspace area')}>
       {/* 1. Cabecera de ventanas acopladas (Map Plots y ventanas de agua/DG2) + botón «+» */}
-      <div className="ws-panel-tabbar" role="tablist" aria-label="Ventanas del área central">
+      <div className="ws-panel-tabbar" role="tablist" aria-label={t('Ventanas del área central', 'Central area windows')}>
         <div className="ws-panel-tabbar__tabs">
           {dockWindows.map((win) => {
             const isActive = win.id === activeDockWindow?.id
             const isAgua = win.kind === 'agua'
             const label = isAgua
-              ? `Agua / DG2 ${win.index}`
-              : `Graphics / Map Plot ${win.index}`
+              ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: win.index })
+              : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
             return (
               <div
                 key={win.id}
@@ -1792,11 +1818,11 @@ export function MapCanvas({
                 <button
                   type="button"
                   className="ws-panel-tab__close"
-                  aria-label={`Cerrar ${label}`}
+                  aria-label={t('Cerrar {name}', 'Close {name}', { name: label })}
                   title={
                     dockWindows.length <= 1
-                      ? 'Debe quedar al menos una ventana'
-                      : `Cerrar ${label}`
+                      ? t('Debe quedar al menos una ventana', 'At least one window must remain')
+                      : t('Cerrar {name}', 'Close {name}', { name: label })
                   }
                   disabled={dockWindows.length <= 1}
                   onClick={() => onCloseDockWindow(win.id)}
@@ -1811,16 +1837,16 @@ export function MapCanvas({
             <button
               type="button"
               className="ws-panel-tab-add"
-              aria-label="Agregar ventana"
+              aria-label={t('Agregar ventana', 'Add window')}
               aria-haspopup="menu"
               aria-expanded={newWindowMenuOpen}
-              title="Agregar ventana"
+              title={t('Agregar ventana', 'Add window')}
               onClick={() => setNewWindowMenuOpen((prev) => !prev)}
             >
               <Plus size={13} aria-hidden="true" />
             </button>
             {newWindowMenuOpen && (
-              <div className="ws-window-menu" role="menu" aria-label="Tipo de ventana">
+              <div className="ws-window-menu" role="menu" aria-label={t('Tipo de ventana', 'Window type')}>
                 <button
                   type="button"
                   role="menuitem"
@@ -1832,8 +1858,8 @@ export function MapCanvas({
                 >
                   <Monitor size={13} aria-hidden="true" />
                   <span>
-                    Mapa normal
-                    <em>Graphics / Map Plot</em>
+                    {t('Mapa normal', 'Standard map')}
+                    <em>{t('Gráficos / Mapa', 'Graphics / Map Plot')}</em>
                   </span>
                 </button>
                 <button
@@ -1847,8 +1873,8 @@ export function MapCanvas({
                 >
                   <Droplets size={13} aria-hidden="true" />
                   <span>
-                    Ventana de agua
-                    <em>Agua / DG2</em>
+                    {t('Ventana de agua', 'Water window')}
+                    <em>{t('Agua / DG2', 'Water / DG2')}</em>
                   </span>
                 </button>
               </div>
@@ -1858,7 +1884,7 @@ export function MapCanvas({
 
         <div className="ws-panel-tabbar__summary">
           <span className="ws-mono">
-            {isEditing && activeMapName ? activeMapName : 'Mapa General (Solo lectura)'}
+            {isEditing && activeMapName ? activeMapName : t('Mapa General (Solo lectura)', 'Overview map (read-only)')}
           </span>
           <span>·</span>
           <span className="ws-mono">
@@ -1867,14 +1893,14 @@ export function MapCanvas({
           <span>·</span>
           <span className="ws-mono">
             {dateViewMode === 'swipe'
-              ? `Swipe t1 (${displayScene.t1}) ↔ t2 (${displayScene.t2})`
+              ? t('Deslizador t1 ({t1}) ↔ t2 ({t2})', 'Swipe t1 ({t1}) ↔ t2 ({t2})', { t1: displayDate(displayScene.t1), t2: displayDate(displayScene.t2) })
               : dateViewMode === 't1'
-                ? `t1 = ${displayScene.t1}`
-                : `t2 = ${displayScene.t2}`}
+                ? `t1 = ${displayDate(displayScene.t1)}`
+                : `t2 = ${displayDate(displayScene.t2)}`}
           </span>
           <span>·</span>
           <span className="ws-mono">
-            Centro: [{viewport.centro[0].toFixed(4)}, {viewport.centro[1].toFixed(4)}] · z=
+            {t('Centro', 'Center')}: [{viewport.centro[0].toFixed(4)}, {viewport.centro[1].toFixed(4)}] · z=
             {viewport.zoom.toFixed(2)}
           </span>
         </div>
@@ -1892,43 +1918,43 @@ export function MapCanvas({
           <div
             className="ws-graphics-toolbar"
             role="toolbar"
-            aria-label={`Barra de acciones del lienzo ${activeDockLabel}`}
+            aria-label={t('Barra de acciones del lienzo {label}', 'Canvas actions for {label}', { label: activeDockLabel })}
           >
             <div className="ws-graphics-toolbar__group">
               <button
                 type="button"
                 className={`ws-tool-btn ${floatingToolsOpen ? 'is-active' : ''}`}
                 onClick={onToggleFloatingTools}
-                title="Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo"
+                title={t('Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo', 'Show/hide draggable drawing toolbox')}
               >
                 <PencilRuler size={13} />
-                <span>{floatingToolsOpen ? 'Ocultar Caja de Dibujo' : 'Mostrar Caja de Dibujo'}</span>
+                <span>{floatingToolsOpen ? t('Ocultar Caja de Dibujo', 'Hide Drawing Toolbox') : t('Mostrar Caja de Dibujo', 'Show Drawing Toolbox')}</span>
               </button>
 
               <button
                 type="button"
                 className={`ws-tool-btn ${isCaptureMode ? 'is-active' : ''}`}
                 onClick={() => (isCaptureMode ? onCancelCaptureMode() : onStartCaptureMode())}
-                title="Seleccionar región del mapa simulado y guardar PNG / JPG"
+                title={t('Seleccionar región del mapa simulado y guardar PNG / JPG', 'Select a simulated-map region and save PNG / JPG')}
               >
                 <Camera size={13} />
-                <span>{isCaptureMode ? 'Cancelar Captura' : 'Capturar Región (PNG/JPG)'}</span>
+                <span>{isCaptureMode ? t('Cancelar Captura', 'Cancel Capture') : t('Capturar Región (PNG/JPG)', 'Capture Region (PNG/JPG)')}</span>
               </button>
 
               <button
                 type="button"
                 className="ws-tool-btn"
                 onClick={handleCenterRoi}
-                title="Centrar vista sobre la ROI activa"
+                title={t('Centrar vista sobre la ROI activa', 'Center view on active ROI')}
               >
                 <Crosshair size={13} />
-                <span>Centrar ROI</span>
+                <span>{t('Centrar ROI', 'Center ROI')}</span>
               </button>
             </div>
 
             <div className="ws-graphics-toolbar__right">
               <span className="ws-mono" style={{ fontSize: 11, color: '#475569' }}>
-                {isEditing ? `Herramienta activa: ${activeTool}` : 'Vista de solo lectura (duplica el mapa para editar)'}
+                {isEditing ? t('Herramienta activa: {tool}', 'Active tool: {tool}', { tool: localizeText(activeTool) }) : t('Vista de solo lectura (duplica el mapa para editar)', 'Read-only view (duplicate the map to edit)')}
               </span>
             </div>
           </div>
@@ -2298,7 +2324,7 @@ export function MapCanvas({
                 <div
                   key={ann.id}
                   onClick={(e) => handleSelectElement(e, ann)}
-                  title={ann.kind === 'peligro' ? DANGER_CIRCLE_TOOLTIP : WARN_CIRCLE_TOOLTIP}
+                  title={localizeText(ann.kind === 'peligro' ? DANGER_CIRCLE_TOOLTIP : WARN_CIRCLE_TOOLTIP)}
                   className={`map-marker-tag ${
                     ann.kind === 'peligro' ? 'map-marker-tag--danger' : 'map-marker-tag--warn'
                   } ${isSelected ? 'is-selected' : ''}`}
@@ -2311,7 +2337,7 @@ export function MapCanvas({
                     cursor: canSelectInSvg ? 'pointer' : 'inherit',
                   }}
                 >
-                  {ann.label}
+                  {ann.label === DANGER_CIRCLE_DEFAULT_LABEL || ann.label === WARN_CIRCLE_DEFAULT_LABEL ? localizeText(ann.label) : ann.label}
                 </div>
               )
             }
@@ -2357,7 +2383,7 @@ export function MapCanvas({
               className="selection-action-pill__btn"
               onClick={handleEditSelectedText}
             >
-              ✏️ Editar etiqueta
+              ✏️ {t('Editar etiqueta', 'Edit label')}
             </button>
             <span className="selection-action-pill__sep" aria-hidden="true" />
             <button
@@ -2365,7 +2391,7 @@ export function MapCanvas({
               className="selection-action-pill__btn selection-action-pill__btn--danger"
               onClick={() => handleDeleteAnnotation(selectedAnnotation.id)}
             >
-              🗑️ Eliminar (Supr)
+              🗑️ {t('Eliminar (Supr)', 'Delete (Del)')}
             </button>
           </div>
         )}
@@ -2384,19 +2410,19 @@ export function MapCanvas({
               setIsDraggingSwipe(true)
             }}
             role="slider"
-            aria-label="Deslizador Antes y Después entre t1 y t2"
+            aria-label={t('Deslizador Antes y Después entre t1 y t2', 'Before-and-after swipe between t1 and t2')}
             aria-valuemin={2}
             aria-valuemax={98}
             aria-valuenow={Math.round(swipePct)}
             tabIndex={0}
-            title="Arrastra para comparar adquisiciones calculadas de la ROI"
+            title={t('Arrastra para comparar adquisiciones calculadas de la ROI', 'Drag to compare processed ROI acquisitions')}
           >
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--left">
-              ◀ t1 · {displayScene.t1}
+              ◀ t1 · {displayDate(displayScene.t1)}
             </span>
             <div className="swipe-handle-overlay__knob">↔</div>
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
-              t2 · {displayScene.t2} ▶
+              t2 · {displayDate(displayScene.t2)} ▶
             </span>
           </div>
         )}
@@ -2415,12 +2441,12 @@ export function MapCanvas({
               setIsDraggingFloodSwipe(true)
             }}
             role="slider"
-            aria-label="Deslizador Comparativo Inundación vs Terreno Original"
+            aria-label={t('Deslizador Comparativo Inundación vs Terreno Original', 'Flood versus original terrain comparison slider')}
             aria-valuemin={2}
             aria-valuemax={98}
             aria-valuenow={Math.round(floodSwipePct)}
             tabIndex={0}
-            title="Arrastra para comparar Terreno Original (izquierda) vs Inundación Simulada (derecha)"
+            title={t('Arrastra para comparar Terreno Original (izquierda) vs Inundación Simulada (derecha)', 'Drag to compare original terrain (left) against simulated flooding (right)')}
             onKeyDown={(e) => {
               if (e.key === 'ArrowLeft') {
                 onFloodChange?.({ ...activeFlood, compareSwipePct: Math.max(2, floodSwipePct - 5) })
@@ -2430,11 +2456,11 @@ export function MapCanvas({
             }}
           >
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--left">
-              ◀ Terreno Original
+              ◀ {t('Terreno Original', 'Original terrain')}
             </span>
             <div className="swipe-handle-overlay__knob">💧</div>
             <span className="swipe-handle-overlay__tag swipe-handle-overlay__tag--right">
-              Inundación ({activeFlood.stats?.durationHours ?? activeFlood.rainfallDuration} h · {activeFlood.rainfallAmount} mm) ▶
+              {t('Inundación', 'Flooding')} ({activeFlood.stats?.durationHours ?? activeFlood.rainfallDuration} h · {activeFlood.rainfallAmount} mm) ▶
             </span>
           </div>
         )}
@@ -2442,15 +2468,15 @@ export function MapCanvas({
         {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
         <aside
           className="comsol-colorbar"
-          aria-label={activeLayerEntry ? 'Escala radiométrica de la ROI' : 'Sin datos calculados para una ROI'}
+          aria-label={activeLayerEntry ? t('Escala radiométrica de la ROI', 'ROI radiometric scale') : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
         >
           <div className="comsol-colorbar__column">
             <div className="comsol-colorbar__header">
               <span className="comsol-colorbar__symbol">
-                {activeLayerEntry ? `${activeLayerEntry.simbolo} ${activeLayerEntry.capa}` : 'Sin datos'}
+                {activeLayerEntry ? `${activeLayerEntry.simbolo} ${activeLayerEntry.capa}` : t('Sin datos', 'No data')}
               </span>
               <span className="comsol-colorbar__unit">
-                {activeLayerEntry ? `[${activeLayerEntry.unidades} · ${activeColormapSpec.shortLabel}]` : 'Sin datos calculados para una ROI'}
+                {activeLayerEntry ? `[${activeLayerEntry.unidades} · ${activeColormapSpec.shortLabel}]` : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
               </span>
             </div>
 
@@ -2459,7 +2485,7 @@ export function MapCanvas({
                 className="comsol-colorbar__gradient"
                 style={{ background: activeColormapSpec.cssGradientVertical }}
                 role="img"
-                aria-label={`Rampa vertical ${activeColormapSpec.label} de ${vmin} dB a ${vmax} dB`}
+                aria-label={t('Rampa vertical {palette} de {min} dB a {max} dB', 'Vertical {palette} ramp from {min} dB to {max} dB', { palette: localizeText(activeColormapSpec.label), min: vmin, max: vmax })}
               />
               <div className="comsol-colorbar__ticks">
                 {activeLayerEntry && colorbarTicks.map((val, idx) => (
@@ -2474,14 +2500,14 @@ export function MapCanvas({
             </div>
 
             <div className="comsol-colorbar__footer">
-              {activeLayerEntry ? <><span>Max: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>Min: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>Sin datos calculados para una ROI</span>}
+              {activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}
             </div>
           </div>
 
           {solar.enabled && (
             <div className="comsol-colorbar__column comsol-colorbar__column--solar">
               <div className="comsol-colorbar__header">
-                <span className="comsol-colorbar__symbol">Radiación</span>
+                <span className="comsol-colorbar__symbol">{t('Radiación', 'Irradiance')}</span>
                 <span className="comsol-colorbar__unit">[Inferno · {solar.radiationIntensity}%]</span>
               </div>
               <div className="comsol-colorbar__body">
@@ -2489,12 +2515,12 @@ export function MapCanvas({
                   className="comsol-colorbar__gradient"
                   style={{ background: infernoSpec.cssGradientVertical }}
                   role="img"
-                  aria-label="Escala vertical de radiación solar de Menor radiación a Mayor radiación (Inferno)"
+                  aria-label={t('Escala vertical de irradiancia solar de menor a mayor (Inferno)', 'Vertical solar irradiance scale from lower to higher (Inferno)')}
                 />
                 <div className="comsol-colorbar__ticks">
                   <div className="comsol-colorbar__tick">
                     <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">Mayor</span>
+                    <span className="comsol-colorbar__tick-val">{t('Mayor', 'Higher')}</span>
                   </div>
                   <div className="comsol-colorbar__tick">
                     <span className="comsol-colorbar__tick-line" />
@@ -2514,7 +2540,7 @@ export function MapCanvas({
                   </div>
                   <div className="comsol-colorbar__tick">
                     <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">Menor</span>
+                    <span className="comsol-colorbar__tick-val">{t('Menor', 'Lower')}</span>
                   </div>
                 </div>
               </div>
@@ -2526,13 +2552,13 @@ export function MapCanvas({
         {hasActiveCrop && (
           <div className="crop-active-chip" role="status">
             <span className="crop-active-chip__dot" aria-hidden="true" />
-            <span>Subregión ROI recortada activa —</span>
+            <span>{t('Subregión ROI recortada activa —', 'Active ROI subset —')}</span>
             <button
               type="button"
               className="crop-active-chip__action"
               onClick={handleResetCroppedRegion}
             >
-              [Restablecer vista completa]
+              {t('[Restablecer vista completa]', '[Restore full view]')}
             </button>
           </div>
         )}
@@ -2551,27 +2577,27 @@ export function MapCanvas({
               className="btn btn--primary btn--sm"
               onClick={handleApplyCropRegion}
             >
-              Cargar ROI y buscar escenas
+              {t('Cargar ROI y buscar escenas', 'Load ROI and search scenes')}
             </button>
             <button
               type="button"
               className="btn btn--ghost btn--sm"
               onClick={() => setDraftPolygon([])}
             >
-              Limpiar puntos
+              {t('Limpiar puntos', 'Clear points')}
             </button>
           </div>
         )}
 
         {hasAnalysisRoi && (roiLayers.loading || roiLayers.error || !imagesReady) && (
           <div className="roi-loading-backdrop">
-            <section className="roi-loading-dialog" role="dialog" aria-modal="true" aria-label="Carga de ROI" aria-busy={roiLayers.loading}>
-              <h3>{roiLayers.error ? 'No se pudo cargar la ROI' : 'Preparando nueva ROI'}</h3>
-              <p role="status" aria-live="polite">{roiLayers.error || (roiLayers.loading || imagesReady ? roiLayers.message : 'Preparando capas de la ROI…')}</p>
-              {roiLayers.loading && <progress aria-label="Carga en curso" />}
-              <p>El servidor consulta ASF y lee por HTTPS los bloques necesarios del H5 con Earthdata.</p>
-              {roiLayers.error && <button className="btn" onClick={roiLayers.retry}>Reintentar</button>}
-              <button className="btn" onClick={handleResetCroppedRegion}>Volver al mapa inicial</button>
+            <section className="roi-loading-dialog" role="dialog" aria-modal="true" aria-label={t('Carga de ROI', 'Loading ROI')} aria-busy={roiLayers.loading}>
+              <h3>{roiLayers.error ? t('No se pudo cargar la ROI', 'Could not load the ROI') : t('Preparando nueva ROI', 'Preparing new ROI')}</h3>
+              <p role="status" aria-live="polite">{localizeText(roiLayers.error || (roiLayers.loading || imagesReady ? roiLayers.message : 'Preparando capas de la ROI…'))}</p>
+              {roiLayers.loading && <progress aria-label={t('Carga en curso', 'Loading in progress')} />}
+              <p>{t('El servidor consulta ASF y lee por HTTPS los bloques necesarios del H5 con Earthdata.', 'The server searches ASF and reads the required H5 blocks over HTTPS using Earthdata.')}</p>
+              {roiLayers.error && <button className="btn" onClick={roiLayers.retry}>{t('Reintentar', 'Retry')}</button>}
+              <button className="btn" onClick={handleResetCroppedRegion}>{t('Volver al mapa inicial', 'Return to initial map')}</button>
             </section>
           </div>
         )}
@@ -2591,18 +2617,18 @@ export function MapCanvas({
               value={labelEditor.text}
               maxLength={96}
               onChange={(e) => setLabelEditor({ ...labelEditor, text: e.target.value })}
-              placeholder="Etiqueta técnica..."
+              placeholder={t('Etiqueta técnica...', 'Technical label...')}
               autoFocus
             />
             <button type="submit" className="btn btn--primary btn--xs">
-              Aplicar
+              {t('Aplicar', 'Apply')}
             </button>
             <button
               type="button"
               className="btn btn--ghost btn--xs"
               onClick={() => setLabelEditor(null)}
             >
-              Cancelar
+              {t('Cancelar', 'Cancel')}
             </button>
           </form>
         )}
@@ -2612,7 +2638,7 @@ export function MapCanvas({
           <aside
             className="ws-floating-toolbox"
             style={{ left: `${toolboxPos.x}px`, top: `${toolboxPos.y}px` }}
-            aria-label="Herramientas de dibujo flotantes"
+            aria-label={t('Herramientas de dibujo flotantes', 'Floating drawing tools')}
           >
             <div
               className="ws-floating-toolbox__handle"
@@ -2626,11 +2652,11 @@ export function MapCanvas({
                 }
                 setIsDraggingToolbox(true)
               }}
-              title="Arrastrar caja de herramientas a cualquier esquina del mapa"
+              title={t('Arrastrar caja de herramientas a cualquier esquina del mapa', 'Drag the toolbox to any map corner')}
             >
               <div className="ws-floating-toolbox__handle-title">
                 <GripHorizontal size={13} />
-                <span>Dibujo y Geometría</span>
+                <span>{t('Dibujo y Geometría', 'Drawing and Geometry')}</span>
               </div>
               <div className="ws-floating-toolbox__handle-actions">
                 <button
@@ -2638,7 +2664,7 @@ export function MapCanvas({
                   className="ws-floating-toolbox__icon-btn"
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={() => setToolboxCollapsed((c) => !c)}
-                  title={toolboxCollapsed ? 'Expandir herramientas' : 'Minimizar herramientas'}
+                  title={toolboxCollapsed ? t('Expandir herramientas', 'Expand tools') : t('Minimizar herramientas', 'Minimize tools')}
                 >
                   {toolboxCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                 </button>
@@ -2647,7 +2673,7 @@ export function MapCanvas({
                   className="ws-floating-toolbox__icon-btn"
                   onMouseDown={(e) => e.stopPropagation()}
                   onClick={onToggleFloatingTools}
-                  title="Ocultar caja de herramientas"
+                  title={t('Ocultar caja de herramientas', 'Hide toolbox')}
                 >
                   <X size={12} />
                 </button>
@@ -2667,15 +2693,15 @@ export function MapCanvas({
                     onSelectTool('poligono')
                   } catch (error) { setGeometryError((error as Error).message) }
                 }}>
-                  <label htmlFor="roi-coordinates">ROI por geometría: oeste, sur, este, norte</label>
+                  <label htmlFor="roi-coordinates">{t('ROI por geometría: oeste, sur, este, norte', 'ROI by geometry: west, south, east, north')}</label>
                   <input id="roi-coordinates" value={geometryInput} onChange={event => setGeometryInput(event.target.value)} placeholder="−93.1, 16.7, −93.0, 16.8" />
-                  <button className="btn btn--sm" type="submit">Dibujar rectángulo</button>
-                  <small>O marca dos esquinas en el mapa. Máximo 0.6° por lado.</small>
-                  {geometryError && <p role="alert">{geometryError}</p>}
+                  <button className="btn btn--sm" type="submit">{t('Dibujar rectángulo', 'Draw rectangle')}</button>
+                  <small>{t('O marca dos esquinas en el mapa. Máximo 0.6° por lado.', 'Or mark two corners on the map. Maximum 0.6° per side.')}</small>
+                  {geometryError && <p role="alert">{localizeText(geometryError)}</p>}
                 </form>}
                 {!isEditing && (
                   <div className="ws-floating-toolbox__readonly">
-                    Solo lectura: usa <strong>+ Duplicar Mapa</strong> para dibujar.
+                    {t('Solo lectura: usa', 'Read-only: use')} <strong>{t('+ Duplicar Mapa', '+ Duplicate Map')}</strong> {t('para dibujar.', 'to draw.')}
                   </div>
                 )}
 
@@ -2684,60 +2710,60 @@ export function MapCanvas({
                     type="button"
                     className={`ws-tool-btn ${activeTool === 'mover' ? 'is-active' : ''}`}
                     onClick={() => selectTool('mover')}
-                    title="Mover lienzo / Seleccionar elementos"
+                    title={t('Mover lienzo / Seleccionar elementos', 'Pan canvas / Select elements')}
                   >
                     <Hand size={13} />
-                    <span>Mover</span>
+                    <span>{t('Mover', 'Pan')}</span>
                   </button>
                   <button
                     type="button"
                     className={`ws-tool-btn ${isEditing && activeTool === 'lapiz' ? 'is-active' : ''}`}
                     onClick={() => selectTool('lapiz')}
                     disabled={!isEditing}
-                    title="Dibujar trazo libre"
+                    title={t('Dibujar trazo libre', 'Draw freehand stroke')}
                   >
                     <Pencil size={13} />
-                    <span>Lápiz</span>
+                    <span>{t('Lápiz', 'Pencil')}</span>
                   </button>
                   <button
                     type="button"
                     className={`ws-tool-btn ${isEditing && activeTool === 'peligro' ? 'is-active' : ''}`}
                     onClick={() => selectTool('peligro')}
                     disabled={!isEditing}
-                    title={DANGER_CIRCLE_TOOLTIP}
+                    title={localizeText(DANGER_CIRCLE_TOOLTIP)}
                   >
                     <CircleDot size={13} className="icon-danger" />
-                    <span>Círculo rojo</span>
+                    <span>{t('Círculo rojo', 'Red circle')}</span>
                   </button>
                   <button
                     type="button"
                     className={`ws-tool-btn ${isEditing && activeTool === 'advertencia' ? 'is-active' : ''}`}
                     onClick={() => selectTool('advertencia')}
                     disabled={!isEditing}
-                    title={WARN_CIRCLE_TOOLTIP}
+                    title={localizeText(WARN_CIRCLE_TOOLTIP)}
                   >
                     <CircleDot size={13} className="icon-warn" />
-                    <span>Círculo ámbar</span>
+                    <span>{t('Círculo ámbar', 'Amber circle')}</span>
                   </button>
                   <button
                     type="button"
                     className={`ws-tool-btn ${isEditing && activeTool === 'poligono' ? 'is-active' : ''}`}
                     onClick={() => selectTool('poligono')}
                     disabled={!isEditing}
-                    title="Dos clics: esquinas opuestas de una ROI rectangular"
+                    title={t('Dos clics: esquinas opuestas de una ROI rectangular', 'Two clicks: opposite corners of a rectangular ROI')}
                   >
                     <Pentagon size={13} />
-                    <span>ROI rectangular · 2 puntos</span>
+                    <span>{t('ROI rectangular · 2 puntos', 'Rectangular ROI · 2 points')}</span>
                   </button>
                   <button
                     type="button"
                     className={`ws-tool-btn ${isEditing && activeTool === 'etiqueta' ? 'is-active' : ''}`}
                     onClick={() => selectTool('etiqueta')}
                     disabled={!isEditing}
-                    title="Insertar o editar etiqueta técnica"
+                    title={t('Insertar o editar etiqueta técnica', 'Insert or edit technical label')}
                   >
                     <Tag size={13} />
-                    <span>Etiqueta</span>
+                    <span>{t('Etiqueta', 'Label')}</span>
                   </button>
                 </div>
 
@@ -2747,20 +2773,20 @@ export function MapCanvas({
                     className="ws-tool-btn"
                     onClick={handleUndoLastDrawing}
                     disabled={!isEditing || (annotations.length === 0 && draftPolygon.length === 0)}
-                    title="Deshacer último trazo o vértice"
+                    title={t('Deshacer último trazo o vértice', 'Undo last stroke or vertex')}
                   >
                     <Undo2 size={12} />
-                    <span>Deshacer</span>
+                    <span>{t('Deshacer', 'Undo')}</span>
                   </button>
                   <button
                     type="button"
                     className="ws-tool-btn ws-tool-btn--danger"
                     onClick={() => selectedAnnotation && handleDeleteAnnotation(selectedAnnotation.id)}
                     disabled={!selectedAnnotation}
-                    title="Eliminar elemento seleccionado"
+                    title={t('Eliminar elemento seleccionado', 'Delete selected element')}
                   >
                     <Trash size={12} />
-                    <span>Eliminar</span>
+                    <span>{t('Eliminar', 'Delete')}</span>
                   </button>
                   <button
                     type="button"
@@ -2770,10 +2796,10 @@ export function MapCanvas({
                       !isEditing ||
                       (annotations.length === 0 && !hasActiveCrop && draftPolygon.length === 0)
                     }
-                    title="Limpiar todos los dibujos y recortes"
+                    title={t('Limpiar todos los dibujos y recortes', 'Clear all drawings and subsets')}
                   >
                     <Trash size={12} />
-                    <span>Limpiar</span>
+                    <span>{t('Limpiar', 'Clear')}</span>
                   </button>
                 </div>
               </div>
@@ -2819,13 +2845,13 @@ export function MapCanvas({
           >
             <div className="ws-capture-banner" onMouseDown={(e) => e.stopPropagation()}>
               <Camera size={14} />
-              <span>Arrastra un recuadro sobre la región simulada o captura la vista completa:</span>
+              <span>{t('Arrastra un recuadro sobre la región simulada o captura la vista completa:', 'Drag a rectangle over the simulated region or capture the full view:')}</span>
               <button
                 type="button"
                 className="ws-tool-btn is-active"
                 onClick={() => void executeRegionCapture()}
               >
-                Capturar Vista Completa
+                {t('Capturar Vista Completa', 'Capture Full View')}
               </button>
               <button
                 type="button"
@@ -2836,7 +2862,7 @@ export function MapCanvas({
                   onCancelCaptureMode()
                 }}
               >
-                Cancelar
+                {t('Cancelar', 'Cancel')}
               </button>
             </div>
 
@@ -2860,11 +2886,11 @@ export function MapCanvas({
 
         {/* Modal de previsualización y descarga de imagen PNG / JPG */}
         {captureModal && (
-          <div className="ws-capture-modal-backdrop" role="dialog" aria-modal="true" aria-label="Guardar captura del mapa">
+          <div className="ws-capture-modal-backdrop" role="dialog" aria-modal="true" aria-label={t('Guardar captura del mapa', 'Save map capture')}>
             <div className="ws-capture-modal">
               <div className="ws-capture-modal__header">
                 <strong>
-                  <Camera size={14} /> Previsualización de Captura ({captureModal.width} × {captureModal.height} px)
+                  <Camera size={14} /> {t('Previsualización de Captura', 'Capture Preview')} ({captureModal.width} × {captureModal.height} px)
                 </strong>
                 <button
                   type="button"
@@ -2876,12 +2902,12 @@ export function MapCanvas({
               </div>
 
               <div className="ws-capture-modal__preview">
-                <img src={captureModal.previewUrl} alt="Previsualización de región capturada" />
+                <img src={captureModal.previewUrl} alt={t('Previsualización de región capturada', 'Captured region preview')} />
               </div>
 
               <div className="ws-capture-modal__controls">
                 <label>
-                  <span>Nombre del archivo</span>
+                  <span>{t('Nombre del archivo', 'File name')}</span>
                   <input
                     type="text"
                     value={captureModal.filename}
@@ -2892,7 +2918,7 @@ export function MapCanvas({
                 </label>
 
                 <label>
-                  <span>Formato</span>
+                  <span>{t('Formato', 'Format')}</span>
                   <select
                     value={captureModal.format}
                     onChange={(e) => {
@@ -2911,14 +2937,14 @@ export function MapCanvas({
                       )
                     }}
                   >
-                    <option value="png">PNG (sin pérdida)</option>
-                    <option value="jpeg">JPG (comprimido)</option>
+                    <option value="png">{t('PNG (sin pérdida)', 'PNG (lossless)')}</option>
+                    <option value="jpeg">{t('JPG (comprimido)', 'JPG (compressed)')}</option>
                   </select>
                 </label>
 
                 {captureModal.format === 'jpeg' && (
                   <label>
-                    <span>Calidad JPG: {Math.round(captureModal.quality * 100)}%</span>
+                    <span>{t('Calidad JPG', 'JPG quality')}: {Math.round(captureModal.quality * 100)}%</span>
                     <input
                       type="range"
                       min={0.6}
@@ -2948,7 +2974,7 @@ export function MapCanvas({
                   className="ws-tool-btn"
                   onClick={() => setCaptureModal(null)}
                 >
-                  Cerrar
+                  {t('Cerrar', 'Close')}
                 </button>
                 <button
                   type="button"
@@ -2956,7 +2982,7 @@ export function MapCanvas({
                   onClick={handleDownloadCapture}
                 >
                   <Download size={14} />
-                  <span>Descargar .{captureModal.format === 'png' ? 'png' : 'jpg'}</span>
+                  <span>{t('Descargar', 'Download')} .{captureModal.format === 'png' ? 'png' : 'jpg'}</span>
                 </button>
               </div>
             </div>
@@ -2994,7 +3020,7 @@ export function MapCanvas({
       {/* 5. PANEL INFERIOR COLAPSABLE DE BITÁCORA Y TRAZABILIDAD ("Messages / Progress / Traceability Log") */}
       <section
         className={`workstation-log-panel ${logPanelCollapsed ? 'is-collapsed' : ''}`}
-        aria-label="Messages / Progress / Traceability Log"
+        aria-label={t('Mensajes / Progreso / Registro de trazabilidad', 'Messages / Progress / Traceability Log')}
       >
         <div className="ws-panel-tabbar workstation-log-panel__tabbar">
           <div className="workstation-log-panel__tabs" role="tablist">
@@ -3009,7 +3035,7 @@ export function MapCanvas({
               }}
             >
               <Terminal size={12} aria-hidden="true" />
-              <span>Messages / Progress / Traceability Log</span>
+              <span>{t('Mensajes / Progreso / Registro de trazabilidad', 'Messages / Progress / Traceability Log')}</span>
             </button>
             <button
               type="button"
@@ -3021,7 +3047,7 @@ export function MapCanvas({
                 setLogPanelCollapsed(false)
               }}
             >
-              <span>Manifiesto explore-web-1 (capas.json)</span>
+              <span>{t('Manifiesto explore-web-1 (capas.json)', 'explore-web-1 manifest (capas.json)')}</span>
             </button>
             <button
               type="button"
@@ -3034,7 +3060,7 @@ export function MapCanvas({
               }}
             >
               <span>
-                Advertencias Radiométricas ({activeManifest?.advertencias.length ?? 0})
+                {t('Advertencias Radiométricas', 'Radiometric warnings')} ({activeManifest?.advertencias.length ?? 0})
               </span>
             </button>
           </div>
@@ -3042,7 +3068,7 @@ export function MapCanvas({
           <div className="workstation-log-panel__actions">
             {dateViewMode === 'swipe' && imagesReady && roiLayers.comparable && (
               <label className="workstation-log-panel__swipe-inline">
-                <span>Swipe t1↔t2: {Math.round(swipePct)}%</span>
+                <span>{t('Deslizador t1↔t2:', 'Swipe t1↔t2:')} {Math.round(swipePct)}%</span>
                 <input
                   type="range"
                   min={2}
@@ -3057,9 +3083,9 @@ export function MapCanvas({
               type="button"
               className="workstation-log-panel__toggle"
               onClick={() => setLogPanelCollapsed((prev) => !prev)}
-              title={logPanelCollapsed ? 'Expandir panel de bitácora' : 'Colapsar panel de bitácora'}
+              title={logPanelCollapsed ? t('Expandir panel de bitácora', 'Expand log panel') : t('Colapsar panel de bitácora', 'Collapse log panel')}
             >
-              {logPanelCollapsed ? '▲ Expandir Log' : '▼ Colapsar'}
+              {logPanelCollapsed ? t('▲ Expandir Log', '▲ Expand Log') : t('▼ Colapsar', '▼ Collapse')}
             </button>
           </div>
         </div>
@@ -3069,49 +3095,49 @@ export function MapCanvas({
             {logActiveTab === 'trace' && (
               <div className="ws-log-grid">
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--info">GRANULE t1</span>
-                  <code className="ws-mono">{manifestT1?.escena.granuleId ?? 'Sin datos'}</code>
+                  <span className="ws-log-tag ws-log-tag--info">{t('GRÁNULO t1', 'GRANULE t1')}</span>
+                  <code className="ws-mono">{manifestT1?.escena.granuleId ?? t('Sin datos', 'No data')}</code>
                   <span className="ws-log-sep">|</span>
                   <span>
-                    CRID: <strong>{manifestT1?.escena.crid ?? 'Sin datos'}</strong> ({manifestT1?.escena.madurez_catalogo ?? 'Sin datos'}) · Píxeles válidos ROI:{' '}
+                    CRID: <strong>{manifestT1?.escena.crid ?? t('Sin datos', 'No data')}</strong> ({manifestT1?.escena.madurez_catalogo ?? t('Sin datos', 'No data')}) · {t('Píxeles válidos ROI', 'Valid ROI pixels')}:{' '}
                     <strong>
-                      {layerT1 ? `${layerT1.pct_pixeles_validos.toFixed(2)}%` : 'Sin datos'}
+                      {layerT1 ? `${layerT1.pct_pixeles_validos.toFixed(2)}%` : t('Sin datos', 'No data')}
                     </strong>{' '}
-                    · Rango COG:{' '}
+                    · {t('Rango COG', 'COG range')}:{' '}
                     <code className="ws-mono">
                       {layerT1
                         ? `[${layerT1.rango_datos_dB[0].toFixed(2)}, +${layerT1.rango_datos_dB[1].toFixed(2)} dB]`
-                        : 'Sin datos'}
+                        : t('Sin datos', 'No data')}
                     </code>
                   </span>
                 </div>
 
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--info">GRANULE t2</span>
-                  <code className="ws-mono">{manifestT2?.escena.granuleId ?? 'Sin datos'}</code>
+                  <span className="ws-log-tag ws-log-tag--info">{t('GRÁNULO t2', 'GRANULE t2')}</span>
+                  <code className="ws-mono">{manifestT2?.escena.granuleId ?? t('Sin datos', 'No data')}</code>
                   <span className="ws-log-sep">|</span>
                   <span>
-                    CRID: <strong>{manifestT2?.escena.crid ?? 'Sin datos'}</strong> ({manifestT2?.escena.madurez_catalogo ?? 'Sin datos'}) · Píxeles válidos ROI:{' '}
+                    CRID: <strong>{manifestT2?.escena.crid ?? t('Sin datos', 'No data')}</strong> ({manifestT2?.escena.madurez_catalogo ?? t('Sin datos', 'No data')}) · {t('Píxeles válidos ROI', 'Valid ROI pixels')}:{' '}
                     <strong>
-                      {layerT2 ? `${layerT2.pct_pixeles_validos.toFixed(2)}%` : 'Sin datos'}
+                      {layerT2 ? `${layerT2.pct_pixeles_validos.toFixed(2)}%` : t('Sin datos', 'No data')}
                     </strong>{' '}
-                    · Rango COG:{' '}
+                    · {t('Rango COG', 'COG range')}:{' '}
                     <code className="ws-mono">
                       {layerT2
                         ? `[${layerT2.rango_datos_dB[0].toFixed(2)}, +${layerT2.rango_datos_dB[1].toFixed(2)} dB]`
-                        : 'Sin datos'}
+                        : t('Sin datos', 'No data')}
                     </code>
                   </span>
                 </div>
 
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--warn">CALIBRACIÓN</span>
-                  <span>Sin banderas de procesamiento disponibles en el manifiesto ROI.</span>
+                  <span className="ws-log-tag ws-log-tag--warn">{t('CALIBRACIÓN', 'CALIBRATION')}</span>
+                  <span>{t('Sin banderas de procesamiento disponibles en el manifiesto ROI.', 'No processing flags are available in the ROI manifest.')}</span>
                   <span className="ws-log-sep">|</span>
                   {scaleCheck && (
                     <span className={scaleCheck.valid ? 'ws-log-ok' : 'ws-log-warn'}>
                       {scaleCheck.valid ? '✓ ' : '⚠️ '}
-                      {scaleCheck.message}
+                      {localizeText(scaleCheck.message)}
                     </span>
                   )}
                 </div>
@@ -3121,12 +3147,12 @@ export function MapCanvas({
             {logActiveTab === 'layers' && activeLayerEntry && (
               <div className="ws-log-grid">
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--info">CAPA ACTIVA</span>
-                  <strong>{activeLayerEntry.id}:</strong> {activeLayerOption.title} · Paleta LUT:{' '}
-                  <strong>{activeColormapSpec.label}</strong>
+                  <span className="ws-log-tag ws-log-tag--info">{t('CAPA ACTIVA', 'ACTIVE LAYER')}</span>
+                  <strong>{activeLayerEntry.id}:</strong> {localizeText(activeLayerOption.title)} · {t('Paleta LUT', 'LUT palette')}:{' '}
+                  <strong>{localizeText(activeColormapSpec.label)}</strong>
                 </div>
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--info">PNG WEB</span>
+                  <span className="ws-log-tag ws-log-tag--info">{t('PNG WEB', 'WEB PNG')}</span>
                   <code className="ws-mono">/{activeLayerEntry.png}</code> (
                   {activeLayerEntry.forma_png[1]}×{activeLayerEntry.forma_png[0]} px ·{' '}
                   {activeLayerEntry.crs_png}) ·{' '}
@@ -3136,13 +3162,13 @@ export function MapCanvas({
                   {activeLayerEntry.crs_cog})
                 </div>
                 <div className="ws-log-row">
-                  <span className="ws-log-tag ws-log-tag--info">PROCEDENCIA</span>
+                  <span className="ws-log-tag ws-log-tag--info">{t('PROCEDENCIA', 'PROVENANCE')}</span>
                   <span>
-                    Modo: <code>{activeManifest?.procedencia.modo ?? 'Sin datos'}</code> · Método:{' '}
-                    <code>{activeManifest?.procedencia.metodo ?? 'Sin datos'}</code> ·
-                    Identidad verificada contra catálogo ASF:{' '}
+                    {t('Modo', 'Mode')}: <code>{activeManifest?.procedencia.modo ? localizeText(activeManifest.procedencia.modo) : t('Sin datos', 'No data')}</code> · {t('Método', 'Method')}:{' '}
+                    <code>{activeManifest?.procedencia.metodo ? localizeText(activeManifest.procedencia.metodo) : t('Sin datos', 'No data')}</code> ·
+                    {t('Identidad verificada contra catálogo ASF', 'Identity verified against ASF catalog')}:{' '}
                     <code>
-                      {activeManifest ? String(activeManifest.procedencia.identidad_verificada_contra_catalogo) : 'Sin datos'}
+                      {activeManifest ? t(activeManifest.procedencia.identidad_verificada_contra_catalogo ? 'Sí' : 'No', activeManifest.procedencia.identidad_verificada_contra_catalogo ? 'Yes' : 'No') : t('Sin datos', 'No data')}
                     </code>
                   </span>
                 </div>
@@ -3152,9 +3178,9 @@ export function MapCanvas({
             {logActiveTab === 'warnings' && (
               <ul className="ws-log-warnings">
                 {(activeManifest?.advertencias ?? []).map((adv, idx) => (
-                  <li key={idx}>{adv}</li>
+                  <li key={idx}>{localizeText(adv)}</li>
                 ))}
-                {!activeManifest && <li>Sin datos calculados para la ROI.</li>}
+                {!activeManifest && <li>{t('Sin datos calculados para la ROI.', 'No computed data for the ROI.')}</li>}
               </ul>
             )}
           </div>

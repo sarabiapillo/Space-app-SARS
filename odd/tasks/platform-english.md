@@ -10,7 +10,7 @@ S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escen
 ## Tasks
 T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
 T2 [S1-S3] completada — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: abf2453.
-T3 [S1-S2] completada — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
+T3 [S1-S2] completada — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: f302fb3 (cliente/catálogos); mapa visual en preparación.
 T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commits: 07f0f5f (visor/catálogo), 965a40c (paneles/módulos).
 T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: 8e4a794.
 T6 [S1-S3] en curso — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
@@ -47,3 +47,6 @@ L19. Risk: item3 — apiJson es un helper compartido y ahora presenta errores de
 
 L20. La verificación independiente se bloqueó por PREPARACIÓN (0 pruebas): esperaba candidato ligado a commit y las fuentes seguían sin commit. No es prueba inaccesible ni defecto reproducido. Se prepara la unidad concreta para completar esa misma verificación sobre SHA, sin segundo verificador ni repetir pruebas ejecutadas. Sus observaciones estáticas se reprodujeron: fallback vacío y presentación de error de ubicación. RED1/3, GREEN3/3 después de preservar fallback HTTP y traducir al mostrar.
 L21. Revisión final de ecuación: el conector «a 72h» pasó a «at 72h» en EN sin cambiar fórmula ni números. Una aserción SSR inicial no podía abrir el disclosure y una sonda de fixture incompleto falló; se sustituyó por comprobación explícita de la pareja de traducción, sin afirmar interacción de navegador. Suite final observada83/83, exit0 (log data/test-runs/platform-english/tests-final.log). Documentación reescrita con límites y resultados reales; compilación del último estado pendiente.
+
+L22. Unidad cliente/riesgo3 commitf302fb3716b2b0f707d42c63c7655724150a516d. Se reanudó el mismo verificador solo para completar su preparación original (cero pruebas anteriores), con este SHA exacto y sin incluir fuente viva divergente. No se reinicia presupuesto ni se lanza otro verificador.
+L23. Build del último código exit0; advertencias Vite __dirname y bundle grande reportadas, no ocultadas. LaTeX revisado estructuralmente: documento autónomo, llaves/entornos equilibrados y cinco secciones. pdflatex y navegador siguen no disponibles. git diff --check detectó y corrigió un espacio final en MapCanvas antes de commit.
