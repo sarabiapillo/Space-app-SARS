@@ -55,6 +55,20 @@ test('interpolation preserves numbers, identifiers and user-provided names', () 
   setLanguage('es')
 })
 
+test('stored known messages follow language switches in both directions without translating their parameters', () => {
+  const spanish = 'Error al conectar con la API de simulación'
+  setLanguage('en')
+  const stored = localizeText(spanish)
+  assert.equal(stored, 'Error connecting to the simulation API')
+  const source = 'No se pudo leer https://example.test/SCENE_P05023.json: HTTP 503'
+  const translated = localizeText(source)
+  assert.equal(translated, 'Could not read https://example.test/SCENE_P05023.json: HTTP 503')
+  setLanguage('es')
+  assert.equal(localizeText(stored), spanish)
+  assert.equal(localizeText(translated), source)
+  assert.equal(localizeText('My user map P05023'), 'My user map P05023')
+})
+
 test('the public React hook renders scientific labels in the selected language', () => {
   function Label() {
     const { language, t } = useTranslation()

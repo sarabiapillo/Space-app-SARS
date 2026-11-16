@@ -1,3 +1,4 @@
+import { translate as tr, localizeText } from '../i18n/core.ts'
 import type {
   C4ChangeDetail,
   C4ChangeReport,
@@ -60,8 +61,14 @@ export type {
 
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(init?.headers ?? {}) } })
-  const body = await response.json().catch(() => ({})) as { detail?: string }
-  if (!response.ok) throw new Error(body.detail || `Error HTTP ${response.status}`)
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>
+  if (!response.ok) {
+    const detail = ['detail', 'query', 'radius_km', 'place_id', 'geometry', 'q', 'roi', 'scene_id']
+      .map(key => body?.[key])
+      .find(value => (typeof value === 'string' && value.length > 0) || (Array.isArray(value) && typeof value[0] === 'string' && value[0].length > 0))
+    const message = Array.isArray(detail) ? detail[0] : detail
+    throw new Error(typeof message === 'string' ? localizeText(message) : `Error HTTP ${response.status}`)
+  }
   return body as T
 }
 
@@ -105,9 +112,9 @@ async function fetchApi<T>(path: string): Promise<ApiEnvelope<T>> {
     : null
   if (!res.ok) {
     const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : null
-    throw new Error(detail || `Error HTTP ${res.status}`)
+    throw new Error(detail ? localizeText(detail) : `Error HTTP ${res.status}`)
   }
-  if (body === null) throw new Error(`Respuesta JSON inválida de ${path}`)
+  if (body === null) throw new Error(tr('Respuesta JSON inválida de {path}', 'Invalid JSON response from {path}', { path }))
   return { data: body as T, isSyntheticMock: false }
 }
 
@@ -179,7 +186,7 @@ export async function fetchExploreManifest(granuleId: string): Promise<ExploreWe
   try {
     const idx = await getExploreDiskIndex()
     if (idx && !idx.scenes[granuleId]?.hasCapas) {
-      throw new Error('No hay capas preparadas para esta escena.')
+      throw new Error(tr('No hay capas preparadas para esta escena.', 'No layers have been prepared for this scene.'))
     }
 
     const res = await fetch(`/data/explore/${encodeURIComponent(granuleId)}/web/capas.json`, {
@@ -194,7 +201,7 @@ export async function fetchExploreManifest(granuleId: string): Promise<ExploreWe
   } catch {
     // No sustituir una escena ausente por imágenes de otra región.
   }
-  throw new Error('No hay capas preparadas para esta escena.')
+  throw new Error(tr('No hay capas preparadas para esta escena.', 'No layers have been prepared for this scene.'))
 }
 
 export interface ExploreScaleVerification {
@@ -232,7 +239,7 @@ export function verifyExploreScaleMatch(
       vmaxT1,
       vminT2,
       vmaxT2,
-      message: 'Escala común verificada: -22 a 0 dB (--escala-web -22 0)',
+      message: tr('Escala común verificada: -22 a 0 dB (--escala-web -22 0)', 'Verified common scale: -22 to 0 dB (--escala-web -22 0)'),
     }
   }
 
@@ -243,7 +250,7 @@ export function verifyExploreScaleMatch(
       vmaxT1,
       vminT2,
       vmaxT2,
-      message: `Escala común verificada: ${vminT1} a ${vmaxT1} dB`,
+      message: tr('Escala común verificada: {min} a {max} dB', 'Verified common scale: {min} to {max} dB', { min: vminT1, max: vmaxT1 }),
     }
   }
 
@@ -253,7 +260,7 @@ export function verifyExploreScaleMatch(
     vmaxT1,
     vminT2,
     vmaxT2,
-    message: `Advertencia de escala: t1 (${vminT1}..${vmaxT1} dB) ≠ t2 (${vminT2}..${vmaxT2} dB). Ejecutar con el mismo --escala-web.`,
+    message: tr('Advertencia de escala: t1 ({min1}..{max1} dB) ≠ t2 ({min2}..{max2} dB). Ejecutar con el mismo --escala-web.', 'Scale warning: t1 ({min1}..{max1} dB) ≠ t2 ({min2}..{max2} dB). Run with the same --escala-web.', { min1: vminT1, max1: vmaxT1, min2: vminT2, max2: vmaxT2 }),
   }
 }
 
@@ -275,7 +282,7 @@ export async function fetchExploreCharts(granuleId: string): Promise<ExploreChar
       return {
         manifest: null,
         sourceUrl,
-        error: `La escena ${granuleId} aún no tiene graficas.json en data/explore/. Ejecuta \`python -m pipeline.etapa1\` para generarlo (disponible actualmente para T62/F10 t1 y t2).`,
+        error: tr('La escena {id} aún no tiene graficas.json en data/explore/. Ejecuta `python -m pipeline.etapa1` para generarlo (disponible actualmente para T62/F10 t1 y t2).', 'Scene {id} does not yet have graficas.json in data/explore/. Run `python -m pipeline.etapa1` to generate it (currently available for T62/F10 t1 and t2).', { id: granuleId }),
       }
     }
 
@@ -286,7 +293,7 @@ export async function fetchExploreCharts(granuleId: string): Promise<ExploreChar
       return {
         manifest: null,
         sourceUrl,
-        error: `HTTP ${res.status}: no existe graficas.json en disco para ${granuleId}. Ejecuta \`python -m pipeline.etapa1\` para generarlo.`,
+        error: tr('HTTP {status}: no existe graficas.json en disco para {id}. Ejecuta `python -m pipeline.etapa1` para generarlo.', 'HTTP {status}: graficas.json is not on disk for {id}. Run `python -m pipeline.etapa1` to generate it.', { status: res.status, id: granuleId }),
       }
     }
     const json = (await res.json()) as ExploreChartsManifest
@@ -294,7 +301,7 @@ export async function fetchExploreCharts(granuleId: string): Promise<ExploreChar
       return {
         manifest: null,
         sourceUrl,
-        error: `El archivo ${sourceUrl} no contiene el arreglo \`graficas\`.`,
+        error: tr('El archivo {url} no contiene el arreglo `graficas`.', 'File {url} does not contain the `graficas` array.', { url: sourceUrl }),
       }
     }
     return {
@@ -308,8 +315,8 @@ export async function fetchExploreCharts(granuleId: string): Promise<ExploreChar
       sourceUrl,
       error:
         err instanceof Error
-          ? `No se pudo leer ${sourceUrl}: ${err.message}`
-          : `Error al leer ${sourceUrl}`,
+          ? tr('No se pudo leer {url}: {message}', 'Could not read {url}: {message}', { url: sourceUrl, message: localizeText(err.message) })
+          : tr('Error al leer {url}', 'Error reading {url}', { url: sourceUrl }),
     }
   }
 }
@@ -462,7 +469,7 @@ export async function prepareFloodScenario(
       err.errors?.rainfall_profile?.[0] ||
       err.errors?.request?.[0] ||
       `Error HTTP ${res.status}`
-    throw new Error(msg)
+    throw new Error(localizeText(msg))
   }
   return res.json()
 }

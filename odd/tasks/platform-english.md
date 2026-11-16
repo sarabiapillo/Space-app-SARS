@@ -10,10 +10,10 @@ S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escen
 ## Tasks
 T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
 T2 [S1-S3] completada — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: abf2453.
-T3 [S1-S2] en curso (continuación autorizada, máximo dos rondas adicionales) — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
-T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commits: 07f0f5f (visor/catálogo), segunda unidad en preparación.
+T3 [S1-S2] completada — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
+T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commits: 07f0f5f (visor/catálogo), 965a40c (paneles/módulos).
 T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: 8e4a794.
-T6 [S1-S3] pendiente — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
+T6 [S1-S3] en curso — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
 
 ## Log
 L1. Solicitud original: se me pidio agregar la traducción al idioma ingles para la plataforma. Encargate de traducir todo el programa, utiliza las traducciones adecuadas, siempre revisa las diferentes interpretaciones y elige la más adecuada para el ambito de nuestra plataforma. Agrega la opción en la barra de navegación, donde esta "Archivo", "Escenas GCOV", "Procesamiento SAR", etc.
@@ -40,3 +40,10 @@ L14. Integración T4: padre detectó RED real en locale de Chart.js (undefined f
 L15. Lint de integración inicial: exit1, un error de react-refresh por export SCIENTIFIC_FIGURES ya existente en base59884b9 y diez advertencias de dependencias de hooks. Se corrigieron las de gráficos; las de mapa corresponden al escritor en curso. No se modifica el contrato exportado para ocultar un error previo. Confirmación ejecutable de lint base y lint final pendientes.
 
 L16. T4 primera unidad commit07f0f5f (visor/catálogo y render de figuras). Segunda unidad paneles Chart.js/módulos incluye prueba pública de ejes y preservación de advertencias, sin ampliar comportamiento. La comprobación de whitespace detectó y corrigió una línea vacía final en una prueba antes de commit.
+
+L17. Continuación T3 terminó en dos rondas adicionales: 5/5 focales y tsc0. Padre observó suite completa79/79 y core8/8; build producción exit0 (Vite avisó __dirname futuro y chunk grande). Lint final exit1 por único error previo react-refresh/only-export-components en ScientificFiguresViewer (base26, actual27); comparación ejecutable de base también exit1 por misma regla. Sin advertencias nuevas de hooks. No se silencian reglas ni se cambia export público.
+L18. Integración corrigió mensajes almacenados al volver de EN a ES: RED7/8 y GREEN8/8 con traducciones reversibles curadas, parámetros e IDs preservados. Auditoría estructural74 hallazgos, mayormente fórmulas/IDs/rutas/nombres propios o literales de catálogos que se traducen al mostrar. Un fragmento «a 72h» se revisará como presentación.
+L19. Risk: item3 — apiJson es un helper compartido y ahora presenta errores de campos del servidor además de detail. Se solicita un único verificador independiente de contratos/respuestas y regresiones; revisión de solo lectura, sin cambiar límites ni RDD. La unidad del cliente y su catálogo/pruebas irá en commit independiente.
+
+L20. La verificación independiente se bloqueó por PREPARACIÓN (0 pruebas): esperaba candidato ligado a commit y las fuentes seguían sin commit. No es prueba inaccesible ni defecto reproducido. Se prepara la unidad concreta para completar esa misma verificación sobre SHA, sin segundo verificador ni repetir pruebas ejecutadas. Sus observaciones estáticas se reprodujeron: fallback vacío y presentación de error de ubicación. RED1/3, GREEN3/3 después de preservar fallback HTTP y traducir al mostrar.
+L21. Revisión final de ecuación: el conector «a 72h» pasó a «at 72h» en EN sin cambiar fórmula ni números. Una aserción SSR inicial no podía abrir el disclosure y una sonda de fixture incompleto falló; se sustituyó por comprobación explícita de la pareja de traducción, sin afirmar interacción de navegador. Suite final observada83/83, exit0 (log data/test-runs/platform-english/tests-final.log). Documentación reescrita con límites y resultados reales; compilación del último estado pendiente.

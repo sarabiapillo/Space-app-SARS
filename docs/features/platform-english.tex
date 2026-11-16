@@ -9,63 +9,81 @@
 \begin{document}
 \maketitle
 \section{Objetivo}
-Ofrecer la interfaz web en español e inglés sin modificar mediciones, geometrías,
-identificadores científicos, contratos de la API ni contenido introducido por usuarios.
-La navegación, los paneles de simulación, los gráficos y el visor científico
-están traducidos. El mapa está en revisión de cobertura. Este documento registra solamente las
-comprobaciones observadas de cada unidad.
+Ofrecer la interfaz web en español e inglés con terminología de observación
+terrestre, radar y simulación. La localización no modifica mediciones,
+geometrías, identificadores científicos, algoritmos ni solicitudes de la API.
+No traduce el código fuente, las herramientas de terminal ni los datos originales.
 \section{Uso}
-La base inicia en español y permite cambiar a inglés mediante el selector
-Español/English en la barra de navegación, junto a Archivo y Escenas GCOV.
-La selección actualiza la interfaz sin asignar una nueva clave al mapa.
+Seleccione Español o English en la barra superior, junto a Archivo,
+Escenas GCOV y Procesamiento SAR. El español es el idioma inicial cuando no
+existe una preferencia válida. El cambio actualiza menús, paneles, mapa,
+gráficas, visor científico, búsquedas, catálogo, ayudas, avisos y errores conocidos.
 La preferencia utiliza exclusivamente la clave
-\texttt{terrapulse:language:v1} del almacenamiento local del navegador.
-El idioma del documento HTML se sincroniza con la selección. Si el navegador
-bloquea el almacenamiento, el idioma puede cambiar durante la sesión.
+\texttt{terrapulse:language:v1} del almacenamiento local del navegador;
+no reemplaza los mapas guardados. El idioma del documento HTML también se actualiza.
+Si el navegador bloquea el almacenamiento, la selección sigue funcionando
+durante la sesión, pero no se garantiza su conservación después de recargar.
 \section{Implementación}
 \texttt{web/src/i18n/core.ts} administra idioma, suscripciones, interpolación
-y traducciones contextuales explícitas. \texttt{useTranslation.ts} utiliza
-\texttt{useSyncExternalStore} para actualizar componentes sin volver a montar
-los mapas. No se agregan dependencias.
-La terminología distingue retrodispersión (\emph{backscatter}), calado
-(\emph{water depth}), escorrentía (\emph{runoff}) e irradiancia
-(\emph{irradiance}). GCOV, NISAR, CRID, EPSG, dB, polarizaciones y fórmulas
-conservan su significado y sus identificadores.
+y traducciones contextuales explícitas. Los catálogos separados agrupan textos
+de navegación, mapa, gráficas y simulaciones. Los mensajes conocidos admiten
+traducción de ida y vuelta, incluso si fueron almacenados mientras se mostraba inglés.
+Los parámetros interpolados conservan números, identificadores y nombres originales.
+\texttt{useTranslation.ts} utiliza \texttt{useSyncExternalStore} para actualizar
+componentes sin volver a montar el mapa. Las opciones de Chart.js reciben la
+configuración regional seleccionada. Los controles MapLibre actualizan su texto
+sin cambiar la vista ni iniciar otra consulta por un cambio de idioma.
+El cliente de la API localiza los mensajes conocidos de \texttt{detail} y de
+validación de campos. Un cuerpo vacío, un mensaje vacío o JSON inválido conservan
+el mensaje de respaldo con el estado HTTP. Las respuestas exitosas y los cuerpos
+de solicitud permanecen intactos. No se agregan dependencias.
+\subsection{Terminología contextual}
+\begin{tabular}{ll}
+Español & Inglés \\
+\hline
+Retrodispersión & Backscatter \\
+Adquisición & Acquisition \\
+Región de interés & Region of interest (ROI) \\
+Trayectoria y marco & Track and frame \\
+Madurez del producto & Data maturity \\
+Calado & Water depth \\
+Caudal & Discharge \\
+Escorrentía & Runoff \\
+Irradiancia incidente & Incident irradiance \\
+\end{tabular}
+Las unidades, polarizaciones, GCOV, NISAR, CRID, EPSG y fórmulas mantienen
+su significado. Una observación no se convierte en una inferencia o predicción;
+se conservan las advertencias de resultados sintéticos, exploratorios y no validados.
 \section{Limitaciones}
-Los datos originales, nombres propios y nombres de mapas creados por usuarios
-no se traducen. La localización no convierte una simulación en observación ni
-establece exactitud hidráulica o validación científica.
-Los paneles de radiación e inundación, sus gráficas, mensajes conocidos y fechas
-relativas ya están traducidos. La navegación, la barra lateral, los avisos,
-el modal de copia y la portada también se traducen.
-El mapa tiene cobertura parcial: faltan textos de bitácora, valores de respaldo,
-procedencia y algunos mensajes de progreso del catálogo. Esta tarea requiere
-una continuación autorizada; no se considera completa. Los mensajes variables no incluidos en el catálogo conservan
-su idioma de origen; las imágenes científicas originales no se modifican.
+Los nombres propios y el contenido introducido por usuarios no se traducen.
+Las imágenes PNG científicas originales conservan el texto incrustado; la
+interfaz del visor, sus títulos y descripciones sí cambian de idioma.
+Los mensajes externos futuros que no existan en los catálogos se muestran tal
+como llegan, en lugar de inventar una interpretación.
+La traducción no establece exactitud hidráulica ni validación científica.
+No se realizó una inspección visual o interacción en navegador: no hay un
+navegador disponible en este entorno. No se ejecutan servicios Earthdata reales.
 \section{Verificación}
-Primera unidad: \texttt{node --test tests/i18n.test.mjs} falló inicialmente por
-ausencia del módulo; después de implementarlo aprobó cinco pruebas.
-\texttt{node --test tests/*.test.mjs}: 56 pruebas aprobadas, ninguna fallida.
-\texttt{npx tsc -b}: código de salida cero.
-Las pruebas comprueban idioma inicial, selección, persistencia independiente de
-mapas, suscripciones, interpolación y almacenamiento bloqueado.
-Unidad de simulaciones: cuatro pruebas de renderizado y mensajes aprobadas;
-revisión focal ampliada del padre: 15 pruebas aprobadas, sin fallos. Se comprueban
-unidades, entradas numéricas sin cambios, etiquetas y advertencias de simulación.
-No se encontró \texttt{pdflatex}; la compilación PDF no está disponible.
-Navegación: cuatro pruebas focales aprobadas y revisión ampliada del padre con
-32 pruebas aprobadas (shell, ROI, GCOV y avisos). La base cuenta ahora con siete
-pruebas, incluidas restauración de preferencia y renderizado React en ambos idiomas.
-El mapa reportó tres pruebas focales y compilación TypeScript exitosa, pero
-su cobertura textual sigue incompleta. El escritor de gráficos reportó cuatro
-pruebas focales y compilación exitosa. La integración final no se ejecutó:
-se requiere completar la cobertura del mapa mediante una continuación autorizada.
-La revisión restauró el criterio original de visibilidad de advertencias en el
-comparador. Las pruebas de renderizado confirmaron este comportamiento, las
-etiquetas de los gráficos y que los datos de entrada permanecen intactos.
-La prueba adicional de idioma en los ejes detectó inicialmente que faltaba
-la opción de configuración regional de Chart.js; después de agregarla, la revisión focal aprobó siete
-pruebas y la compilación TypeScript terminó con código cero.
-No se verificó interacción en navegador.
-El documento se entrega como fuente LaTeX; la revisión estructural final está pendiente.
+Desde \texttt{web/}, ejecute \texttt{node --test tests/*.test.mjs}.
+Último resultado observado: 83 pruebas aprobadas, cero fallidas.
+Se comprueban renderizados públicos en ambos idiomas, preservación de
+GeoJSON con huecos y múltiples partes, solicitudes, respuestas, identificadores,
+unidades, datos de gráficas, persistencia separada y mensajes reversibles.
+La prueba de las ecuaciones plegadas combina comprobación estructural con
+traducción pública; no equivale a abrir el control en un navegador.
+\texttt{npm run build} terminó con código cero en la primera integración;
+la compilación del último ajuste de mensajes está pendiente.
+Vite advirtió sobre \texttt{\_\_dirname} en una futura configuración y sobre
+el tamaño de un fragmento JavaScript; no se modificó la configuración para ocultarlas.
+\texttt{npm run lint} terminó con código uno: conserva un error previo
+\texttt{react-refresh/only-export-components} en
+\texttt{ScientificFiguresViewer.tsx}, por la constante exportada
+\texttt{SCIENTIFIC\_FIGURES}. Se reprodujo la misma regla en la versión base.
+Las advertencias nuevas de dependencias de hooks fueron corregidas.
+La verificación independiente del cliente requiere un candidato ligado a commit;
+su primera preparación se bloqueó antes de ejecutar pruebas. No se considera
+comprobada hasta contar con el resultado ejecutable sobre dicho candidato.
+No se encontró \texttt{pdflatex}; no se genera PDF. La fuente es autónoma y
+su revisión estructural final está pendiente. Ninguna prueba descrita demuestra
+validación científica de las mediciones o del modelo de inundación.
 \end{document}

@@ -13,8 +13,10 @@ import {
   type RoiGeometry,
 } from '../utils/roi'
 import type { ToastKind } from './Toast'
+import { useTranslation } from '../i18n/useTranslation.ts'
 
 export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }: { onPreview: (geometry: RoiGeometry | null) => void; onConfirmROI: (geometry: RoiGeometry, metadata: EffectiveRoiMetadata) => boolean | void; onDrawROI: () => void; onNotify: (kind: ToastKind, text: string) => void }) {
+  const { t, localizeText } = useTranslation()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<LocationResult[]>([])
   const [selected, setSelected] = useState<LocationResult | null>(null)
@@ -65,9 +67,9 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
       const result = await generateLocationRoi({ place_id: place.place_id, query: searchQuery, radius_km: radiusKm })
       if (id !== requestId.current) return
       if (!isAcceptableEffectiveRoi(result.geometry, result.metadata.generation)) {
-        throw new Error('El servicio devolvió una ROI inválida: debe ser un polígono o multipolígono dentro del límite de 0.6° por lado.')
+        throw new Error(t('El servicio devolvió una ROI inválida: debe ser un polígono o multipolígono dentro del límite de 0.6° por lado.', 'The service returned an invalid ROI: it must be a polygon or multipolygon within the 0.6° per-side limit.'))
       }
-      if (!Number.isFinite(result.metadata.applied_radius_km) || result.metadata.applied_radius_km <= 0) throw new Error('El servicio no informó el radio realmente aplicado.')
+      if (!Number.isFinite(result.metadata.applied_radius_km) || result.metadata.applied_radius_km <= 0) throw new Error(t('El servicio no informó el radio realmente aplicado.', 'The service did not report the actual applied radius.'))
       onPreview(result.geometry)
       if (confirm) {
         const accepted = onConfirmROI(result.geometry, result.metadata)
@@ -77,11 +79,11 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
       const noticeKey = `${place.place_id}:${radiusKm}:${result.metadata.generation}:${result.metadata.applied_radius_km}`
       if (notice && noticeKey !== lastNoticeKey.current) {
         lastNoticeKey.current = noticeKey
-        onNotify('info', notice)
+        onNotify('info', localizeText(notice))
       }
     } catch (cause) {
       if (id === requestId.current) {
-        const message = cause instanceof Error ? cause.message : 'No se pudo generar la región de análisis.'
+        const message = cause instanceof Error ? localizeText(cause.message) : t('No se pudo generar la región de análisis.', 'Could not generate the analysis region.')
         setError(message); onNotify('error', message)
       }
     } finally { if (id === requestId.current) setBusy(false) }
@@ -97,7 +99,7 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
       setSearchedQuery(searchQuery); setResults(response.results)
     } catch (cause) {
       if (id === requestId.current) {
-        const message = cause instanceof Error ? cause.message : 'Falló la búsqueda geográfica.'
+        const message = cause instanceof Error ? localizeText(cause.message) : t('Falló la búsqueda geográfica.', 'Geographic search failed.')
         setError(message); onNotify('error', message)
       }
     } finally { if (id === requestId.current) setBusy(false) }
@@ -131,20 +133,20 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
   }
   const confirm = () => { if (selected) void generate(selected, query.trim(), radius, true) }
 
-  return <section className="geo-search" aria-label="Buscar ubicación">
+  return <section className="geo-search" aria-label={t('Buscar ubicación', 'Search location')}>
     <form onSubmit={submit}>
-      <label htmlFor="location-query">Buscar ubicación</label>
-      <div className="geo-search__row"><input id="location-query" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="location-suggestions" aria-activedescendant={activeSuggestion >= 0 ? `location-suggestion-${activeSuggestion}` : undefined} value={query} onKeyDown={onQueryKeyDown} onChange={event => { clearSuggestions(); suppressNextSuggestion.current = false; setQuery(event.target.value); setSearchedQuery(''); setSelected(null); setResults([]); invalidate() }} placeholder="Ej. Tuxtla Gutiérrez, Chiapas" maxLength={200} autoComplete="off" /><button className="btn btn--primary" disabled={busy || !query.trim()}>{busy ? 'Buscando…' : 'Buscar'}</button></div>
+      <label htmlFor="location-query">{t('Buscar ubicación', 'Search location')}</label>
+      <div className="geo-search__row"><input id="location-query" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="location-suggestions" aria-activedescendant={activeSuggestion >= 0 ? `location-suggestion-${activeSuggestion}` : undefined} value={query} onKeyDown={onQueryKeyDown} onChange={event => { clearSuggestions(); suppressNextSuggestion.current = false; setQuery(event.target.value); setSearchedQuery(''); setSelected(null); setResults([]); invalidate() }} placeholder={t('Ej. Tuxtla Gutiérrez, Chiapas', 'E.g. Tuxtla Gutiérrez, Chiapas')} maxLength={200} autoComplete="off" /><button className="btn btn--primary" disabled={busy || !query.trim()}>{busy ? t('Buscando…', 'Searching…') : t('Buscar', 'Search')}</button></div>
     </form>
-    {suggestions.length > 0 && <ul id="location-suggestions" className="geo-search__results" role="listbox" aria-label="Sugerencias de ubicación">{suggestions.map((suggestion, index) => <li key={suggestion.query} id={`location-suggestion-${index}`} role="option" aria-selected={activeSuggestion === index}><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => selectSuggestion(suggestion)}>{suggestion.name}</button></li>)}</ul>}
-    {suggestionError && <small role="status">{suggestionError}</small>}
-    {visibleResults.length > 0 && <ul className="geo-search__results" aria-label="Resultados geográficos">{visibleResults.map((result) => {
+    {suggestions.length > 0 && <ul id="location-suggestions" className="geo-search__results" role="listbox" aria-label={t('Sugerencias de ubicación', 'Location suggestions')}>{suggestions.map((suggestion, index) => <li key={suggestion.query} id={`location-suggestion-${index}`} role="option" aria-selected={activeSuggestion === index}><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => selectSuggestion(suggestion)}>{suggestion.name}</button></li>)}</ul>}
+    {suggestionError && <small role="status">{localizeText(suggestionError)}</small>}
+    {visibleResults.length > 0 && <ul className="geo-search__results" aria-label={t('Resultados geográficos', 'Geographic results')}>{visibleResults.map((result) => {
       const label = formatLocationResultLabel(result)
       return <li key={getLocationResultKey(result)}><button type="button" aria-pressed={selected === result} onClick={() => select(result)}><strong>{label.primary}</strong></button></li>
     })}</ul>}
-    {error && <p role="alert">{error}</p>}
-    {!busy && searchedQuery === query.trim() && visibleResults.length === 0 && !error && <p role="status">Sin resultados para “{query}”. Prueba un nombre más específico.</p>}
-    {selected && <div className="geo-search__selection"><label htmlFor="roi-radius">Radio máximo: {radius} km</label><input id="roi-radius" type="range" min={MIN_LOCATION_RADIUS_KM} max={MAX_LOCATION_RADIUS_KM} step="1" value={radius} onChange={event => updateRadius(Number(event.target.value))} /><div className="geo-search__radius"><span>1 km</span><span>{MAX_LOCATION_RADIUS_KM} km</span></div>{busy && <p role="status">Actualizando región…</p>}<button type="button" className="btn btn--primary" disabled={busy} onClick={confirm}>Confirmar región de análisis</button><button type="button" className="link-btn" onClick={onDrawROI}>Dibujar o editar región</button></div>}
+    {error && <p role="alert">{localizeText(error)}</p>}
+    {!busy && searchedQuery === query.trim() && visibleResults.length === 0 && !error && <p role="status">{t('Sin resultados para “{query}”. Prueba un nombre más específico.', 'No results for “{query}”. Try a more specific name.', { query })}</p>}
+    {selected && <div className="geo-search__selection"><label htmlFor="roi-radius">{t('Radio máximo: {radius} km', 'Maximum radius: {radius} km', { radius })}</label><input id="roi-radius" type="range" min={MIN_LOCATION_RADIUS_KM} max={MAX_LOCATION_RADIUS_KM} step="1" value={radius} onChange={event => updateRadius(Number(event.target.value))} /><div className="geo-search__radius"><span>1 km</span><span>{MAX_LOCATION_RADIUS_KM} km</span></div>{busy && <p role="status">{t('Actualizando región…', 'Updating region…')}</p>}<button type="button" className="btn btn--primary" disabled={busy} onClick={confirm}>{t('Confirmar región de análisis', 'Confirm analysis region')}</button><button type="button" className="link-btn" onClick={onDrawROI}>{t('Dibujar o editar región', 'Draw or edit region')}</button></div>}
     <small>© OpenStreetMap contributors · ODbL 1.0</small>
   </section>
 }

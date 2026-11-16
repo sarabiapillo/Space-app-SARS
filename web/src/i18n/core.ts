@@ -40,10 +40,11 @@ export function translate(es: string, en: string, values: TranslationValues = {}
 /** Curated display-only translations for API messages and scientific labels. */
 export function localizeText(value: string | null | undefined): string {
   if (value == null) return ''
-  if (language === 'es') return value
   const messages: Record<string, string> = { ...shellMessages, ...mapMessages, ...chartMessages, ...simulationMessages }
-  if (Object.hasOwn(messages, value)) return messages[value]
-  for (const [source, target] of Object.entries(messages)) {
+  if (Object.hasOwn(messages, value)) return language === 'en' ? messages[value] : value
+  for (const [spanish, english] of Object.entries(messages)) {
+    const [source, target] = language === 'en' ? [spanish, english] : [english, spanish]
+    if (value === source) return target
     if (!source.includes('{')) continue
     const names: string[] = []
     const escaped = source.split(/(\{\w+\})/g).map(part => {
