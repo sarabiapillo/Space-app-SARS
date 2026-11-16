@@ -10,10 +10,10 @@ S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escen
 ## Tasks
 T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
 T2 [S1-S3] completada — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: abf2453.
-T3 [S1-S2] completada — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: f302fb3 (cliente/catálogos); mapa visual en preparación.
+T3 [S1-S2] completada — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: f302fb3 (cliente/catálogos); 4a20a3c (mapa visual).
 T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commits: 07f0f5f (visor/catálogo), 965a40c (paneles/módulos).
 T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: 8e4a794.
-T6 [S1-S3] en curso — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
+T6 [S1-S3] bloqueada (permiso humano para scratch externo y prueba independiente) — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
 
 ## Log
 L1. Solicitud original: se me pidio agregar la traducción al idioma ingles para la plataforma. Encargate de traducir todo el programa, utiliza las traducciones adecuadas, siempre revisa las diferentes interpretaciones y elige la más adecuada para el ambito de nuestra plataforma. Agrega la opción en la barra de navegación, donde esta "Archivo", "Escenas GCOV", "Procesamiento SAR", etc.
@@ -50,3 +50,6 @@ L21. Revisión final de ecuación: el conector «a 72h» pasó a «at 72h» en E
 
 L22. Unidad cliente/riesgo3 commitf302fb3716b2b0f707d42c63c7655724150a516d. Se reanudó el mismo verificador solo para completar su preparación original (cero pruebas anteriores), con este SHA exacto y sin incluir fuente viva divergente. No se reinicia presupuesto ni se lanza otro verificador.
 L23. Build del último código exit0; advertencias Vite __dirname y bundle grande reportadas, no ocultadas. LaTeX revisado estructuralmente: documento autónomo, llaves/entornos equilibrados y cinco secciones. pdflatex y navegador siguen no disponibles. git diff --check detectó y corrigió un espacio final en MapCanvas antes de commit.
+
+L24. Preparación del mismo verificador sobre SHAf302fb3 fue DENEGADA por guard de seguridad antes de ejecutar pruebas, porque su comando contenía git restore en scratch. No se sustituye herramienta/operación para eludir la prohibición ni se autoriza pérdida de datos. Se ordenó detener al hijo y devolver límites/efectos ya observados sin nuevas lecturas externas. Native exige scratch /tmp, fuera del proyecto; no existe permiso humano para ese destino. Prueba independiente sigue 0 ejecuciones. No hay veredicto de éxito.
+L25. Propuesta concreta que requiere decisión humana: permitir al mismo verificador solo una carpeta NUEVA /tmp/terrapulse-i18n-verification-f302fb3 para materializar candidatos mediante archive/copia no destructiva de dependencias existentes, sin restore/reset/borrados ni instalación/red; si ya existe, detenerse. La autorización de ruta no sustituye ninguna admisión/guard nativo y no habilita comandos denegados. No se inicia automáticamente. Cambios de interfaz y pruebas propios quedan preservados; 83/83 y build final0 siguen siendo evidencia del padre, no de verificación independiente.

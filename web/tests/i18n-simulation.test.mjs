@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import ts from 'typescript'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { setLanguage, localizeText } from '../src/i18n/core.ts'
+import { setLanguage, localizeText, translate } from '../src/i18n/core.ts'
 import { formatRelative } from '../src/utils/time.ts'
 
 registerHooks({
@@ -77,6 +77,18 @@ test('curated backend messages and risk labels translate only known display text
   assert.equal(localizeText('Leve'), 'Low')
   setLanguage('es')
   assert.equal(localizeText('Leve'), 'Leve')
+})
+
+test('collapsed equation copy has contextual English without changing its mathematical expression', () => {
+  // No browser is available to open the disclosure; check its explicit translation pair.
+  const source = readFileSync(new URL('../src/components/RainDg2Panel.tsx', import.meta.url), 'utf8')
+  const pair = source.match(/<code>\{t\('([^']*\[C →[^']*)', '([^']*)'\)\}<\/code>/)
+  assert.ok(pair)
+  setLanguage('en')
+  assert.match(translate(pair[1], pair[2]), /C → 0.89 at 72h/)
+  setLanguage('es')
+  assert.match(translate(pair[1], pair[2]), /C → 0.89 a 72h/)
+  assert.equal(pair[1].replace(' a 72h', ' at 72h'), pair[2])
 })
 
 test('relative time uses selected display locale without changing input signatures or invalid-date semantics', () => {

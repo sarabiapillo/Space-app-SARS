@@ -80,9 +80,13 @@ el tamaño de un fragmento JavaScript; no se modificó la configuración para oc
 \texttt{ScientificFiguresViewer.tsx}, por la constante exportada
 \texttt{SCIENTIFIC\_FIGURES}. Se reprodujo la misma regla en la versión base.
 Las advertencias nuevas de dependencias de hooks fueron corregidas.
-La verificación independiente del cliente requiere un candidato ligado a commit;
-su primera preparación se bloqueó antes de ejecutar pruebas. No se considera
-comprobada hasta contar con el resultado ejecutable sobre dicho candidato.
+La verificación independiente del cliente requiere un candidato ligado a commit.
+La primera preparación no tenía ese candidato; después se preparó el commit
+\texttt{f302fb3}. Su preparación aislada fue detenida por el guard de seguridad
+antes de ejecutar pruebas. No se intenta eludir la prohibición. La herramienta
+requiere un directorio temporal fuera del proyecto, aún no autorizado por el
+usuario. La comprobación independiente sigue pendiente y el trabajo no se
+considera cerrado hasta resolver ese requisito y obtener el resultado.
 No se encontró \texttt{pdflatex}; no se genera PDF. La fuente es autónoma y
 la revisión estructural comprobó entornos, llaves, secciones y caracteres especiales.
 Ninguna prueba descrita demuestra

@@ -583,7 +583,7 @@ export function RainDg2Panel({
                   </div>
                   <div className="ws-rain-eq-item">
                     <span>{t('6. Saturación Progresiva del Suelo (Temporal de 3 Días / 72h):', '6. Progressive soil saturation (3-day / 72h storm):')}</span>
-                    <code>C(t) = C_0 + (C_max - C_0)·[1 - exp(-t/24h)]  [C → 0.89 a 72h]</code>
+                    <code>{t('C(t) = C_0 + (C_max - C_0)·[1 - exp(-t/24h)]  [C → 0.89 a 72h]', 'C(t) = C_0 + (C_max - C_0)·[1 - exp(-t/24h)]  [C → 0.89 at 72h]')}</code>
                   </div>
                   <div className="ws-rain-eq-item">
                     <span>{t('7. Forzamiento Barométrico Hidrostático (Bajas Presiones):', '7. Hydrostatic barometric forcing (low pressure):')}</span>
