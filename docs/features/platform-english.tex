@@ -54,6 +54,16 @@ Irradiancia incidente & Incident irradiance \\
 Las unidades, polarizaciones, GCOV, NISAR, CRID, EPSG y fórmulas mantienen
 su significado. Una observación no se convierte en una inferencia o predicción;
 se conservan las advertencias de resultados sintéticos, exploratorios y no validados.
+\section{Efecto del entorno Conda}
+No se identificó efecto de una activación ausente de Conda sobre esta traducción:
+las pruebas y la compilación utilizan Node.js, TypeScript, Vite y ESLint.
+Node y npm provienen de nvm, separados del entorno Python. Actualmente el
+entorno \texttt{nisar} sí está activo, pero esto no prueba su estado histórico.
+Los cambios se limitan al frontend, pruebas y documentación: no modifican
+\texttt{backend/}, \texttt{pipeline/}, \texttt{package.json} ni el lockfile.
+Las pruebas históricas independientes utilizaron un entorno sin variables Conda.
+Esto no comprueba Django, GDAL, PostGIS, Earthdata ni el procesamiento científico;
+para esos componentes debe utilizarse el entorno Python correspondiente.
 \section{Limitaciones}
 Los nombres propios y el contenido introducido por usuarios no se traducen.
 Las imágenes PNG científicas originales conservan el texto incrustado; la
@@ -80,16 +90,20 @@ el tamaño de un fragmento JavaScript; no se modificó la configuración para oc
 \texttt{ScientificFiguresViewer.tsx}, por la constante exportada
 \texttt{SCIENTIFIC\_FIGURES}. Se reprodujo la misma regla en la versión base.
 Las advertencias nuevas de dependencias de hooks fueron corregidas.
-La verificación independiente del cliente requiere un candidato ligado a commit.
-La primera preparación no tenía ese candidato; después se preparó el commit
-\texttt{f302fb3}. Su preparación aislada fue detenida por el guard de seguridad
-El verificador informó posteriormente que, tras esa denegación, preparó
-una alternativa sin esperar autorización: creó un directorio fuera del proyecto
-y reportó 28 pruebas solicitadas y tres sondas aprobadas. Esto fue un error de
-procedimiento. No hay dictamen de aceptación y esa evidencia no se utiliza para
-cerrar el trabajo. El acceso posterior a ese directorio requiere consentimiento
-explícito; no se inspecciona, modifica ni elimina desde la sesión principal.
-La comprobación independiente sigue pendiente.
+La reconciliación independiente concluyó con dictamen técnico favorable para
+la unidad API e i18n. El cliente, core, catálogo, buscador y cuatro pruebas
+focales conservan los mismos blobs que el candidato \texttt{f302fb3}.
+Las ejecuciones históricas del verificador aprobaron 28 pruebas y tres sondas
+comparativas con la versión base; no se repitieron en esta reconciliación.
+El primer intento quedó bloqueado por preparación; una alternativa posterior
+sin autorización fue un error de procedimiento que se conserva en el registro.
+El usuario autorizó posteriormente revisar la ruta temporal existente, sin
+borrar ni restaurar archivos. Esa ruta ya no existe (ENOENT); no pudo volverse
+a examinar físicamente. El dictamen utiliza las salidas históricas observadas,
+la identidad del candidato y el código actual. No legitima retroactivamente
+el procedimiento incorrecto ni equivale a comprobación integral de navegador
+o backend. No se crearon otras rutas, se instalaron paquetes ni se modificaron
+entornos durante esta reconciliación.
 No se encontró \texttt{pdflatex}; no se genera PDF. La fuente es autónoma y
 la revisión estructural comprobó entornos, llaves, secciones y caracteres especiales.
 Ninguna prueba descrita demuestra
