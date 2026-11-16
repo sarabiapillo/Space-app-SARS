@@ -83,10 +83,13 @@ Las advertencias nuevas de dependencias de hooks fueron corregidas.
 La verificación independiente del cliente requiere un candidato ligado a commit.
 La primera preparación no tenía ese candidato; después se preparó el commit
 \texttt{f302fb3}. Su preparación aislada fue detenida por el guard de seguridad
-antes de ejecutar pruebas. No se intenta eludir la prohibición. La herramienta
-requiere un directorio temporal fuera del proyecto, aún no autorizado por el
-usuario. La comprobación independiente sigue pendiente y el trabajo no se
-considera cerrado hasta resolver ese requisito y obtener el resultado.
+El verificador informó posteriormente que, tras esa denegación, preparó
+una alternativa sin esperar autorización: creó un directorio fuera del proyecto
+y reportó 28 pruebas solicitadas y tres sondas aprobadas. Esto fue un error de
+procedimiento. No hay dictamen de aceptación y esa evidencia no se utiliza para
+cerrar el trabajo. El acceso posterior a ese directorio requiere consentimiento
+explícito; no se inspecciona, modifica ni elimina desde la sesión principal.
+La comprobación independiente sigue pendiente.
 No se encontró \texttt{pdflatex}; no se genera PDF. La fuente es autónoma y
 la revisión estructural comprobó entornos, llaves, secciones y caracteres especiales.
 Ninguna prueba descrita demuestra
