@@ -20,7 +20,7 @@ export type Footprint = [LngLat, LngLat, LngLat, LngLat]
 export type ViewMode = 'general' | 'editado'
 
 /** Tipo de ventana acoplable del área central. */
-export type DockWindowKind = 'map' | 'agua'
+export type DockWindowKind = 'map' | 'agua' | 'sismo'
 
 /** Ventana acoplable del área central (pestaña de mapa o de agua/DG2). */
 export interface DockWindow {
@@ -125,6 +125,19 @@ export interface WorkspaceMap {
   solar: SolarSimulationState
   /** Configuración y estado de la Simulación de Inundación / Lluvia DG2. */
   flood?: FloodSimulationState
+  /** Configuración del Simulador Sísmico y Terremoto. */
+  seismic?: SeismicSimulationState
+}
+
+/** Configuración de la Simulación Sísmica y Terremoto guardada por mapa. */
+export interface SeismicSimulationState {
+  enabled: boolean
+  epicenter: LngLat
+  magnitude: number
+  depthKm: number
+  name: string
+  mechanism: 'subduction' | 'intraplate' | 'crustal'
+  soilType: 'rock' | 'intermediate' | 'soft_lacustrine'
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */

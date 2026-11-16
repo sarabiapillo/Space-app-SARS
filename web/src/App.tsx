@@ -10,6 +10,7 @@ import { useRoiLayers } from './hooks/useRoiLayers'
 import { useTranslation } from './i18n/useTranslation'
 import {
   DEFAULT_FLOOD,
+  DEFAULT_SEISMIC,
   DEFAULT_SOLAR,
   MAPA_GENERAL,
   type CenterDockTab,
@@ -25,6 +26,7 @@ import type {
   LngLat,
   MapAnnotation,
   MapView,
+  SeismicSimulationState,
   SolarSimulationState,
   ViewMode,
   WorkspaceMap,
@@ -46,6 +48,7 @@ function App() {
   const [generalOpacity, setGeneralOpacity] = useState<number>(MAPA_GENERAL.opacidadSar)
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
   const [generalFlood, setGeneralFlood] = useState<FloodSimulationState>(DEFAULT_FLOOD)
+  const [generalSeismic, setGeneralSeismic] = useState<SeismicSimulationState>(DEFAULT_SEISMIC)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
   const [locationPreview, setLocationPreview] = useState<AdministrativeGeometry | null>(null)
@@ -80,6 +83,7 @@ function App() {
         opacidadSar: generalOpacity,
         solar: generalSolar,
         flood: generalFlood,
+        seismic: generalSeismic,
       }
 
   const manualRoi = current.croppedRegion?.length
@@ -96,7 +100,12 @@ function App() {
   // el mapa y su estado se conservan porque el lienzo no se desmonta.
   const activeDockWindow =
     dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
-  const activeDockTab: CenterDockTab = activeDockWindow?.kind === 'agua' ? 'rain-dg2' : 'map'
+  const activeDockTab: CenterDockTab =
+    activeDockWindow?.kind === 'agua'
+      ? 'rain-dg2'
+      : activeDockWindow?.kind === 'sismo'
+        ? 'seismic'
+        : 'map'
 
   const openDockWindow = useCallback(
     (kind: DockWindowKind) => {
@@ -126,7 +135,7 @@ function App() {
 
   const handleDockTabChange = useCallback(
     (tab: CenterDockTab) => {
-      const kind: DockWindowKind = tab === 'rain-dg2' ? 'agua' : 'map'
+      const kind: DockWindowKind = tab === 'rain-dg2' ? 'agua' : tab === 'seismic' ? 'sismo' : 'map'
       const existing = dockWindows.find((w) => w.kind === kind)
       if (existing) {
         setActiveDockWindowId(existing.id)
@@ -292,6 +301,17 @@ function App() {
     }
   }
 
+  const handleSeismicChange = (nextSeismic: SeismicSimulationState) => {
+    if (isEditing && activeCopy) {
+      updateMap(activeCopy.id, {
+        seismic: nextSeismic,
+        fechaModificacion: new Date().toISOString(),
+      })
+    } else {
+      setGeneralSeismic(nextSeismic)
+    }
+  }
+
   const handleConfirmDuplicate = (nombre: string, carpeta: Carpeta) => {
     const copy: WorkspaceMap = {
       ...current,
@@ -446,6 +466,8 @@ function App() {
           onCropRegionChange={handleCropRegionChange}
           onSolarChange={handleSolarChange}
           onFloodChange={handleFloodChange}
+          seismic={current.seismic || generalSeismic}
+          onSeismicChange={handleSeismicChange}
           dockWindows={dockWindows}
           activeDockWindowId={activeDockWindow?.id ?? ''}
           onActivateDockWindow={setActiveDockWindowId}

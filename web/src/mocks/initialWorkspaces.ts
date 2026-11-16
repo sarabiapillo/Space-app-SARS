@@ -4,6 +4,7 @@ import type {
   Footprint,
   LngLat,
   MapAnnotation,
+  SeismicSimulationState,
   SolarSimulationState,
   WorkspaceMap,
 } from '../types/workspace'
@@ -543,6 +544,16 @@ export const DEFAULT_FLOOD: Readonly<FloodSimulationState> = Object.freeze({
   stats: null,
 })
 
+export const DEFAULT_SEISMIC: Readonly<SeismicSimulationState> = Object.freeze({
+  enabled: false,
+  epicenter: [-99.88, 16.85] as LngLat, // Acapulco / Trinchera Mesoamericana
+  magnitude: 7.2,
+  depthKm: 20,
+  name: 'Trinchera Mesoamericana — Guerrero',
+  mechanism: 'subduction',
+  soilType: 'intermediate',
+})
+
 export const MAPA_GENERAL_ID = 'mapa-general-chiapas'
 
 /** Estado base de solo lectura (Par de trabajo principal: T62/F10 ASC, 2026-06-18 -> 2026-10-16, P05023). */
@@ -613,7 +624,7 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
   ]
 }
 
-export type CenterDockTab = 'map' | 'rain-dg2'
+export type CenterDockTab = 'map' | 'rain-dg2' | 'seismic'
 
 
 /**

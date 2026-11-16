@@ -17,6 +17,7 @@ import {
   type StyleSpecification,
 } from 'maplibre-gl'
 import {
+  Activity,
   Camera,
   ChevronDown,
   ChevronUp,
@@ -39,6 +40,7 @@ import {
 } from 'lucide-react'
 import {
   DEFAULT_FLOOD,
+  DEFAULT_SEISMIC,
   DANGER_CIRCLE_DEFAULT_LABEL,
   DANGER_CIRCLE_TOOLTIP,
   EXPLORE_LAYER_OPTIONS,
@@ -59,6 +61,8 @@ import {
 } from '../utils/colormapLut'
 import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
+import { SeismicSimulatorPanel } from './SeismicSimulatorPanel'
+import { runSeismicSimulation } from '../utils/seismic'
 import type {
   DockWindow,
   DockWindowKind,
@@ -68,6 +72,7 @@ import type {
   LngLat,
   MapAnnotation,
   MapView,
+  SeismicSimulationState,
   SolarSimulationState,
 } from '../types/workspace'
 import {
@@ -109,6 +114,8 @@ interface MapCanvasProps {
   onCropRegionChange: (polygon: LngLat[] | null) => void
   onSolarChange: (next: SolarSimulationState) => void
   onFloodChange?: (next: FloodSimulationState) => void
+  seismic?: SeismicSimulationState
+  onSeismicChange?: (next: SeismicSimulationState) => void
   /** Ventanas acoplables del área central (mapa o agua/DG2) y su ventana activa. */
   dockWindows: DockWindow[]
   activeDockWindowId: string
@@ -162,6 +169,7 @@ const DRAFT_POLY_VERTEX_LAYER = 'draft-polygon-vertex'
 const CONFIRMED_ROI_SOURCE = 'confirmed-roi-source'
 const LOCATION_PREVIEW_SOURCE = 'location-preview-source'
 const GCOV_PREVIEW_SOURCE = 'gcov-preview-source'
+const SEISMIC_SOURCE = 'seismic-source'
 
 const BASE_STYLE: StyleSpecification = {
   version: 8,
@@ -270,6 +278,8 @@ export function MapCanvas({
   onCropRegionChange,
   onSolarChange,
   onFloodChange,
+  seismic,
+  onSeismicChange,
   dockWindows,
   activeDockWindowId,
   onActivateDockWindow,
@@ -295,6 +305,10 @@ export function MapCanvas({
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const navigationRef = useRef<NavigationControl | null>(null)
+
+  const activeDockWindow = dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
+  const isDg2 = activeDockWindow?.kind === 'agua'
+  const isSeismic = activeDockWindow?.kind === 'sismo' || Boolean(seismic?.enabled)
   useEffect(() => {
     const nav = navigationRef.current
     if (!nav) return
@@ -673,6 +687,14 @@ export function MapCanvas({
           })
         }
       }
+
+      if (isSeismic && tool === 'mover') {
+        onSeismicChange?.({
+          ...(seismic || DEFAULT_SEISMIC),
+          enabled: true,
+          epicenter: coord,
+        })
+      }
     }
 
     map.on('mousedown', onMouseDown)
@@ -909,6 +931,48 @@ export function MapCanvas({
         }
       }
 
+      if (!map.getSource(SEISMIC_SOURCE)) {
+        map.addSource(SEISMIC_SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-fill`,
+          type: 'fill',
+          source: SEISMIC_SOURCE,
+          filter: ['!=', ['get', 'isEpicenter'], true],
+          paint: { 'fill-color': ['get', 'fillColor'], 'fill-opacity': 0.35 },
+        })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-line`,
+          type: 'line',
+          source: SEISMIC_SOURCE,
+          filter: ['!=', ['get', 'isEpicenter'], true],
+          paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2] },
+        })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-pulse`,
+          type: 'circle',
+          source: SEISMIC_SOURCE,
+          filter: ['==', ['get', 'isEpicenter'], true],
+          paint: {
+            'circle-radius': 14,
+            'circle-color': 'rgba(239, 68, 68, 0.35)',
+            'circle-stroke-width': 1.5,
+            'circle-stroke-color': '#ef4444',
+          },
+        })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-epicenter`,
+          type: 'circle',
+          source: SEISMIC_SOURCE,
+          filter: ['==', ['get', 'isEpicenter'], true],
+          paint: {
+            'circle-radius': 6,
+            'circle-color': '#ef4444',
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': '#ffffff',
+          },
+        })
+      }
+
       setMapReady(true)
     }
 
@@ -950,6 +1014,65 @@ export function MapCanvas({
     const source = mapRef.current?.getSource(GCOV_PREVIEW_SOURCE) as GeoJSONSource | undefined
     if (source) source.setData(gcovFootprint ? gcovFootprint as never : { type: 'FeatureCollection', features: [] })
   }, [gcovFootprint, mapReady])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const source = map.getSource(SEISMIC_SOURCE) as GeoJSONSource | undefined
+    if (!source) return
+
+    const activeSeismic = seismic || DEFAULT_SEISMIC
+    const shouldShow = isSeismic || Boolean(seismic?.enabled)
+
+    if (shouldShow && activeSeismic) {
+      const results = runSeismicSimulation({
+        epicenter: activeSeismic.epicenter,
+        magnitude: activeSeismic.magnitude,
+        depthKm: activeSeismic.depthKm,
+        name: activeSeismic.name,
+        mechanism: activeSeismic.mechanism,
+        soilType: activeSeismic.soilType,
+      })
+
+      const ringFeatures = results.rings.map((ring) => ({
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [ring.polygon],
+        },
+        properties: {
+          isEpicenter: false,
+          level: ring.level,
+          color: ring.color,
+          fillColor: ring.fillColor,
+          mmi: ring.mmi,
+          radiusKm: ring.radiusKm,
+        },
+      }))
+      ringFeatures.sort((a, b) => b.properties.radiusKm - a.properties.radiusKm)
+
+      const epicenterFeature = {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Point' as const,
+          coordinates: activeSeismic.epicenter,
+        },
+        properties: {
+          isEpicenter: true,
+        },
+      }
+
+      source.setData({
+        type: 'FeatureCollection',
+        features: [...ringFeatures, epicenterFeature],
+      })
+    } else {
+      source.setData({
+        type: 'FeatureCollection',
+        features: [],
+      })
+    }
+  }, [seismic, isSeismic, mapReady])
 
   const displayScene = hasAnalysisRoi ? {
     ...escena,
@@ -1625,12 +1748,12 @@ export function MapCanvas({
   }
 
   // Ventana activa del área central: define la vista y la etiqueta de la pestaña.
-  const activeDockWindow = dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
-  const isDg2 = activeDockWindow?.kind === 'agua'
   const activeDockLabel = activeDockWindow
     ? activeDockWindow.kind === 'agua'
       ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: activeDockWindow.index })
-      : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
+      : activeDockWindow.kind === 'sismo'
+        ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: activeDockWindow.index })
+        : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
     : t('Gráficos / Mapa 1', 'Graphics / Map Plot 1')
 
   // Cerrar el menú de «+» al hacer clic fuera o con Escape.
@@ -1816,13 +1939,16 @@ export function MapCanvas({
           {dockWindows.map((win) => {
             const isActive = win.id === activeDockWindow?.id
             const isAgua = win.kind === 'agua'
+            const isSismo = win.kind === 'sismo'
             const label = isAgua
               ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: win.index })
-              : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
+              : isSismo
+                ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: win.index })
+                : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
             return (
               <div
                 key={win.id}
-                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${
+                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${isSismo ? ' ws-panel-tab-group--seismic' : ''}${
                   isActive ? ' is-active' : ''
                 }`}
               >
@@ -1830,7 +1956,7 @@ export function MapCanvas({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${
+                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${isSismo ? ' ws-panel-tab--seismic' : ''}${
                     isActive ? ' is-active' : ''
                   }`}
                   title={label}
@@ -1838,6 +1964,8 @@ export function MapCanvas({
                 >
                   {isAgua ? (
                     <Droplets size={13} aria-hidden="true" />
+                  ) : isSismo ? (
+                    <Activity size={13} aria-hidden="true" />
                   ) : (
                     <Monitor size={13} aria-hidden="true" />
                   )}
@@ -1903,6 +2031,21 @@ export function MapCanvas({
                   <span>
                     {t('Ventana de agua', 'Water window')}
                     <em>{t('Agua / DG2', 'Water / DG2')}</em>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="ws-window-menu__item ws-window-menu__item--seismic"
+                  onClick={() => {
+                    onOpenDockWindow('sismo')
+                    setNewWindowMenuOpen(false)
+                  }}
+                >
+                  <Activity size={13} aria-hidden="true" />
+                  <span>
+                    {t('Ventana sísmica', 'Seismic window')}
+                    <em>{t('Sismo / Terremoto', 'Earthquake / Seismic')}</em>
                   </span>
                 </button>
               </div>
@@ -3028,6 +3171,24 @@ export function MapCanvas({
             onClose={() => {
               const mapTab = dockWindows.find((w) => w.kind === 'map')
               if (mapTab) onActivateDockWindow(mapTab.id)
+            }}
+          />
+        )}
+
+        {/* Panel superpuesto de Simulación Sísmica y Terremoto */}
+        {isSeismic && (
+          <SeismicSimulatorPanel
+            seismic={seismic || DEFAULT_SEISMIC}
+            onSeismicChange={onSeismicChange || (() => {})}
+            onFlyToEpicenter={(coord) => {
+              if (mapRef.current) {
+                mapRef.current.flyTo({ center: coord, zoom: 7.5, duration: 1200 })
+              }
+            }}
+            onClose={() => {
+              const mapTab = dockWindows.find((w) => w.kind === 'map')
+              if (mapTab) onActivateDockWindow(mapTab.id)
+              onSeismicChange?.({ ...(seismic || DEFAULT_SEISMIC), enabled: false })
             }}
           />
         )}

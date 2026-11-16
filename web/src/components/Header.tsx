@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  Activity,
   Camera,
   Check,
   ChevronDown,
@@ -584,6 +585,18 @@ export function Header({
             >
               <CloudRain size={14} />
               <span>{t('Simulador Inundación (DG2)', 'Flood Simulator (DG2)')}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`ws-ribbon__btn ws-ribbon__btn--seismic ${activeDockTab === 'seismic' ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange(activeDockTab === 'seismic' ? 'map' : 'seismic')
+              }}
+              title={t('Abrir simulador de terremoto, atenuación de ondas P/S y zonificación de riesgo', 'Open earthquake simulator, P/S wave attenuation and risk zoning')}
+            >
+              <Activity size={14} />
+              <span>{t('Simulador Terremoto', 'Earthquake Simulator')}</span>
             </button>
 
 

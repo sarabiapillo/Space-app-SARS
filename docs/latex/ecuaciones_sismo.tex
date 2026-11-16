@@ -1,0 +1,153 @@
+% TerraPulse AI — Ecuaciones de Propagación de Ondas Sísmicas y Modelación de Riesgo
+% Compilar con: pdflatex ecuaciones_sismo.tex (o latexmk -pdf)
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+\setlength{\parskip}{0.35em}
+
+\title{TerraPulse AI\\[4pt]\large Modelación de Terremotos: Física de Ondas, Leyes de Atenuación y Zonificación de Riesgo Sísmico}
+\author{Documentación técnica del simulador sísmico}
+\date{16 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Este documento expone la formulación matemática y física incorporada en el Simulador de Terremotos de TerraPulse AI. Se describen las ecuaciones elastodinámicas de ondas primarias ($P$) y secundarias ($S$), las Leyes de Predicción de Movimiento del Suelo (\emph{Ground Motion Prediction Equations}, GMPE) adaptadas al régimen tectónico mexicano (subducción e intraplaca), la escala de aceleración pico ($PGA$), la correlación con la Intensidad Mercalli Modificada ($MMI$), el efecto de sitio mediante $V_{s30}$ y el cálculo analítico de los radios de zonificación de riesgo y tiempos de alerta temprana.
+\end{abstract}
+
+\section{Parámetros Fundamentales de la Fuente Sísmica}
+
+Un evento sísmico en el simulador queda definido por el hipocentro $(\lambda_e, \phi_e, h)$, donde $\lambda_e$ es la longitud, $\phi_e$ la latitud y $h$ la profundidad focal (en km), junto con su magnitud de momento $M_w$.
+
+El momento sísmico escalar $M_0$ (en dyn$\cdot$cm) se relaciona con la magnitud de momento $M_w$ mediante la ecuación clásica de Kanamori (1977):
+\begin{equation}
+  M_w = \frac{2}{3} \log_{10}(M_0) - 10.7 \iff M_0 = 10^{\frac{3}{2}(M_w + 10.7)}.
+  \label{eq:kanamori}
+\end{equation}
+
+Para cualquier estación o punto de interés ubicado en $(\lambda, \phi)$, la distancia epicentral $D$ sobre el elipsoide se calcula mediante la fórmula de gran círculo:
+\begin{equation}
+  D = 2 R_T \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_e)\cos(\phi)\sin^2\left(\frac{\Delta \lambda}{2}\right)} \right),
+  \label{eq:distancia_epicentral}
+\end{equation}
+donde $R_T \approx 6371\,\text{km}$ es el radio terrestre medio, $\Delta \phi = \phi - \phi_e$ y $\Delta \lambda = \lambda - \lambda_e$.
+
+La distancia hipocentral $R$ entre el foco y la superficie se deduce por geometría pitagórica euclídea local:
+\begin{equation}
+  R = \sqrt{D^2 + h^2}.
+  \label{eq:distancia_hipocentral}
+\end{equation}
+
+\section{Propagación de Ondas Elásticas y Tiempos de Viaje}
+
+En un medio elástico lineal homogéneo e isótropo caracterizado por los parámetros de Lamé $\lambda$ y $\mu$, y la densidad volumétrica $\rho$, la ecuación de onda elástica de Navier:
+\begin{equation}
+  \rho \frac{\partial^2 \mathbf{u}}{\partial t^2} = (\lambda + \mu)\nabla(\nabla \cdot \mathbf{u}) + \mu \nabla^2 \mathbf{u},
+  \label{eq:navier}
+\end{equation}
+admite la descomposición de Helmholtz $\mathbf{u} = \nabla \Phi + \nabla \times \mathbf{\Psi}$, dando origen a dos frentes de onda de cuerpo:
+
+\begin{enumerate}
+  \item \textbf{Ondas P (Primarias / Compresionales):}
+  \begin{equation}
+    v_p = \sqrt{\frac{\lambda + 2\mu}{\rho}} \approx 6.0\,\text{km/s} \quad \text{(en corteza continental típica)}.
+    \label{eq:vp}
+  \end{equation}
+  \item \textbf{Ondas S (Secundarias / Cizalla):}
+  \begin{equation}
+    v_s = \sqrt{\frac{\mu}{\rho}} \approx 3.5\,\text{km/s}.
+    \label{eq:vs}
+  \end{equation}
+\end{enumerate}
+
+Bajo una relación de Poisson estándar $\nu = 0.25$, la razón entre velocidades satisface $v_p / v_s = \sqrt{3} \approx 1.732$.
+
+\subsection{Tiempos de Llegada y Ventana de Alerta Sísmica Temprana}
+
+El tiempo transcurrido desde la ruptura hasta el arribo del primer impulso de onda $P$ y onda $S$ al sitio a distancia $R$ viene dado por:
+\begin{align}
+  t_P(R) &= \frac{R}{v_p}, \label{eq:tp} \\
+  t_S(R) &= \frac{R}{v_s}. \label{eq:ts}
+\end{align}
+
+La diferencia de tiempo $\Delta t = t_S - t_P$ representa el intervalo previo a la llegada de la fase de mayor energía destructiva (onda $S$ y trenes de ondas superficiales de Rayleigh/Love):
+\begin{equation}
+  \Delta t(R) = R \left( \frac{1}{v_s} - \frac{1}{v_p} \right) \approx R \left( \frac{1}{3.5} - \frac{1}{6.0} \right) \approx 0.119\,R\,\text{segundos} \quad (R \text{ en km}).
+  \label{eq:alerta}
+\end{equation}
+
+Para un sistema de alerta sísmica (como el SASMEX en México), si el sismo es detectado en el epicentro en $t_{\text{det}} \approx 3\,\text{s}$ y la señal de radio se propaga casi a la velocidad de la luz $c \gg v_s$, el tiempo de oportunidad de advertencia en una ciudad distante $D$ es:
+\begin{equation}
+  T_{\text{aviso}} \approx \frac{\sqrt{D^2 + h^2}}{v_s} - t_{\text{det}} - t_{\text{transmisión}}.
+\end{equation}
+
+\section{Leyes de Atenuación (GMPE) y Aceleración Pico del Terreno ($PGA$)}
+
+La aceleración pico del suelo ($PGA$, \emph{Peak Ground Acceleration}) decrece con la distancia debido a dos efectos físicos:
+\begin{itemize}
+  \item \textbf{Atenuación geométrica:} Dispersión de la energía en una superficie esférica creciente ($\propto 1/R$).
+  \item \textbf{Atenuación anelástica o intrínseca:} Pérdida de energía por fricción interna del medio, parametrizada por el factor de calidad $Q(f)$, con coeficiente $\gamma = \frac{\pi f}{Q v_s}$.
+\end{itemize}
+
+El simulador implementa el modelo GMPE formulado para México (Ordaz et al., García et al., Boore-Atkinson):
+\begin{equation}
+  \ln(PGA) = c_1 + c_2 M_w - c_3 \ln(R) - c_4 R + S_{\text{sitio}},
+  \label{eq:gmpe}
+\end{equation}
+donde $PGA$ está en unidades de aceleración de la gravedad $g$ ($1\,g \approx 981\,\text{cm/s}^2$), y los coeficientes calibrados para la zona de subducción e intraplaca mexicana son:
+\begin{itemize}
+  \item $c_1 = -1.85$ (constante de fuente)
+  \item $c_2 = 0.92$ (escalamiento con la magnitud)
+  \item $c_3 = 1.15$ (atenuación geométrica corporal)
+  \item $c_4 = 0.0032\,\text{km}^{-1}$ (amortiguamiento inelástico)
+  \item $S_{\text{sitio}}$: factor de amplificación de sitio dependiente de la velocidad de onda de corte en los primeros 30 metros ($V_{s30}$).
+\end{itemize}
+
+\subsection{Efecto de Sitio y Amplificación por Suelo Blando}
+
+La velocidad promedio de onda de corte $V_{s30}$ clasifica el terreno según el estándar NEHRP/Eurocódigo 8:
+\begin{equation}
+  S_{\text{sitio}} = b_{\text{site}} \ln\left(\frac{V_{s30}}{V_{\text{ref}}}\right), \quad V_{\text{ref}} = 760\,\text{m/s} \text{ (Roca tipo B/C)},
+\end{equation}
+con $b_{\text{site}} \approx -0.45$. En arcillas blandas lacustres de alta plasticidad (como la Zona del Lago en Ciudad de México, donde $V_{s30} \approx 60-120\,\text{m/s}$), el fenómeno de resonancia estratigráfica amplifica el movimiento hasta 3 o 4 veces respecto a roca firme.
+
+\section{Escala de Intensidad Mercalli Modificada ($MMI$)}
+
+La correlación entre la aceleración física $PGA$ (en $\text{cm/s}^2$) y la percepción de daños en la escala Mercalli Modificada ($MMI$) sigue la regresión empírica de Worden et al. y Wald et al.:
+\begin{equation}
+  MMI(PGA) =
+  \begin{cases}
+    2.20 \log_{10}(PGA) + 1.00, & \text{si } PGA \le 4.22\,\text{cm/s}^2 \quad (\text{Nivel leve/moderado}) \\
+    3.66 \log_{10}(PGA) - 1.66, & \text{si } PGA > 4.22\,\text{cm/s}^2 \quad (\text{Nivel fuerte/destructivo})
+  \end{cases}
+  \label{eq:mmi}
+\end{equation}
+acotando los resultados en el intervalo físico $1 \le MMI \le 10+$.
+
+\section{Zonificación de Riesgo Sísmico en el Simulador}
+
+A partir de la función $PGA(R)$ y $MMI(R)$, el simulador determina cuantitativamente 4 radios concéntricos de isosisma que delimitan las áreas de afectación:
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}llccp{6.5cm}@{}}
+\toprule
+\textbf{Nivel de Riesgo} & \textbf{Color UI} & \textbf{Intensidad $MMI$} & \textbf{$PGA$ Umbral} & \textbf{Efectos Estructurales y Poblacionales} \\
+\midrule
+\textbf{Zona Destructiva} & Rojo (\#ef4444) & $\ge \text{VIII}$ & $\ge 0.34\,g$ & Daño severo a colapso en edificaciones de mampostería; fractura de tuberías subterráneas y pánico generalizado. \\
+\textbf{Zona de Daño Severo} & Naranja (\#f97316) & $\text{VI - VII}$ & $0.12 - 0.34\,g$ & Daño moderado en estructuras convencionales; caída de muros, cornisas y objetos pesados. \\
+\textbf{Zona Moderada} & Ámbar (\#f59e0b) & $\text{IV - V}$ & $0.03 - 0.12\,g$ & Sentido ampliamente por la población; vibración como el paso de camión pesado; alarma general sin daño grave. \\
+\textbf{Zona de Percepción} & Azul (\#3b82f6) & $\text{II - III}$ & $0.005 - 0.03\,g$ & Sentido únicamente por personas en reposo o pisos altos; sin daños materiales. \\
+\bottomrule
+\end{tabular}
+\caption{Criterios de zonificación de riesgo sísmico empleados en TerraPulse AI.}
+\label{tab:riesgo}
+\end{table}
+
+Invirtiendo numéricamente la ecuación~\eqref{eq:gmpe} para cada $PGA_{\text{umbral}}$, el radio de riesgo $R_{\text{zona}}$ satisface:
+\begin{equation}
+  R_{\text{zona}} = \left\{ R \in \mathbb{R}^+ \;:\; PGA(R, M_w, h, S_{\text{sitio}}) = PGA_{\text{umbral}} \right\},
+\end{equation}
+el cual se proyecta en el mapa como anillos geodésicos georreferenciados sobre MapLibre GL.
+
+\end{document}
