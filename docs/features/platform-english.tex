@@ -11,8 +11,8 @@
 \section{Objetivo}
 Ofrecer la interfaz web en español e inglés sin modificar mediciones, geometrías,
 identificadores científicos, contratos de la API ni contenido introducido por usuarios.
-La navegación y los paneles de simulación están traducidos; el mapa y los gráficos
-están parcialmente implementados. Este documento registra solamente las
+La navegación, los paneles de simulación, los gráficos y el visor científico
+están traducidos. El mapa está en revisión de cobertura. Este documento registra solamente las
 comprobaciones observadas de cada unidad.
 \section{Uso}
 La base inicia en español y permite cambiar a inglés mediante el selector
@@ -57,6 +57,15 @@ Navegación: cuatro pruebas focales aprobadas y revisión ampliada del padre con
 32 pruebas aprobadas (shell, ROI, GCOV y avisos). La base cuenta ahora con siete
 pruebas, incluidas restauración de preferencia y renderizado React en ambos idiomas.
 El mapa reportó tres pruebas focales y compilación TypeScript exitosa, pero
-su cobertura textual sigue incompleta. No se verificó interacción en navegador.
+su cobertura textual sigue incompleta. El escritor de gráficos reportó cuatro
+pruebas focales y compilación exitosa. La integración final no se ejecutó:
+se requiere completar la cobertura del mapa mediante una continuación autorizada.
+La revisión restauró el criterio original de visibilidad de advertencias en el
+comparador. Las pruebas de renderizado confirmaron este comportamiento, las
+etiquetas de los gráficos y que los datos de entrada permanecen intactos.
+La prueba adicional de idioma en los ejes detectó inicialmente que faltaba
+la opción de región; después de agregarla, la revisión focal aprobó siete
+pruebas y la compilación TypeScript terminó con código cero.
+No se verificó interacción en navegador.
 El documento se entrega como fuente LaTeX; la revisión estructural final está pendiente.
 \end{document}

@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react'
 import { RAW_SCENE_IDS } from '../mocks/initialWorkspaces'
+import { useTranslation } from '../i18n/useTranslation'
 
 export interface ScientificFigure {
   id: string
@@ -131,6 +132,7 @@ export function ScientificFiguresViewer({
   dateLabel = '2026-10-16 (t2)',
   onClose,
 }: ScientificFiguresViewerProps) {
+  const { t, localizeText } = useTranslation()
   const [selectedCategory, setSelectedCategory] = useState<string>('todas')
   const [modalFigure, setModalFigure] = useState<ScientificFigure | null>(null)
   const [zoomLevel, setZoomLevel] = useState<number>(1)
@@ -159,17 +161,17 @@ export function ScientificFiguresViewer({
         <div className="ws-sci-figures__header-info">
           <div className="ws-sci-figures__badge-row">
             <span className="ws-sci-badge ws-sci-badge--verified">
-              <FileCheck size={12} /> Figuras Oficiales Matplotlib (Backend C4)
+              <FileCheck size={12} /> {t('Figuras Oficiales Matplotlib (Backend C4)', 'Matplotlib scientific figures (Backend C4)')}
             </span>
             <span className="ws-sci-badge ws-sci-badge--date">{dateLabel}</span>
-            <span className="ws-sci-badge ws-sci-badge--dpi">150 DPI · Publicación</span>
+            <span className="ws-sci-badge ws-sci-badge--dpi">150 DPI · {t('Publicación', 'Publication')}</span>
           </div>
           <h2 className="ws-sci-figures__title">
-            Inspección SAR de Calibración & Geometría Radar (NISAR GCOV)
+            {t('Inspección SAR de Calibración y Geometría Radar (NISAR GCOV)', 'SAR inspection of calibration and radar geometry (NISAR GCOV)')}
           </h2>
           <p className="ws-sci-figures__subtitle">
-            Gráficas científicas oficiales generadas directamente por el pipeline en Python
-            (<code>pipeline/etapa1_figuras.py</code>) con mallas cartográficas en EPSG:32615.
+            {t('Gráficas científicas oficiales generadas directamente por el pipeline en Python', 'Scientific figures generated directly by the Python pipeline')}
+            (<code>pipeline/etapa1_figuras.py</code>) {t('con mallas cartográficas en EPSG:32615.', 'on cartographic grids in EPSG:32615.')}
           </p>
         </div>
 
@@ -178,7 +180,7 @@ export function ScientificFiguresViewer({
             type="button"
             className="ws-sci-figures__close-btn"
             onClick={onClose}
-            title="Cerrar visor de figuras científicas"
+            title={t('Cerrar visor de figuras científicas', 'Close scientific figures viewer')}
           >
             <X size={16} />
           </button>
@@ -193,40 +195,40 @@ export function ScientificFiguresViewer({
             className={`ws-sci-filter-btn ${selectedCategory === 'todas' ? 'is-active' : ''}`}
             onClick={() => setSelectedCategory('todas')}
           >
-            Todas ({SCIENTIFIC_FIGURES.length})
+            {t('Todas', 'All')} ({SCIENTIFIC_FIGURES.length})
           </button>
           <button
             type="button"
             className={`ws-sci-filter-btn ${selectedCategory === 'incidencia' ? 'is-active' : ''}`}
             onClick={() => setSelectedCategory('incidencia')}
           >
-            📐 Ángulo de Incidencia
+            📐 {t('Ángulo de Incidencia', 'Incidence angle')}
           </button>
           <button
             type="button"
             className={`ws-sci-filter-btn ${selectedCategory === 'retrodispersion' ? 'is-active' : ''}`}
             onClick={() => setSelectedCategory('retrodispersion')}
           >
-            📡 Retrodispersión (γ⁰ & σ⁰)
+            📡 {t('Retrodispersión (γ⁰ y σ⁰)', 'Backscatter (γ⁰ and σ⁰)')}
           </button>
           <button
             type="button"
             className={`ws-sci-filter-btn ${selectedCategory === 'mascara' ? 'is-active' : ''}`}
             onClick={() => setSelectedCategory('mascara')}
           >
-            🟩 Máscara QA & Subfranja
+            🟩 {t('Máscara QA y Subfranja', 'QA mask and subswath')}
           </button>
           <button
             type="button"
             className={`ws-sci-filter-btn ${selectedCategory === 'estadistica' ? 'is-active' : ''}`}
             onClick={() => setSelectedCategory('estadistica')}
           >
-            📊 Histogramas en dB
+            📊 {t('Histogramas en dB', 'Histograms in dB')}
           </button>
         </div>
 
         <div className="ws-sci-figures__meta-right">
-          <span>Escena: <code>{sceneId.slice(0, 32)}...</code></span>
+          <span>{t('Escena:', 'Scene:')} <code>{sceneId.slice(0, 32)}...</code></span>
         </div>
       </div>
 
@@ -243,8 +245,8 @@ export function ScientificFiguresViewer({
             >
               <div className="ws-sci-card__header">
                 <div className="ws-sci-card__title-wrap">
-                  <span className="ws-sci-card__code">{fig.code}</span>
-                  <h3 className="ws-sci-card__title">{fig.title}</h3>
+                  <span className="ws-sci-card__code">{localizeText(fig.code)}</span>
+                  <h3 className="ws-sci-card__title">{localizeText(fig.title)}</h3>
                 </div>
                 <div className="ws-sci-card__actions">
                   <button
@@ -254,7 +256,7 @@ export function ScientificFiguresViewer({
                       setModalFigure(fig)
                       setZoomLevel(1)
                     }}
-                    title="Ampliar en pantalla completa con zoom"
+                    title={t('Ampliar en pantalla completa con zoom', 'Open full screen with zoom')}
                   >
                     <Maximize2 size={13} />
                   </button>
@@ -262,14 +264,14 @@ export function ScientificFiguresViewer({
                     type="button"
                     className="ws-sci-btn ws-sci-btn--icon"
                     onClick={() => handleDownload(fig)}
-                    title="Descargar imagen PNG en alta resolución"
+                    title={t('Descargar imagen PNG en alta resolución', 'Download high-resolution PNG image')}
                   >
                     <Download size={13} />
                   </button>
                 </div>
               </div>
 
-              <p className="ws-sci-card__subtitle">{fig.subtitle}</p>
+              <p className="ws-sci-card__subtitle">{localizeText(fig.subtitle)}</p>
 
               {/* Contenedor de la Imagen Científica con Zoom preview al hacer clic */}
               <div
@@ -278,12 +280,12 @@ export function ScientificFiguresViewer({
                   setModalFigure(fig)
                   setZoomLevel(1)
                 }}
-                title="Hacer clic para ver en pantalla completa con lupa de alta resolución"
+                title={t('Hacer clic para ver en pantalla completa con lupa de alta resolución', 'Click to view full screen with high-resolution zoom')}
               >
                 {!hasError ? (
                   <img
                     src={imgUrl}
-                    alt={fig.title}
+                    alt={localizeText(fig.title)}
                     className="ws-sci-card__img"
                     onError={() => {
                       setImgLoadErrors((prev) => ({ ...prev, [fig.id]: true }))
@@ -292,7 +294,7 @@ export function ScientificFiguresViewer({
                   />
                 ) : (
                   <div className="ws-sci-card__fallback">
-                    <p>Cargando figura generada en backend...</p>
+                    <p>{t('Cargando figura generada en backend...', 'Loading figure generated by the backend...')}</p>
                     <button
                       type="button"
                       className="ws-sci-btn"
@@ -301,28 +303,28 @@ export function ScientificFiguresViewer({
                         setImgLoadErrors((prev) => ({ ...prev, [fig.id]: false }))
                       }}
                     >
-                      <RefreshCw size={12} /> Reintentar
+                      <RefreshCw size={12} /> {t('Reintentar', 'Retry')}
                     </button>
                   </div>
                 )}
                 <div className="ws-sci-card__zoom-hint">
-                  <ZoomIn size={14} /> Clic para pantalla completa
+                  <ZoomIn size={14} /> {t('Clic para pantalla completa', 'Click for full screen')}
                 </div>
               </div>
 
               {/* Metadatos y Parámetros Cartográficos */}
               <div className="ws-sci-card__footer">
-                <p className="ws-sci-card__desc">{fig.description}</p>
+                <p className="ws-sci-card__desc">{localizeText(fig.description)}</p>
                 <div className="ws-sci-card__tags">
                   {fig.tags.map((tag) => (
                     <span key={tag} className="ws-sci-tag">
-                      {tag}
+                      {localizeText(tag)}
                     </span>
                   ))}
                 </div>
                 <ul className="ws-sci-card__details">
                   {fig.details.map((detail, idx) => (
-                    <li key={idx}>{detail}</li>
+                    <li key={idx}>{localizeText(detail)}</li>
                   ))}
                 </ul>
               </div>
@@ -345,9 +347,9 @@ export function ScientificFiguresViewer({
           >
             <div className="ws-sci-modal__header">
               <div className="ws-sci-modal__title-box">
-                <span className="ws-sci-card__code">{modalFigure.code}</span>
-                <h3>{modalFigure.title}</h3>
-                <span className="ws-sci-modal__sub">{modalFigure.subtitle}</span>
+                <span className="ws-sci-card__code">{localizeText(modalFigure.code)}</span>
+                <h3>{localizeText(modalFigure.title)}</h3>
+                <span className="ws-sci-modal__sub">{localizeText(modalFigure.subtitle)}</span>
               </div>
 
               <div className="ws-sci-modal__controls">
@@ -356,7 +358,7 @@ export function ScientificFiguresViewer({
                     type="button"
                     className="ws-sci-btn"
                     onClick={() => setZoomLevel((z) => Math.max(0.5, Number((z - 0.25).toFixed(2))))}
-                    title="Alejar (-)"
+                    title={t('Alejar (-)', 'Zoom out (-)')}
                   >
                     <ZoomOut size={13} />
                   </button>
@@ -365,7 +367,7 @@ export function ScientificFiguresViewer({
                     type="button"
                     className="ws-sci-btn"
                     onClick={() => setZoomLevel((z) => Math.min(3, Number((z + 0.25).toFixed(2))))}
-                    title="Acercar (+)"
+                    title={t('Acercar (+)', 'Zoom in (+)')}
                   >
                     <ZoomIn size={13} />
                   </button>
@@ -373,7 +375,7 @@ export function ScientificFiguresViewer({
                     type="button"
                     className="ws-sci-btn"
                     onClick={() => setZoomLevel(1)}
-                    title="Restablecer al 100%"
+                    title={t('Restablecer al 100%', 'Reset to 100%')}
                   >
                     100%
                   </button>
@@ -384,14 +386,14 @@ export function ScientificFiguresViewer({
                   className="ws-sci-btn ws-sci-btn--primary"
                   onClick={() => handleDownload(modalFigure)}
                 >
-                  <Download size={13} /> Descargar PNG (150 DPI)
+                  <Download size={13} /> {t('Descargar PNG (150 DPI)', 'Download PNG (150 DPI)')}
                 </button>
 
                 <button
                   type="button"
                   className="ws-sci-btn ws-sci-btn--close"
                   onClick={() => setModalFigure(null)}
-                  title="Cerrar modal (Esc)"
+                  title={t('Cerrar modal (Esc)', 'Close dialog (Esc)')}
                 >
                   <X size={16} />
                 </button>
@@ -409,7 +411,7 @@ export function ScientificFiguresViewer({
               >
                 <img
                   src={getFigureUrl(modalFigure.filename)}
-                  alt={modalFigure.title}
+                  alt={localizeText(modalFigure.title)}
                   className="ws-sci-modal__img"
                 />
               </div>
@@ -417,11 +419,11 @@ export function ScientificFiguresViewer({
 
             <div className="ws-sci-modal__footer">
               <div className="ws-sci-modal__footer-text">
-                <p><strong>Descripción física:</strong> {modalFigure.description}</p>
+                <p><strong>{t('Descripción física:', 'Physical description:')}</strong> {localizeText(modalFigure.description)}</p>
               </div>
               <div className="ws-sci-modal__footer-details">
                 {modalFigure.details.map((d, i) => (
-                  <span key={i} className="ws-sci-modal__pill">{d}</span>
+                  <span key={i} className="ws-sci-modal__pill">{localizeText(d)}</span>
                 ))}
               </div>
             </div>
