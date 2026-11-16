@@ -24,6 +24,8 @@ import {
   type ScientificColormapId,
 } from '../utils/colormapLut'
 import type { DrawTool, SolarSimulationState, ViewMode } from '../types/workspace'
+import { useTranslation } from '../i18n/useTranslation'
+import type { Language } from '../i18n/core'
 
 interface HeaderProps {
   roiLayers?: import('../hooks/useRoiLayers').RoiLayersState
@@ -156,6 +158,7 @@ export function Header({
   onStartCaptureMode,
   onOpenTeamPage,
 }: HeaderProps) {
+  const { language, setLanguage, t, localizeText } = useTranslation()
   const isEditing = viewMode === 'editado' && canShowEdited
   const hasFirstScene = Boolean(roiLayers?.manifests[0])
   const hasSecondScene = Boolean(roiLayers?.manifests[1])
@@ -194,15 +197,15 @@ export function Header({
     <header className="ws-header" role="banner">
       {/* 1. Barra superior de menús en escala de grises oscura (estilo ventana técnica de escritorio) */}
       <div className="ws-menubar">
-        <div className="ws-menubar__menus" role="menubar" aria-label="Menú principal de estación de trabajo">
+        <div className="ws-menubar__menus" role="menubar" aria-label={t('Menú principal de estación de trabajo', 'Main workstation menu')}>
           <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
             onClick={onDuplicate}
-            title="Crear copia editable en el espacio de trabajo"
+            title={t('Crear copia editable en el espacio de trabajo', 'Create an editable copy in the workspace')}
           >
-            Archivo
+            {t('Archivo', 'File')}
           </button>
           <button
             type="button"
@@ -213,9 +216,9 @@ export function Header({
               onDateViewModeChange(dateViewMode === 't1' ? 't2' : 't1')
             }}
             disabled={!hasSecondScene}
-            title="Alternar escenas GCOV de la ROI confirmada"
+            title={t('Alternar escenas GCOV de la ROI confirmada', 'Switch between GCOV acquisitions for the confirmed ROI')}
           >
-            Escenas GCOV
+            {t('Escenas GCOV', 'GCOV scenes')}
           </button>
           <button
             type="button"
@@ -230,57 +233,61 @@ export function Header({
               )
             }}
             disabled={!hasFirstScene}
-            title="Alternar calibración radiométrica RTC γ⁰ / elipsoidal σ⁰"
+            title={t('Alternar calibración radiométrica RTC γ⁰ / elipsoidal σ⁰', 'Switch between RTC γ⁰ and ellipsoidal σ⁰ radiometric corrections')}
           >
-            Procesamiento SAR
+            {t('Procesamiento SAR', 'SAR processing')}
           </button>
           <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
             disabled
-            title="Pendiente: no hay validación todavía (validate.py, Contrato C3)"
+            title={t('Pendiente: no hay validación todavía (validate.py, Contrato C3)', 'Pending: validation is not available yet (validate.py, Contract C3)')}
           >
-            Validación
+            {t('Validación', 'Validation')}
           </button>
           <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
             onClick={onToggleFloatingTools}
-            title="Mostrar u ocultar cuadro flotante arrastrable de herramientas de dibujo"
+            title={t('Mostrar u ocultar cuadro flotante arrastrable de herramientas de dibujo', 'Show or hide the draggable drawing tools')}
           >
-            Ventana
+            {t('Ventana', 'Window')}
           </button>
           <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
             onClick={onExportJson}
-            title="Exportar configuración y geometrías del proyecto en JSON"
+            title={t('Exportar configuración y geometrías del proyecto en JSON', 'Export project settings and geometries as JSON')}
           >
-            Exportar
+            {t('Exportar', 'Export')}
           </button>
+          <select className="ws-menubar__item" aria-label={t('Idioma', 'Language')} value={language} onChange={(e) => setLanguage(e.target.value as Language)}>
+            <option value="es">Español</option>
+            <option value="en">English</option>
+          </select>
         </div>
 
         <div className="ws-menubar__title">
           <span className="ws-menubar__app-badge">NISAR L2</span>
           <span>
-            {roiLayers ? 'TerraPulse AI — ROI seleccionada · NISAR GCOV' : 'TerraPulse AI — Delimita y confirma una ROI'}
+            {roiLayers ? t('TerraPulse AI — ROI seleccionada · NISAR GCOV', 'TerraPulse AI — Selected ROI · NISAR GCOV') : t('TerraPulse AI — Delimita y confirma una ROI', 'TerraPulse AI — Delineate and confirm an ROI')}
           </span>
         </div>
 
         <div className="ws-menubar__right">
           <div className="ws-menubar__status">
-            {roiLayers ? <><span>Band L (24 cm · Freq A)</span><span>|</span><span>Madurez: {roiLayers.manifests[0]?.escena.madurez_catalogo ?? 'Pendiente'}</span></> : <span>Sin datos calculados para una ROI</span>}
+            {roiLayers ? <><span>{t('Banda L (24 cm · Frec. A)', 'L-band (24 cm · Freq A)')}</span><span>|</span><span>{t('Madurez:', 'Data maturity:')} {roiLayers.manifests[0]?.escena.madurez_catalogo ?? localizeText('Pendiente')}</span></> : <span>{localizeText('Sin datos calculados para una ROI')}</span>}
           </div>
 
           <button
             type="button"
             className="ws-menubar__team"
             onClick={onOpenTeamPage}
-            title="Abrir la landing institucional del equipo MonitosCH (NASA Space Apps Challenge 2026)"
-            aria-label="Abrir la landing institucional del equipo MonitosCH"
+            title={t('Abrir la página del equipo MonitosCH (NASA Space Apps Challenge 2026)', 'Open the MonitosCH team page (NASA Space Apps Challenge 2026)')}
+            aria-label={t('Abrir la página del equipo MonitosCH', 'Open the MonitosCH team page')}
           >
             <span className="team-logo-slot" aria-hidden="true">
               {logoFailed ? (
@@ -299,7 +306,7 @@ export function Header({
       </div>
 
       {/* 2. Cinta técnica Ribbon Bar sin controles duplicados */}
-      <div className={`ws-ribbon ${isLayerMenuOpen ? 'ws-ribbon--layer-menu-open' : ''}`} role="toolbar" aria-label="Cinta de herramientas técnicas">
+      <div className={`ws-ribbon ${isLayerMenuOpen ? 'ws-ribbon--layer-menu-open' : ''}`} role="toolbar" aria-label={t('Cinta de herramientas técnicas', 'Technical tools ribbon')}>
         <div className="ws-ribbon__top-groups">
         {/* Sección 1: Espacio de Trabajo */}
         <div className="ws-ribbon__group">
@@ -308,10 +315,10 @@ export function Header({
               type="button"
               className={`ws-ribbon__btn ws-ribbon__btn--ws-general ${viewMode === 'general' ? 'is-active' : ''}`}
               onClick={() => onViewModeChange('general')}
-              title="Vista de solo lectura del Mapa General"
+              title={t('Vista de solo lectura del Mapa General', 'Read-only view of the General Map')}
             >
               <Layers size={14} />
-              <span>Mapa General</span>
+              <span>{t('Mapa General', 'General Map')}</span>
             </button>
             <button
               type="button"
@@ -320,24 +327,24 @@ export function Header({
               disabled={!canShowEdited}
               title={
                 canShowEdited
-                  ? 'Activar copia editable para dibujo y recorte'
-                  : 'Duplica el mapa primero para habilitar edición'
+                  ? t('Activar copia editable para dibujo y recorte', 'Activate an editable copy for drawing and cropping')
+                  : t('Duplica el mapa primero para habilitar edición', 'Duplicate the map first to enable editing')
               }
             >
               <Sliders size={14} />
-              <span>Mapa Editado</span>
+              <span>{t('Mapa Editado', 'Edited Map')}</span>
             </button>
             <button
               type="button"
               className="ws-ribbon__btn ws-ribbon__btn--create"
               onClick={onDuplicate}
-              title="Duplicar vista actual en una nueva copia editable en localStorage"
+              title={t('Duplicar vista actual en una nueva copia editable en localStorage', 'Duplicate the current view into a new editable copy in localStorage')}
             >
               <Plus size={14} strokeWidth={2.5} />
-              <span>Duplicar Mapa</span>
+              <span>{t('Duplicar Mapa', 'Duplicate Map')}</span>
             </button>
           </div>
-          <span className="ws-ribbon__label">Espacio de Trabajo</span>
+          <span className="ws-ribbon__label">{t('Espacio de Trabajo', 'Workspace')}</span>
         </div>
 
         {/* Sección 2: Capas GCOV (Frequency A) + Escala de Color */}
@@ -345,7 +352,7 @@ export function Header({
           <div className="ws-ribbon__controls">
             {/* Selector único que despliega en submenús jerárquicos (RTC γ⁰ vs Elipsoidal σ⁰) */}
             <div className="ws-ribbon__inline-field ws-layer-select-field" ref={layerMenuRef}>
-              <span className="ws-layer-select-prefix">Capa SAR:</span>
+              <span className="ws-layer-select-prefix">{t('Capa SAR:', 'SAR layer:')}</span>
               <button
                 type="button"
                 className={`ws-ribbon__select ws-layer-select-btn ${isLayerMenuOpen ? 'is-active' : ''}`}
@@ -364,11 +371,11 @@ export function Header({
                 }}
                 aria-haspopup="true"
                 aria-expanded={isLayerMenuOpen}
-                title="Seleccionar capa SAR GCOV por corrección radiométrica (γ⁰ RTC / σ⁰ Elipsoidal) y polarización"
+                title={t('Seleccionar capa SAR GCOV por corrección radiométrica (γ⁰ RTC / σ⁰ Elipsoidal) y polarización', 'Select a GCOV SAR layer by radiometric correction (RTC γ⁰ / ellipsoidal σ⁰) and polarization')}
               >
                 <Layers size={12} className="ws-layer-select-icon" />
                 <span className="ws-layer-select-val">
-                  {hasFirstScene ? activeLayerOption?.shortLabel : 'Sin capa calculada'}
+                  {hasFirstScene ? activeLayerOption?.shortLabel : localizeText('Sin capa calculada')}
                 </span>
                 <ChevronDown
                   size={11}
@@ -379,7 +386,7 @@ export function Header({
               {isLayerMenuOpen && (
                 <div className="ws-layer-menu" role="menu">
                   <div className="ws-layer-menu__header">
-                    <span>Capas SAR GCOV (Frequency A)</span>
+                    <span>{t('Capas SAR GCOV (Frequency A)', 'GCOV SAR layers (Frequency A)')}</span>
                   </div>
                   {SAR_LAYER_GROUPS.map((group) => {
                     const isGroupActive = group.layers.some((l) => l.id === exploreLayerId)
@@ -394,12 +401,12 @@ export function Header({
                         <div className="ws-layer-menu__item-main">
                           <span className="ws-layer-menu__sym">{group.symbol}</span>
                           <div className="ws-layer-menu__text">
-                            <span className="ws-layer-menu__name">{group.title}</span>
-                            <span className="ws-layer-menu__sub">{group.subtitle}</span>
+                            <span className="ws-layer-menu__name">{localizeText(group.title)}</span>
+                            <span className="ws-layer-menu__sub">{localizeText(group.subtitle)}</span>
                           </div>
                         </div>
                         <div className="ws-layer-menu__item-end">
-                          <span className="ws-layer-badge">{group.badge}</span>
+                          <span className="ws-layer-badge">{localizeText(group.badge)}</span>
                           <ChevronRight size={12} className="ws-layer-menu__arrow" />
                         </div>
 
@@ -411,7 +418,7 @@ export function Header({
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="ws-layer-submenu__header">
-                              {group.title} ({group.symbol})
+                              {localizeText(group.title)} ({group.symbol})
                             </div>
                             {group.layers.map((layer) => {
                               const isSelected = exploreLayerId === layer.id
@@ -426,7 +433,7 @@ export function Header({
                                     setIsLayerMenuOpen(false)
                                     setHoveredGroup(null)
                                   }}
-                                  title={layer.title}
+                                  title={localizeText(layer.title)}
                                 >
                                   <div className="ws-layer-subitem__check">
                                     {isSelected && <Check size={13} strokeWidth={2.8} />}
@@ -436,10 +443,10 @@ export function Header({
                                       <strong className="ws-layer-subitem__code">
                                         {layer.shortLabel}
                                       </strong>
-                                      <span className="ws-layer-subitem__tag">{layer.scale}</span>
+                                      <span className="ws-layer-subitem__tag">{localizeText(layer.scale)}</span>
                                     </div>
                                     <span className="ws-layer-subitem__desc">
-                                      {layer.fullLabel}
+                                      {localizeText(layer.fullLabel)}
                                     </span>
                                   </div>
                                 </button>
@@ -454,24 +461,24 @@ export function Header({
               )}
             </div>
 
-            <label className="ws-ribbon__inline-field" title="Paleta científica aplicada por LUT sobre el raster en EPSG:3857">
-              <span>Paleta de colores:</span>
+            <label className="ws-ribbon__inline-field" title={t('Paleta científica aplicada por LUT sobre el ráster en EPSG:3857', 'Scientific palette applied via LUT to the raster in EPSG:3857')}>
+              <span>{t('Paleta de colores:', 'Color palette:')}</span>
               <select
                 className="ws-ribbon__select"
                 value={colormapId}
                 disabled={!hasFirstScene}
                 onChange={(e) => onColormapChange(e.target.value as ScientificColormapId)}
-                aria-label="Seleccionar escala científica de color"
+                aria-label={t('Seleccionar escala científica de color', 'Select scientific color scale')}
               >
                 {SCIENTIFIC_COLORMAPS.map((cmap) => (
                   <option key={cmap.id} value={cmap.id}>
-                    {cmap.label}
+                    {localizeText(cmap.label)}
                   </option>
                 ))}
               </select>
             </label>
 
-            <label className="ws-ribbon__inline-field" title="Opacidad de la capa SAR GCOV (0% - 100%)">
+            <label className="ws-ribbon__inline-field" title={t('Opacidad de la capa SAR GCOV (0% - 100%)', 'GCOV SAR layer opacity (0% - 100%)')}>
               <span>α: {opacity}%</span>
               <input
                 type="range"
@@ -482,11 +489,11 @@ export function Header({
                 disabled={!hasFirstScene}
                 onChange={(e) => onOpacityChange(Number(e.target.value))}
                 className="ws-ribbon__range"
-                aria-label="Opacidad de capa SAR en porcentaje"
+                aria-label={t('Opacidad de capa SAR en porcentaje', 'SAR layer opacity in percent')}
               />
             </label>
           </div>
-          <span className="ws-ribbon__label">Capas GCOV (Frequency A · Escala -22 a 0 dB)</span>
+          <span className="ws-ribbon__label">{t('Capas GCOV (Frequency A · Escala -22 a 0 dB)', 'GCOV layers (Frequency A · Scale -22 to 0 dB)')}</span>
         </div>
 
         {/* Sección 3: Comparador Temporal t1/t2 */}
@@ -500,9 +507,9 @@ export function Header({
                 onDateViewModeChange('t1')
               }}
               disabled={!hasFirstScene}
-              title={roiLayers?.manifests[0]?.escena.granuleId ?? 'Sin primera escena calculada'}
+              title={roiLayers?.manifests[0]?.escena.granuleId ?? localizeText('Sin primera escena calculada')}
             >
-              <span>t1: {roiLayers?.manifests[0]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos calculados'}</span>
+              <span>t1: {roiLayers?.manifests[0]?.escena.fecha_inicio.slice(0, 10) ?? localizeText('Sin datos calculados')}</span>
             </button>
             <button
               type="button"
@@ -512,9 +519,9 @@ export function Header({
                 onDateViewModeChange('t2')
               }}
               disabled={!hasSecondScene}
-              title={roiLayers?.manifests[1]?.escena.granuleId ?? 'Sin segunda escena calculada'}
+              title={roiLayers?.manifests[1]?.escena.granuleId ?? localizeText('Sin segunda escena calculada')}
             >
-              <span>t2: {roiLayers?.manifests[1]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos calculados'}</span>
+              <span>t2: {roiLayers?.manifests[1]?.escena.fecha_inicio.slice(0, 10) ?? localizeText('Sin datos calculados')}</span>
             </button>
             <button
               type="button"
@@ -524,13 +531,13 @@ export function Header({
                 onDockTabChange('map')
                 onDateViewModeChange('swipe')
               }}
-              title="Deslizador Antes/Después (Swipe t1 ↔ t2) con verificación de escala -22 a 0 dB"
+              title={t('Deslizador Antes/Después (Swipe t1 ↔ t2) con verificación de escala -22 a 0 dB', 'Before/After slider (Swipe t1 ↔ t2) with -22 to 0 dB scale verification')}
             >
               <Columns size={14} />
-              <span>Comparador Swipe</span>
+              <span>{t('Comparador Swipe', 'Swipe comparison')}</span>
             </button>
           </div>
-          <span className="ws-ribbon__label">Comparador Temporal t1/t2</span>
+          <span className="ws-ribbon__label">{t('Comparador Temporal t1/t2', 'Temporal comparison t1/t2')}</span>
         </div>
         </div>
 
@@ -545,11 +552,11 @@ export function Header({
                 onDockTabChange('map')
                 onToggleFloatingTools()
               }}
-              title="Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo"
+              title={t('Mostrar/ocultar cuadro flotante arrastrable de herramientas de dibujo', 'Show/hide draggable drawing tools')}
             >
               <PencilRuler size={14} />
               <span>
-                Dibujo ({isEditing ? TOOL_LABELS[activeTool] : 'Solo lectura'})
+                {t('Dibujo', 'Drawing')} ({isEditing ? localizeText(TOOL_LABELS[activeTool]) : t('Solo lectura', 'Read-only')})
               </span>
             </button>
 
@@ -561,10 +568,10 @@ export function Header({
                 onDockTabChange('map')
                 onSolarChange({ ...solar, enabled: !solar.enabled })
               }}
-              title="Activar/desactivar Simulador Solar con radiación directa incidente (Inferno)"
+              title={t('Activar/desactivar Simulador Solar con radiación directa incidente (Inferno)', 'Enable/disable Solar Simulator with incident direct irradiance (Inferno)')}
             >
               <Sun size={14} />
-              <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : 'Simulador Solar'}</span>
+              <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : t('Simulador Solar', 'Solar Simulator')}</span>
             </button>
 
             <button
@@ -573,15 +580,15 @@ export function Header({
               onClick={() => {
                 onDockTabChange(activeDockTab === 'rain-dg2' ? 'map' : 'rain-dg2')
               }}
-              title="Abrir módulo de simulación hidráulica de lluvia e inundación DG2 (LISFLOOD-FP 8.0)"
+              title={t('Abrir módulo de simulación hidráulica de lluvia e inundación DG2 (LISFLOOD-FP 8.0)', 'Open the DG2 rainfall and flood hydraulic simulation module (LISFLOOD-FP 8.0)')}
             >
               <CloudRain size={14} />
-              <span>Simulador Inundación (DG2)</span>
+              <span>{t('Simulador Inundación (DG2)', 'Flood Simulator (DG2)')}</span>
             </button>
 
 
           </div>
-          <span className="ws-ribbon__label">Herramientas y Módulos</span>
+          <span className="ws-ribbon__label">{t('Herramientas y Módulos', 'Tools and Modules')}</span>
         </div>
 
         {/* Sección 5: Acciones de Salida y Captura */}
@@ -594,22 +601,22 @@ export function Header({
                 onDockTabChange('map')
                 onStartCaptureMode()
               }}
-              title="Seleccionar región del mapa simulado y guardar imagen PNG o JPG"
+              title={t('Seleccionar región del mapa simulado y guardar imagen PNG o JPG', 'Select a simulated map region and save a PNG or JPG image')}
             >
               <Camera size={14} />
-              <span>Capturar Imagen</span>
+              <span>{t('Capturar Imagen', 'Capture Image')}</span>
             </button>
             <button
               type="button"
               className="ws-ribbon__btn ws-ribbon__btn--export"
               onClick={onExportJson}
-              title="Exportar proyecto y anotaciones en formato JSON reproducible"
+              title={t('Exportar proyecto y anotaciones en formato JSON reproducible', 'Export project and annotations in reproducible JSON format')}
             >
               <Download size={14} />
-              <span>Exportar JSON</span>
+              <span>{t('Exportar JSON', 'Export JSON')}</span>
             </button>
           </div>
-          <span className="ws-ribbon__label">Captura y Exportación</span>
+          <span className="ws-ribbon__label">{t('Captura y Exportación', 'Capture and Export')}</span>
         </div>
         </div>
       </div>

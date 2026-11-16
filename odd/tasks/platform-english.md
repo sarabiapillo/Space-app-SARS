@@ -9,10 +9,10 @@ S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escen
 
 ## Tasks
 T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
-T2 [S1-S3] en curso — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: pendiente.
-T3 [S1-S2] en curso — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
+T2 [S1-S3] completada — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: en preparación.
+T3 [S1-S2] bloqueada (requiere autorización humana de continuación) — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
 T4 [S1-S2] en curso — ruta: writer charts; inspección, figuras y módulos C4 — commit: pendiente.
-T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: en preparación.
+T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: 8e4a794.
 T6 [S1-S3] pendiente — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
 
 ## Log
@@ -27,3 +27,5 @@ L6. T1 RED: node --test tests/i18n.test.mjs falló por módulo ausente. GREEN: 5
 L7. T2–T5 se ejecutan en paralelo con superficies disjuntas; la lista visible mantiene T2 como frente activo mientras se integran resultados. T1 commit 6a526ce. Cada escritor debe añadir pruebas y reportar evidencia; padre conserva documentación y commits.
 
 L8. T5: escritor reportó RED 4 fallos y GREEN 4/4; padre observó 15/15 pruebas de simulación/ROI/radiación, exit 0. No se cambiaron algoritmos, DTOs ni valores; imágenes originales y mensajes desconocidos conservan idioma fuente. Verificación manual de navegador no disponible.
+
+L9. T2: RED reportado 0/3; GREEN 4/4. Padre observó 32/32 entre shell/ROI/GCOV/toast. Selector nativo accesible ES/EN en barra superior; no key de remonte. T3 terminó con pruebas 3/3 y tsc exit 0, pero cobertura parcial y dos rondas agotadas: MapCanvas bitácora/valores/procedencia, progreso GCOV y mensajes variables de manifiestos pendientes. No continuar T3 sin autorización humana; todos sus cambios se conservan sin marcar completada.

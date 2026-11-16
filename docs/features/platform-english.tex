@@ -11,11 +11,13 @@
 \section{Objetivo}
 Ofrecer la interfaz web en español e inglés sin modificar mediciones, geometrías,
 identificadores científicos, contratos de la API ni contenido introducido por usuarios.
-La traducción de navegación, mapa y paneles está en implementación; este documento
-se actualiza con las comprobaciones de cada unidad.
+La navegación y los paneles de simulación están traducidos; el mapa y los gráficos
+están parcialmente implementados. Este documento registra solamente las
+comprobaciones observadas de cada unidad.
 \section{Uso}
-La base inicia en español y permite cambiar a inglés. La integración del selector
-en la barra de navegación está pendiente en esta primera unidad.
+La base inicia en español y permite cambiar a inglés mediante el selector
+Español/English en la barra de navegación, junto a Archivo y Escenas GCOV.
+La selección actualiza la interfaz sin asignar una nueva clave al mapa.
 La preferencia utiliza exclusivamente la clave
 \texttt{terrapulse:language:v1} del almacenamiento local del navegador.
 El idioma del documento HTML se sincroniza con la selección. Si el navegador
@@ -34,8 +36,11 @@ Los datos originales, nombres propios y nombres de mapas creados por usuarios
 no se traducen. La localización no convierte una simulación en observación ni
 establece exactitud hidráulica o validación científica.
 Los paneles de radiación e inundación, sus gráficas, mensajes conocidos y fechas
-relativas ya están traducidos. La navegación y las demás áreas están pendientes
-de integración. Los mensajes variables no incluidos en el catálogo conservan
+relativas ya están traducidos. La navegación, la barra lateral, los avisos,
+el modal de copia y la portada también se traducen.
+El mapa tiene cobertura parcial: faltan textos de bitácora, valores de respaldo,
+procedencia y algunos mensajes de progreso del catálogo. Esta tarea requiere
+una continuación autorizada; no se considera completa. Los mensajes variables no incluidos en el catálogo conservan
 su idioma de origen; las imágenes científicas originales no se modifican.
 \section{Verificación}
 Primera unidad: \texttt{node --test tests/i18n.test.mjs} falló inicialmente por
@@ -48,5 +53,10 @@ Unidad de simulaciones: cuatro pruebas de renderizado y mensajes aprobadas;
 revisión focal ampliada del padre: 15 pruebas aprobadas, sin fallos. Se comprueban
 unidades, entradas numéricas sin cambios, etiquetas y advertencias de simulación.
 No se encontró \texttt{pdflatex}; la compilación PDF no está disponible.
+Navegación: cuatro pruebas focales aprobadas y revisión ampliada del padre con
+32 pruebas aprobadas (shell, ROI, GCOV y avisos). La base cuenta ahora con siete
+pruebas, incluidas restauración de preferencia y renderizado React en ambos idiomas.
+El mapa reportó tres pruebas focales y compilación TypeScript exitosa, pero
+su cobertura textual sigue incompleta. No se verificó interacción en navegador.
 El documento se entrega como fuente LaTeX; la revisión estructural final está pendiente.
 \end{document}

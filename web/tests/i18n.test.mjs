@@ -1,5 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { useTranslation } from '../src/i18n/useTranslation.ts'
 import { getLanguage, setLanguage, subscribeLanguage, translate, localizeText, languageLocale, LANGUAGE_STORAGE_KEY } from '../src/i18n/core.ts'
 
 const storage = new Map()
@@ -49,6 +53,32 @@ test('interpolation preserves numbers, identifiers and user-provided names', () 
   assert.equal(translate('Mapa {name}', 'Map {name}', { name: 'Mi región <Chiapas>' }), 'Map Mi región <Chiapas>')
   assert.equal(localizeText('NISAR_P05023'), 'NISAR_P05023')
   setLanguage('es')
+})
+
+test('the public React hook renders scientific labels in the selected language', () => {
+  function Label() {
+    const { language, t } = useTranslation()
+    return createElement('span', { lang: language }, t('Calado: {value} m', 'Water depth: {value} m', { value: 0.25 }))
+  }
+  setLanguage('en')
+  assert.equal(renderToStaticMarkup(createElement(Label)), '<span lang="en">Water depth: 0.25 m</span>')
+  setLanguage('es')
+  assert.equal(renderToStaticMarkup(createElement(Label)), '<span lang="es">Calado: 0.25 m</span>')
+})
+
+test('a new application session restores only a supported saved preference', () => {
+  const moduleUrl = new URL('../src/i18n/core.ts', import.meta.url).href
+  for (const [stored, expected] of [['en', 'en'], ['es', 'es'], ['unsupported', 'es']]) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      const values = new Map([['${LANGUAGE_STORAGE_KEY}', ${JSON.stringify(stored)}], ['saved-maps', 'untouched']]);
+      globalThis.localStorage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+      const m = await import(${JSON.stringify(moduleUrl)});
+      console.log(JSON.stringify({ language: m.getLanguage(), maps: values.get('saved-maps'), count: values.size }));
+    `], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, '')
+    assert.equal(result.stdout.trim(), JSON.stringify({ language: expected, maps: 'untouched', count: 2 }))
+  }
 })
 
 test('translation works when browser storage is blocked', () => {

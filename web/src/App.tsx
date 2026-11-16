@@ -7,6 +7,7 @@ import { TeamLandingPage } from './components/TeamLandingPage'
 import { Toast, type ToastKind, type ToastMessage } from './components/Toast'
 import { useSavedMaps } from './hooks/useSavedMaps'
 import { useRoiLayers } from './hooks/useRoiLayers'
+import { useTranslation } from './i18n/useTranslation'
 import {
   DEFAULT_FLOOD,
   DEFAULT_SOLAR,
@@ -37,6 +38,7 @@ function baseName(nombre: string): string {
 }
 
 function App() {
+  const { t } = useTranslation()
   const { maps, addMap, updateMap, deleteMap } = useSavedMaps()
   const [viewMode, setViewMode] = useState<ViewMode>('editado')
   const [activeCopyId, setActiveCopyId] = useState<string | null>(() => maps[0]?.id ?? null)
@@ -387,7 +389,7 @@ function App() {
       {duplicating && (
         <DuplicateMapModal
           sourceName={current.nombre}
-          defaultName={`Copia ${maps.length + 1} - ${baseName(current.nombre)}`}
+          defaultName={`${t('Copia', 'Copy')} ${maps.length + 1} - ${baseName(current.nombre)}`}
           defaultFolder={current.carpeta ?? 'Mis Análisis'}
           onConfirm={handleConfirmDuplicate}
           onCancel={closeModal}
