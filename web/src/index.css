@@ -5366,3 +5366,149 @@ button:disabled {
   background: #f59e0b;
   color: #ffffff;
 }
+
+/* Mejoras de organización y categorías de casos para el Catálogo de 32 Estados */
+.roi-catalog-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  background: #f1f5f9;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+.roi-catalog-stats__pill {
+  color: var(--color-text, #1e293b);
+}
+
+.roi-catalog-stats__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roi-catalog-toggle-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 10px;
+  color: #0284c7;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.roi-catalog-toggle-btn:hover {
+  color: #0369a1;
+}
+
+.roi-catalog-stats__sep {
+  color: #94a3b8;
+}
+
+.roi-catalog-category-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.roi-catalog-category-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted, #64748b);
+}
+
+.roi-catalog-category-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.roi-category-pill {
+  padding: 2px 7px;
+  font-size: 9.5px;
+  font-weight: 600;
+  border-radius: 12px;
+  border: 1px solid var(--color-border, #cbd5e1);
+  background: #ffffff;
+  color: var(--color-text-muted, #475569);
+  cursor: pointer;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+
+.roi-category-pill:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.roi-category-pill.is-active {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+}
+
+.roi-catalog-clear-filter {
+  background: none;
+  border: none;
+  color: #ef4444;
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-left: 8px;
+  text-decoration: underline;
+}
+
+.roi-card__badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.roi-badge--state {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.roi-badge--coastal {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.roi-badge--rain {
+  background: #ecfeff;
+  color: #0e7490;
+  border: 1px solid #a5f3fc;
+}
+
+.roi-badge--solar {
+  background: #fefce8;
+  color: #a16207;
+  border: 1px solid #fef08a;
+}
+
+.roi-badge--mountain {
+  background: #faf5ff;
+  color: #7e22ce;
+  border: 1px solid #e9d5ff;
+}
+
+.roi-badge--wetland {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}

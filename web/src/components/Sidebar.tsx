@@ -217,7 +217,7 @@ export function Sidebar({
           <button type="button" className="tree-node__header" onClick={() => toggleNode('roiCatalog')} aria-expanded={openNodes.roiCatalog}>
             <span className="tree-node__caret">{openNodes.roiCatalog ? '▾' : '▸'}</span>
             <span className="tree-node__title">
-              {t('Catálogo de ROIs (Guerrero, Chiapas, Oaxaca)', 'ROI Catalog (Guerrero, Chiapas, Oaxaca)')}
+              {t('Catálogo de ROIs de México (32 Estados)', 'Mexico ROI Catalog (32 States)')}
             </span>
           </button>
           {openNodes.roiCatalog && (
