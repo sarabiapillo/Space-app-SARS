@@ -1,4 +1,5 @@
 import type { GeoJSONFeatureCollection } from '../utils/geojson'
+import type { EffectiveRoiMetadata, RoiGeometry } from '../utils/roi'
 
 /**
  * Tipos del espacio de trabajo de mapas de TerraPulse AI.
@@ -117,6 +118,9 @@ export interface WorkspaceMap {
   geojson: GeoJSONFeatureCollection
   /** Polígono activo de recorte si el usuario aplicó "Recortar región". */
   croppedRegion: LngLat[] | null
+  /** Geometría efectiva confirmada para análisis geográfico, conservada íntegra. */
+  effectiveRoi?: RoiGeometry | null
+  effectiveRoiMetadata?: EffectiveRoiMetadata | null
   /** Configuración del Simulador Solar para esta copia. */
   solar: SolarSimulationState
   /** Configuración y estado de la Simulación de Inundación / Lluvia DG2. */
@@ -173,8 +177,10 @@ export interface FloodSimulationState {
   } | null
   /** Datos para las gráficas del simulador (solo los devuelve el backend NASADEM). */
   charts?: FloodChartsData | null
-  /** De dónde salieron las cifras: cálculo del backend con NASADEM o generador local de respaldo. */
-  statsSource?: 'backend' | 'local'
+  /** Resultados recibidos del backend. */
+  statsSource?: 'backend'
+  /** Clave del polígono usado para que resultados de otra ROI no se presenten como actuales. */
+  resultRoiKey?: string
 }
 
 /** Una clase de calado del ráster de inundación (mismos cortes que la paleta del mapa). */

@@ -3,9 +3,9 @@ import {
   DANGER_CIRCLE_DEFAULT_LABEL,
   DEFAULT_SOLAR,
   ESCENA_CHIAPAS,
+  RAW_SCENE_IDS,
   LEGACY_CIRCLE_LABELS,
   WARN_CIRCLE_DEFAULT_LABEL,
-  createInitialCopies,
 } from '../mocks/initialWorkspaces'
 import {
   CARPETAS,
@@ -15,8 +15,35 @@ import {
   type WorkspaceMap,
 } from '../types/workspace'
 import { buildAnnotationsGeoJSON } from '../utils/geojson'
+import { isRoiGeometry } from '../utils/roi'
 
-export const STORAGE_KEY = 'terrapulse_saved_maps_c1'
+const LEGACY_STORAGE_KEY = 'terrapulse_saved_maps_c1'
+export const STORAGE_KEY = 'terrapulse_saved_maps_c2'
+
+const EMPTY_SCENE = { granuleId: '', t1SceneId: '', t2SceneId: '', producto: '', descripcionProducto: '', epsg: 0, resolucionM: '', coberturaRoiPct: '', banda: '', polarizacion: '', madurez: 'PROVISIONAL' as const, cicloRepeticion: '', pila: 'T62/F10' as const, direccion: 'ASCENDING' as const, t1: '', t2: '', crid: '', unidad: '', fuente: '' }
+
+export function isUnchangedSeededDemo(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const m = value as Record<string, unknown>
+  const escena = typeof m.escena === 'object' && m.escena !== null ? m.escena as Record<string, unknown> : {}
+  const first = m.id === 'copia-1-presa-malpaso'
+  const signature = first
+    ? { name: 'Copia 1 - Sector Noroeste ROI (T62/F10 Principal)', center: [-93.1338, 16.77515], zoom: 10.3, opacity: 75, folder: 'Mis Análisis', solarAngle: 105, solarIntensity: 60 }
+    : m.id === 'copia-2-sierra'
+      ? { name: 'Copia 2 - Sector Este Grijalva (T55/F80 Respaldo)', center: [-93.03, 16.75], zoom: 10.4, opacity: 65, folder: 'Zonas de Riesgo', solarAngle: 125, solarIntensity: 70 }
+      : null
+  const expectedScene = first ? ESCENA_CHIAPAS : { ...ESCENA_CHIAPAS, granuleId: RAW_SCENE_IDS.T55_T1_20260618, t1SceneId: RAW_SCENE_IDS.T55_T1_20260618, t2SceneId: RAW_SCENE_IDS.T55_T2_20261016, pila: 'T55/F80', direccion: 'DESCENDING', coberturaRoiPct: '~50.3% este (t1: 50.28%, t2: 50.25%)' }
+  return Boolean(signature && m.nombre === signature.name && JSON.stringify(m.centro) === JSON.stringify(signature.center) && m.zoom === signature.zoom && m.opacidadSar === signature.opacity && m.carpeta === signature.folder && !m.croppedRegion && (!Array.isArray(m.annotations) || m.annotations.length === 0) && JSON.stringify(escena) === JSON.stringify(expectedScene) && typeof m.solar === 'object' && m.solar !== null && (m.solar as Record<string, unknown>).sunAngle === signature.solarAngle && (m.solar as Record<string, unknown>).radiationIntensity === signature.solarIntensity)
+}
+
+export function getInitialSavedMaps(raw: string | null): WorkspaceMap[] {
+  const entries = parseEntries(raw)
+  if (entries === null) return []
+  return entries
+    .filter((entry) => !isUnchangedSeededDemo(entry))
+    .map(normalizeMap)
+    .filter((map): map is WorkspaceMap => map !== null)
+}
 
 function isNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -95,6 +122,16 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     Array.isArray(m.croppedRegion) && m.croppedRegion.length >= 3 && m.croppedRegion.every(isLngLat)
       ? m.croppedRegion
       : null
+  const effectiveRoi = isRoiGeometry(m.effectiveRoi) ? m.effectiveRoi : null
+  const rawMetadata = m.effectiveRoiMetadata
+  const effectiveRoiMetadata = effectiveRoi && typeof rawMetadata === 'object' && rawMetadata !== null &&
+    typeof (rawMetadata as Record<string, unknown>).name === 'string' &&
+    Array.isArray((rawMetadata as Record<string, unknown>).center) &&
+    typeof (rawMetadata as Record<string, unknown>).radius_km === 'number' &&
+    typeof (rawMetadata as Record<string, unknown>).applied_radius_km === 'number' &&
+    typeof (rawMetadata as Record<string, unknown>).source === 'string' &&
+    typeof (rawMetadata as Record<string, unknown>).generation === 'string'
+      ? rawMetadata as WorkspaceMap['effectiveRoiMetadata'] : null
 
   return {
     id: m.id,
@@ -105,78 +142,21 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     opacidadSar: m.opacidadSar,
     centro: m.centro,
     zoom: m.zoom,
-    escena: {
-      granuleId:
-        typeof escenaRaw?.granuleId === 'string' && !escenaRaw.granuleId.includes('GSLC')
-          ? escenaRaw.granuleId
-          : ESCENA_CHIAPAS.granuleId,
-      t1SceneId:
-        typeof escenaRaw?.t1SceneId === 'string' ? escenaRaw.t1SceneId : ESCENA_CHIAPAS.t1SceneId,
-      t2SceneId:
-        typeof escenaRaw?.t2SceneId === 'string' ? escenaRaw.t2SceneId : ESCENA_CHIAPAS.t2SceneId,
-      producto:
-        typeof escenaRaw?.producto === 'string' ? escenaRaw.producto : ESCENA_CHIAPAS.producto,
-      descripcionProducto:
-        typeof escenaRaw?.descripcionProducto === 'string'
-          ? escenaRaw.descripcionProducto
-          : ESCENA_CHIAPAS.descripcionProducto,
-      epsg: isNumber(escenaRaw?.epsg) ? escenaRaw.epsg : ESCENA_CHIAPAS.epsg,
-      resolucionM:
-        typeof escenaRaw?.resolucionM === 'string'
-          ? escenaRaw.resolucionM
-          : ESCENA_CHIAPAS.resolucionM,
-      coberturaRoiPct:
-        typeof escenaRaw?.coberturaRoiPct === 'string'
-          ? escenaRaw.coberturaRoiPct
-          : ESCENA_CHIAPAS.coberturaRoiPct,
-      banda:
-        typeof escenaRaw?.banda === 'string' && escenaRaw.banda.includes('1.257')
-          ? escenaRaw.banda
-          : ESCENA_CHIAPAS.banda,
-      polarizacion:
-        typeof escenaRaw?.polarizacion === 'string'
-          ? escenaRaw.polarizacion
-          : ESCENA_CHIAPAS.polarizacion,
-      madurez:
-        escenaRaw?.madurez === 'BETA' ||
-        escenaRaw?.madurez === 'PROVISIONAL' ||
-        escenaRaw?.madurez === 'VALIDATED'
-          ? escenaRaw.madurez
-          : ESCENA_CHIAPAS.madurez,
-      cicloRepeticion:
-        typeof escenaRaw?.cicloRepeticion === 'string'
-          ? escenaRaw.cicloRepeticion
-          : ESCENA_CHIAPAS.cicloRepeticion,
-      pila:
-        escenaRaw?.pila === 'T62/F10' ||
-        escenaRaw?.pila === 'T55/F80' ||
-        escenaRaw?.pila === 'T156/F80'
-          ? escenaRaw.pila
-          : ESCENA_CHIAPAS.pila,
-      direccion:
-        escenaRaw?.direccion === 'ASCENDING' || escenaRaw?.direccion === 'DESCENDING'
-          ? escenaRaw.direccion
-          : ESCENA_CHIAPAS.direccion,
-      t1: typeof escenaRaw?.t1 === 'string' ? escenaRaw.t1 : ESCENA_CHIAPAS.t1,
-      t2: typeof escenaRaw?.t2 === 'string' ? escenaRaw.t2 : ESCENA_CHIAPAS.t2,
-      crid: typeof escenaRaw?.crid === 'string' ? escenaRaw.crid : ESCENA_CHIAPAS.crid,
-      unidad: typeof escenaRaw?.unidad === 'string' ? escenaRaw.unidad : ESCENA_CHIAPAS.unidad,
-      fuente: typeof escenaRaw?.fuente === 'string' ? escenaRaw.fuente : ESCENA_CHIAPAS.fuente,
-    },
+    escena: (croppedRegion ? { ...EMPTY_SCENE, ...(escenaRaw ?? {}) } : EMPTY_SCENE) as WorkspaceMap['escena'],
     annotations,
     geojson: buildAnnotationsGeoJSON(annotations, [], null),
     croppedRegion,
+    effectiveRoi,
+    effectiveRoiMetadata,
     solar: normalizeSolar(m.solar),
   }
 }
 
-function parse(raw: string | null): WorkspaceMap[] | null {
+function parseEntries(raw: string | null): unknown[] | null {
   if (raw === null) return null
   try {
     const data: unknown = JSON.parse(raw)
-    if (!Array.isArray(data)) return null
-    const parsed = data.map(normalizeMap).filter((x): x is WorkspaceMap => x !== null)
-    return parsed.length > 0 ? parsed : null
+    return Array.isArray(data) ? data : null
   } catch {
     return null
   }
@@ -184,9 +164,10 @@ function parse(raw: string | null): WorkspaceMap[] | null {
 
 function loadInitial(): WorkspaceMap[] {
   try {
-    return parse(localStorage.getItem(STORAGE_KEY)) ?? createInitialCopies()
+    const current = localStorage.getItem(STORAGE_KEY)
+    return getInitialSavedMaps(current === null ? localStorage.getItem(LEGACY_STORAGE_KEY) : current)
   } catch {
-    return createInitialCopies()
+    return []
   }
 }
 
@@ -195,20 +176,24 @@ function loadInitial(): WorkspaceMap[] {
  */
 export function useSavedMaps() {
   const [maps, setMaps] = useState<WorkspaceMap[]>(loadInitial)
+  const [hasUserChanges, setHasUserChanges] = useState(false)
 
   useEffect(() => {
+    if (!hasUserChanges) return
     try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      const entries = parseEntries(stored)
+      if (stored !== null && (entries === null || entries.some((entry) => normalizeMap(entry) === null))) return
       localStorage.setItem(STORAGE_KEY, JSON.stringify(maps))
     } catch {
       // Sin persistencia: sigue funcionando en memoria.
     }
-  }, [maps])
+  }, [maps, hasUserChanges])
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key !== STORAGE_KEY) return
-      const next = parse(event.newValue)
-      if (next) setMaps(next)
+      setMaps(getInitialSavedMaps(event.newValue))
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
@@ -216,9 +201,11 @@ export function useSavedMaps() {
 
   const addMap = useCallback((map: WorkspaceMap) => {
     setMaps((prev) => [map, ...prev])
+    setHasUserChanges(true)
   }, [])
 
   const updateMap = useCallback((id: string, changes: Partial<Omit<WorkspaceMap, 'id'>>) => {
+    setHasUserChanges(true)
     setMaps((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m
@@ -238,6 +225,7 @@ export function useSavedMaps() {
   }, [])
 
   const deleteMap = useCallback((id: string) => {
+    setHasUserChanges(true)
     setMaps((prev) => prev.filter((m) => m.id !== id))
   }, [])
 

@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { translate as tr } from './i18n/core'
 import ExploradorFeature from './features/explorador'
 import ComparadorFeature from './features/comparador'
 import LaboratorioFeature from './features/laboratorio'
@@ -21,28 +22,28 @@ export const FEATURE_ROUTES: readonly FeatureRouteConfig[] = [
   {
     id: 'explorador',
     path: '/explorador',
-    label: 'Explorador Global',
+    get label() { return tr('Explorador Global', 'Global Explorer') },
     owner: 'P5',
     component: ExploradorFeature as ComponentType<never>,
   },
   {
     id: 'comparador',
     path: '/comparador',
-    label: 'Comparador Temporal',
+    get label() { return tr('Comparador Temporal', 'Temporal Comparison') },
     owner: 'P5',
     component: ComparadorFeature as ComponentType<never>,
   },
   {
     id: 'laboratorio',
     path: '/laboratorio',
-    label: 'Laboratorio Científico',
+    get label() { return tr('Laboratorio Científico', 'Scientific Laboratory') },
     owner: 'P6',
     component: LaboratorioFeature,
   },
   {
     id: 'exportacion',
     path: '/exportacion',
-    label: 'Exportación',
+    get label() { return tr('Exportación', 'Export') },
     owner: 'P6',
     component: ExportacionFeature,
   },

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { LngLat } from '../types/workspace'
+import type { RoiGeometry } from '../utils/roi'
 import type { ExploreWebManifest } from '../api/client'
 import type { ExploreChartsManifest } from '../mocks/initialWorkspaces'
+import { localizeText } from '../i18n/core.ts'
+import { useTranslation } from '../i18n/useTranslation.ts'
 
 /** Gráficas de una escena de la ROI (graficas.json generado por etapa1 sobre la ROI dibujada). */
 export interface RoiChartsEntry {
@@ -20,7 +23,8 @@ export interface RoiChartsCopy {
 
 export type RoiLayersState = ReturnType<typeof useRoiLayers>
 
-export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
+export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: string) {
+  useTranslation() // Subscribe for display-only changes; never restart the ROI job on language switch.
   const [state, setState] = useState<{
     key: string; loading: boolean; error: string | null; message: string;
     manifests: ExploreWebManifest[]; comparable: boolean
@@ -48,10 +52,11 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
     }
     async function start() {
       try {
-        const points = JSON.parse(geometry) as LngLat[]
-        const ring = [...points]
-        if (JSON.stringify(ring[0]) !== JSON.stringify(ring.at(-1))) ring.push(ring[0])
-        const { id } = await json('/api/roi-jobs', { roi: { type: 'Polygon', coordinates: [ring] } })
+        const parsed = JSON.parse(geometry) as LngLat[] | RoiGeometry
+        const roi = Array.isArray(parsed)
+          ? { type: 'Polygon', coordinates: [[...parsed, ...(JSON.stringify(parsed[0]) === JSON.stringify(parsed.at(-1)) ? [] : [parsed[0]])]] }
+          : parsed
+        const { id } = await json('/api/roi-jobs', { roi })
         const deadline = Date.now() + 35 * 60 * 1000
         async function poll() {
           try {
@@ -98,8 +103,9 @@ export function useRoiLayers(region: LngLat[] | null, viewKey: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   const current = state.key === key
-  return { ...state, loading: Boolean(region) && (!current || state.loading),
-    error: current ? state.error : null, manifests: current ? state.manifests : [],
+  return { ...state, message: localizeText(state.message),
+    loading: Boolean(region) && (!current || state.loading),
+    error: current ? localizeText(state.error) : null, manifests: current ? state.manifests : [],
     comparable: current && state.comparable, charts: current ? state.charts : [],
     copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1) }
 }

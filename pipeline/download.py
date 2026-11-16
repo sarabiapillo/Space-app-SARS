@@ -34,6 +34,21 @@ def latest_catalog(catalog_dir: Path) -> Path:
     return files[-1]
 
 
+def download_roi_scene(scene: SceneMeta, roi_geojson: dict, out_dir: Path) -> list[Path]:
+    """Stream only the ROI subset for a SceneMeta already resolved against ASF by the API."""
+    from .roi_explore import validate_roi
+
+    roi_wkt = validate_roi(roi_geojson)
+    if not isinstance(scene, SceneMeta) or scene.product != "GCOV" or not scene.scene_id:
+        raise ValueError("Se requiere una escena GCOV previamente validada en ASF.")
+    source = get_source(scene.source)
+    polarization_layers = tuple(f"{pol}{pol}" for pol in scene.polarizations if pol in ("HH", "HV"))
+    if not polarization_layers:
+        raise ValueError(f"{scene.scene_id}: ASF no informa polarizaciones Frequency A compatibles (HH/HV).")
+    layers = polarization_layers + AUX_LAYERS
+    return source.fetch_subsets(scene, roi_wkt, layers, Path(out_dir))
+
+
 def find_scenes(catalog_path: Path, scene_ids: list[str]) -> list[SceneMeta]:
     data = json.loads(catalog_path.read_text(encoding="utf-8"))
     by_id = {s["scene_id"]: SceneMeta.from_dict(s) for s in data["scenes"]}

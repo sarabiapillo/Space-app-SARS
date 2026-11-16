@@ -33,6 +33,7 @@ class SceneMeta:
     product_version: str | None = None
     url: str | None = None
     size_bytes: int | None = None
+    footprint: dict | None = None
     extra: dict = field(default_factory=dict)
 
     @property

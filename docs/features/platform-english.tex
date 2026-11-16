@@ -1,0 +1,111 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{hyperref}
+\title{TerraPulse AI: interfaz en español e inglés}
+\author{TerraPulse AI}
+\date{\today}
+\begin{document}
+\maketitle
+\section{Objetivo}
+Ofrecer la interfaz web en español e inglés con terminología de observación
+terrestre, radar y simulación. La localización no modifica mediciones,
+geometrías, identificadores científicos, algoritmos ni solicitudes de la API.
+No traduce el código fuente, las herramientas de terminal ni los datos originales.
+\section{Uso}
+Seleccione Español o English en la barra superior, junto a Archivo,
+Escenas GCOV y Procesamiento SAR. El español es el idioma inicial cuando no
+existe una preferencia válida. El cambio actualiza menús, paneles, mapa,
+gráficas, visor científico, búsquedas, catálogo, ayudas, avisos y errores conocidos.
+La preferencia utiliza exclusivamente la clave
+\texttt{terrapulse:language:v1} del almacenamiento local del navegador;
+no reemplaza los mapas guardados. El idioma del documento HTML también se actualiza.
+Si el navegador bloquea el almacenamiento, la selección sigue funcionando
+durante la sesión, pero no se garantiza su conservación después de recargar.
+\section{Implementación}
+\texttt{web/src/i18n/core.ts} administra idioma, suscripciones, interpolación
+y traducciones contextuales explícitas. Los catálogos separados agrupan textos
+de navegación, mapa, gráficas y simulaciones. Los mensajes conocidos admiten
+traducción de ida y vuelta, incluso si fueron almacenados mientras se mostraba inglés.
+Los parámetros interpolados conservan números, identificadores y nombres originales.
+\texttt{useTranslation.ts} utiliza \texttt{useSyncExternalStore} para actualizar
+componentes sin volver a montar el mapa. Las opciones de Chart.js reciben la
+configuración regional seleccionada. Los controles MapLibre actualizan su texto
+sin cambiar la vista ni iniciar otra consulta por un cambio de idioma.
+El cliente de la API localiza los mensajes conocidos de \texttt{detail} y de
+validación de campos. Un cuerpo vacío, un mensaje vacío o JSON inválido conservan
+el mensaje de respaldo con el estado HTTP. Las respuestas exitosas y los cuerpos
+de solicitud permanecen intactos. No se agregan dependencias.
+\subsection{Terminología contextual}
+\begin{tabular}{ll}
+Español & Inglés \\
+\hline
+Retrodispersión & Backscatter \\
+Adquisición & Acquisition \\
+Región de interés & Region of interest (ROI) \\
+Trayectoria y marco & Track and frame \\
+Madurez del producto & Data maturity \\
+Calado & Water depth \\
+Caudal & Discharge \\
+Escorrentía & Runoff \\
+Irradiancia incidente & Incident irradiance \\
+\end{tabular}
+Las unidades, polarizaciones, GCOV, NISAR, CRID, EPSG y fórmulas mantienen
+su significado. Una observación no se convierte en una inferencia o predicción;
+se conservan las advertencias de resultados sintéticos, exploratorios y no validados.
+\section{Efecto del entorno Conda}
+No se identificó efecto de una activación ausente de Conda sobre esta traducción:
+las pruebas y la compilación utilizan Node.js, TypeScript, Vite y ESLint.
+Node y npm provienen de nvm, separados del entorno Python. Actualmente el
+entorno \texttt{nisar} sí está activo, pero esto no prueba su estado histórico.
+Los cambios se limitan al frontend, pruebas y documentación: no modifican
+\texttt{backend/}, \texttt{pipeline/}, \texttt{package.json} ni el lockfile.
+Las pruebas históricas independientes utilizaron un entorno sin variables Conda.
+Esto no comprueba Django, GDAL, PostGIS, Earthdata ni el procesamiento científico;
+para esos componentes debe utilizarse el entorno Python correspondiente.
+\section{Limitaciones}
+Los nombres propios y el contenido introducido por usuarios no se traducen.
+Las imágenes PNG científicas originales conservan el texto incrustado; la
+interfaz del visor, sus títulos y descripciones sí cambian de idioma.
+Los mensajes externos futuros que no existan en los catálogos se muestran tal
+como llegan, en lugar de inventar una interpretación.
+La traducción no establece exactitud hidráulica ni validación científica.
+No se realizó una inspección visual o interacción en navegador: no hay un
+navegador disponible en este entorno. No se ejecutan servicios Earthdata reales.
+\section{Verificación}
+Desde \texttt{web/}, ejecute \texttt{node --test tests/*.test.mjs}.
+Último resultado observado: 83 pruebas aprobadas, cero fallidas.
+Se comprueban renderizados públicos en ambos idiomas, preservación de
+GeoJSON con huecos y múltiples partes, solicitudes, respuestas, identificadores,
+unidades, datos de gráficas, persistencia separada y mensajes reversibles.
+La prueba de las ecuaciones plegadas combina comprobación estructural con
+traducción pública; no equivale a abrir el control en un navegador.
+\texttt{npm run build} terminó con código cero también después de los
+últimos ajustes de mensajes. Incluye compilación TypeScript y producción Vite.
+Vite advirtió sobre \texttt{\_\_dirname} en una futura configuración y sobre
+el tamaño de un fragmento JavaScript; no se modificó la configuración para ocultarlas.
+\texttt{npm run lint} terminó con código uno: conserva un error previo
+\texttt{react-refresh/only-export-components} en
+\texttt{ScientificFiguresViewer.tsx}, por la constante exportada
+\texttt{SCIENTIFIC\_FIGURES}. Se reprodujo la misma regla en la versión base.
+Las advertencias nuevas de dependencias de hooks fueron corregidas.
+La reconciliación independiente concluyó con dictamen técnico favorable para
+la unidad API e i18n. El cliente, core, catálogo, buscador y cuatro pruebas
+focales conservan los mismos blobs que el candidato \texttt{f302fb3}.
+Las ejecuciones históricas del verificador aprobaron 28 pruebas y tres sondas
+comparativas con la versión base; no se repitieron en esta reconciliación.
+El primer intento quedó bloqueado por preparación; una alternativa posterior
+sin autorización fue un error de procedimiento que se conserva en el registro.
+El usuario autorizó posteriormente revisar la ruta temporal existente, sin
+borrar ni restaurar archivos. Esa ruta ya no existe (ENOENT); no pudo volverse
+a examinar físicamente. El dictamen utiliza las salidas históricas observadas,
+la identidad del candidato y el código actual. No legitima retroactivamente
+el procedimiento incorrecto ni equivale a comprobación integral de navegador
+o backend. No se crearon otras rutas, se instalaron paquetes ni se modificaron
+entornos durante esta reconciliación.
+No se encontró \texttt{pdflatex}; no se genera PDF. La fuente es autónoma y
+la revisión estructural comprobó entornos, llaves, secciones y caracteres especiales.
+Ninguna prueba descrita demuestra
+validación científica de las mediciones o del modelo de inundación.
+\end{document}

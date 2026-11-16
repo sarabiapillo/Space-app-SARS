@@ -1,0 +1,21 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\begin{document}
+\title{Avisos transitorios de éxito y error}
+\maketitle
+
+\section{Objetivo}
+Mostrar avisos operativos breves de éxito o error sobre la interfaz sin ocultar de forma permanente los controles.
+
+\section{Uso}
+Al confirmar una ROI, completar la carga de capas de la ROI, consultar el catálogo o terminar un recorte, aparece un aviso de éxito. Los errores de búsqueda de ubicación, consulta del catálogo, descarga, confirmación de ROI o selección de una capa no disponible muestran un aviso de error. El aviso aparece centrado horizontalmente en la parte superior de la ventana y por encima de los demás paneles, desaparece a los tres segundos y puede cerrarse antes con el botón ``Cerrar aviso'' (ícono X). Un aviso nuevo sustituye al anterior y reinicia la cuenta de tres segundos.
+
+\section{Implementación}
+\texttt{web/src/components/Toast.tsx} presenta el aviso mediante un portal en el cuerpo de la página para evitar recortes por contenedores; \texttt{web/src/utils/toastTimer.ts} gestiona su temporizador. \texttt{web/src/App.tsx} conserva el aviso vigente y conecta \texttt{Sidebar.tsx}, \texttt{LocationSearch.tsx}, \texttt{GcovCatalog.tsx} y \texttt{MapCanvas.tsx}. La finalización de una carga de ROI se anuncia una sola vez por clave de carga; su texto y sus fechas se conservan en el aviso. El banner permanente sobre el mapa se eliminó. Los estilos se encuentran en \texttt{web/src/index.css}. Los identificadores de aviso impiden que el cierre de uno anterior oculte uno nuevo.
+
+\section{Limitaciones}
+Los estados de procesamiento y los resultados científicos, incluido el mensaje de la ROI, permanecen visibles en sus paneles. Los avisos no sustituyen metadatos, resultados ni mensajes de progreso; muestran únicamente sucesos operativos transitorios. No se ha hecho una comprobación visual manual en el navegador.
+
+\section{Verificación}
+Desde la carpeta \texttt{web}, ejecutar \texttt{node --test tests/toast.test.mjs}, \texttt{node --test tests/*.test.mjs} y \texttt{npm run build}. Las pruebas comprueban la duración de 3000 ms, la cancelación y el anuncio único por carga de ROI. Se observaron 31 pruebas aprobadas y una compilación web correcta; la inspección visual manual queda pendiente.
+\end{document}

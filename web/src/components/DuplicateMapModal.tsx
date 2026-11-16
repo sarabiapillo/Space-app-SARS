@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { Folder, X } from 'lucide-react'
 import { CARPETAS, type Carpeta } from '../types/workspace'
+import { useTranslation } from '../i18n/useTranslation'
 
 interface DuplicateMapModalProps {
   /** Nombre del mapa que se va a clonar (para el texto de ayuda). */
@@ -20,6 +21,7 @@ export function DuplicateMapModal({
   onConfirm,
   onCancel,
 }: DuplicateMapModalProps) {
+  const { t, localizeText } = useTranslation()
   const [nombre, setNombre] = useState(defaultName)
   const [carpeta, setCarpeta] = useState<Carpeta>(defaultFolder)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -47,20 +49,19 @@ export function DuplicateMapModal({
       <form className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} onSubmit={submit}>
         <div className="modal__header">
           <h2 id={titleId} className="modal__title">
-            Duplicar mapa
+            {t('Duplicar mapa', 'Duplicate map')}
           </h2>
-          <button type="button" className="icon-btn" onClick={onCancel} aria-label="Cerrar">
+          <button type="button" className="icon-btn" onClick={onCancel} aria-label={t('Cerrar', 'Close')}>
             <X size={18} />
           </button>
         </div>
 
         <p className="modal__hint">
-          Se clonará la configuración actual de <strong>{sourceName}</strong> (vista y opacidad) en una
-          copia editable.
+          {t('Se clonará la configuración actual de', 'The current settings of')} <strong>{sourceName}</strong> {t('(vista y opacidad) en una copia editable.', '(view and opacity) will be cloned into an editable copy.')}
         </p>
 
         <label className="field" htmlFor={inputId}>
-          <span className="field__label">Nombre de la copia</span>
+          <span className="field__label">{t('Nombre de la copia', 'Copy name')}</span>
           <input
             id={inputId}
             ref={inputRef}
@@ -68,13 +69,13 @@ export function DuplicateMapModal({
             value={nombre}
             maxLength={MAX_NAME}
             onChange={(e) => setNombre(e.target.value)}
-            placeholder="Ej. Copia 3 - Cañón del Sumidero"
+            placeholder={t('Ej. Copia 3 - Cañón del Sumidero', 'E.g. Copy 3 - Sumidero Canyon')}
             required
           />
         </label>
 
         <fieldset className="field">
-          <legend className="field__label">Carpeta</legend>
+          <legend className="field__label">{t('Carpeta', 'Folder')}</legend>
           <div className="folder-options">
             {CARPETAS.map((c) => (
               <label key={c} className={`folder-option ${carpeta === c ? 'is-selected' : ''}`}>
@@ -86,7 +87,7 @@ export function DuplicateMapModal({
                   onChange={() => setCarpeta(c)}
                 />
                 <Folder size={16} aria-hidden="true" />
-                {c}
+                {localizeText(c)}
               </label>
             ))}
           </div>
@@ -94,10 +95,10 @@ export function DuplicateMapModal({
 
         <div className="modal__footer">
           <button type="button" className="btn btn--ghost" onClick={onCancel}>
-            Cancelar
+            {t('Cancelar', 'Cancel')}
           </button>
           <button type="submit" className="btn btn--primary" disabled={!trimmed}>
-            Crear copia
+            {t('Crear copia', 'Create copy')}
           </button>
         </div>
       </form>

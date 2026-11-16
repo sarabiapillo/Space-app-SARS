@@ -1,5 +1,6 @@
 import { Database, HardDrive, Loader2 } from 'lucide-react'
 import { Etapa1ChartsPanel } from './Etapa1ChartsPanel'
+import { useTranslation } from '../i18n/useTranslation'
 import type { RoiLayersState } from '../hooks/useRoiLayers'
 import type { LngLat } from '../types/workspace'
 
@@ -31,11 +32,11 @@ const DB_LABEL: Record<string, string> = {
  * en `data/graficas-roi/<id>/` y en la base de datos.
  */
 export function RoiChartsSection({ roiLayers, region, compact = true }: RoiChartsSectionProps) {
+  const { t, localizeText } = useTranslation()
   if (roiLayers.loading) {
     return (
       <div className="ws-charts-panel__empty" role="status">
-        <Loader2 size={14} className="spin" aria-hidden="true" /> {roiLayers.message || 'Preparando la ROI…'} Las
-        gráficas se generan al terminar.
+        <Loader2 size={14} className="spin" aria-hidden="true" /> {roiLayers.message ? localizeText(roiLayers.message) : t('Preparando la ROI…', 'Preparing ROI…')} {t('Las gráficas se generan al terminar.', 'Charts will be generated when preparation finishes.')}
       </div>
     )
   }
@@ -43,10 +44,10 @@ export function RoiChartsSection({ roiLayers, region, compact = true }: RoiChart
     return (
       <div className="ws-charts-panel__error" role="alert">
         <div>
-          <strong>No se pudieron generar las gráficas de la ROI</strong>
-          <p>{roiLayers.error}</p>
+          <strong>{t('No se pudieron generar las gráficas de la ROI', 'Could not generate ROI charts')}</strong>
+          <p>{localizeText(roiLayers.error)}</p>
           <button type="button" className="ws-tool-btn" onClick={roiLayers.retry}>
-            Reintentar
+            {t('Reintentar', 'Retry')}
           </button>
         </div>
       </div>
@@ -55,7 +56,7 @@ export function RoiChartsSection({ roiLayers, region, compact = true }: RoiChart
   if (roiLayers.charts.length === 0) {
     return (
       <div className="ws-charts-panel__empty">
-        La ROI no tiene gráficas todavía. Dibuja o selecciona una ROI para generarlas.
+        {t('La ROI no tiene gráficas todavía. Dibuja o selecciona una ROI para generarlas.', 'The ROI has no charts yet. Draw or select an ROI to generate them.')}
       </div>
     )
   }
@@ -65,17 +66,17 @@ export function RoiChartsSection({ roiLayers, region, compact = true }: RoiChart
     <div className="roi-charts-section">
       <Etapa1ChartsPanel compact={compact} roiCharts={roiLayers.charts} roiLabel={roiBox(region)} />
       <p className="roi-charts-section__copy">
-        <HardDrive size={12} aria-hidden="true" /> Copia en disco:{' '}
+        <HardDrive size={12} aria-hidden="true" /> {t('Copia en disco:', 'Disk copy:')}{' '}
         <code>{copia?.disco ?? 'data/graficas-roi/…'}</code>
         <br />
-        <Database size={12} aria-hidden="true" /> Base de datos:{' '}
-        {copia ? DB_LABEL[copia.base_datos] ?? copia.base_datos : DB_LABEL.guardando}
+        <Database size={12} aria-hidden="true" /> {t('Base de datos:', 'Database:')}{' '}
+        {localizeText(copia ? DB_LABEL[copia.base_datos] ?? copia.base_datos : DB_LABEL.guardando)}
         {copia?.escenas && copia.escenas.length > 0 && (
-          <> · ROI id {copia.escenas[0].roi_id} (consultable en <code>/api/scenes/…/charts?roi={copia.escenas[0].roi_id}</code>)</>
+          <> · ROI id {copia.escenas[0].roi_id} ({t('consultable en', 'available at')} <code>/api/scenes/…/charts?roi={copia.escenas[0].roi_id}</code>)</>
         )}
       </p>
       <p className="roi-charts-section__note">
-        Inspección exploratoria de cada fecha: describe la respuesta radar en la ROI, no identifica causas.
+        {t('Inspección exploratoria de cada fecha: describe la respuesta radar en la ROI, no identifica causas.', 'Exploratory inspection of each date: describes the radar response in the ROI; it does not identify causes.')}
       </p>
     </div>
   )
