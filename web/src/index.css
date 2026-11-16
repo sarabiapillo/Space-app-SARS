@@ -1,5 +1,17 @@
 /* TerraPulse AI — Estación de Trabajo Científica Estilo NASA / COMSOL Multiphysics (Light Mode Técnico / Rústico) */
 
+.geo-search { display: grid; gap: 10px; }
+.geo-search form { display: grid; gap: 6px; }
+.geo-search__row { display: flex; gap: 6px; }
+.geo-search__row input { min-width: 0; flex: 1; }
+.geo-search__results { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 190px; overflow: auto; }
+.geo-search__results button { width: 100%; display: grid; gap: 2px; text-align: left; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-panel); color: inherit; }
+.geo-search__results button[aria-pressed='true'] { border-color: var(--color-accent, #2684ff); background: color-mix(in srgb, var(--color-accent, #2684ff) 8%, white); }
+.geo-search__results span, .geo-search small { color: var(--color-text-muted, #667085); font-size: 12px; }
+.geo-search__selection { display: grid; gap: 7px; padding: 10px; border-radius: 7px; background: var(--color-panel-elevated); }
+.geo-search__selection input[type='range'] { width: 100%; accent-color: var(--color-accent, #2684ff); }
+.geo-search__radius { display: flex; justify-content: space-between; color: var(--color-text-muted, #667085); font-size: 11px; }
+
 :root {
   --color-bg: #f3f4f6;
   --color-panel: #ffffff;
@@ -4928,7 +4940,6 @@ button:disabled {
 .roi-coordinate-form { display: grid; gap: 6px; padding: 10px; font-size: 12px; }
 .roi-coordinate-form input { min-width: 0; width: 100%; padding: 7px; border: 1px solid #94a3b8; border-radius: 5px; }
 .roi-coordinate-form [role=alert] { color: #b91c1c; }
-.roi-result-status { position: absolute; top: 64px; left: 15px; right: 15px; z-index: 12; padding: 8px 12px; background: #ecfdf5f2; color: #064e3b; border: 1px solid #6ee7b7; border-radius: 6px; font-size: 12px; pointer-events: none; }
 .roi-scene-details { padding: 14px; font-size: 12px; overflow-wrap: anywhere; }
 .roi-scene-details article { padding: 10px 0; border-bottom: 1px solid #cbd5e1; }
 
@@ -4968,3 +4979,67 @@ button:disabled {
 .solar-legend__ticks span:first-child { transform: none; }
 .solar-legend__ticks span:last-child { transform: translateX(-100%); }
 .solar-api-stale { margin: 4px 0; padding: 4px 6px; border-radius: 3px; background: rgba(252, 165, 10, 0.15); color: var(--color-text); font-size: 10.5px; }
+
+/* T3: cinta compacta en grupos; la navegación permanece visible sin desbordar la ventana. */
+.ws-menubar { min-width: 0; gap: 8px; }
+.ws-menubar__menus { flex: 0 0 auto; }
+.ws-menubar__title { flex: 1 1 180px; min-width: 80px; }
+.ws-menubar__status { font-size: 10px; }
+.ws-ribbon { align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 3px 6px; max-height: 94px; overflow-y: auto; }
+/* El menú flotante no puede sobresalir de un ancestro con overflow auto. */
+.ws-ribbon.ws-ribbon--layer-menu-open { overflow: visible; max-height: none; }
+.ws-ribbon__top-groups,
+.ws-ribbon__bottom-groups { display: flex; width: 100%; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.ws-ribbon__group { gap: 1px; padding: 0 3px; }
+.ws-ribbon__controls { min-height: 25px; gap: 3px; }
+.ws-ribbon__label { font-size: 9px; line-height: 1.1; }
+.ws-ribbon__btn { height: 24px; padding: 0 6px; gap: 4px; font-size: 10.5px; }
+.ws-ribbon__inline-field { height: 24px; padding: 0 4px; gap: 3px; }
+.ws-ribbon__range { width: 52px; }
+.ws-floating-toolbox { max-width: min(280px, calc(100vw - 24px)); }
+.gcov-catalog { container-type: inline-size; min-width: 0; }
+.gcov-catalog__filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 10px; }
+.gcov-catalog__filters > label { display: grid; min-width: 0; gap: 5px; font-weight: 600; }
+.gcov-catalog__date-control { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.gcov-catalog__date-control input { flex: 1; width: 100%; min-width: 0; height: 32px; padding: 4px 6px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: var(--color-panel); }
+.gcov-catalog__clear { flex: 0 0 auto; min-height: 32px; padding: 4px 6px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-panel); color: var(--color-text-muted); }
+.gcov-catalog__clear:disabled { opacity: .55; }
+@container (max-width: 460px) { .gcov-catalog__filters { grid-template-columns: minmax(0, 1fr); } .gcov-catalog__filters > .btn { grid-column: auto; } }
+.gcov-catalog__filters > .btn { grid-column: 1 / -1; }
+.gcov-catalog__date-error { margin: 2px 0; color: #b42318; }
+.gcov-catalog__metadata-warning { padding: 7px 8px; border-left: 3px solid var(--color-warn); background: #fffbeb; color: #78350f; line-height: 1.45; }
+.gcov-catalog__pair { margin: 8px 0; padding: 6px 8px; border: 1px solid var(--color-border); }
+.gcov-catalog__pair legend { font-weight: 700; }
+.gcov-catalog__pair p { margin: 4px 0; }
+.gcov-catalog__pair ul { margin: 4px 0; padding-left: 18px; }
+.gcov-catalog__candidate { display: flex; align-items: center; gap: 4px; padding: 0 5px; font-size: 10px; white-space: nowrap; }
+.gcov-catalog__candidate input { accent-color: var(--color-primary); }
+.gcov-catalog__rows > li { display: flex; align-items: stretch; gap: 4px; }
+.gcov-catalog__rows .gcov-catalog__scene { min-width: 0; flex: 1; }
+@media (max-width: 900px) { .ws-menubar__menus { overflow-x: auto; max-width: 48vw; } .ws-menubar__right { display: none; } .ws-ribbon { max-height: 112px; } .ws-ribbon__divider { display: none; } }
+@media (prefers-reduced-motion: reduce) { .ws-ribbon *, .ws-floating-toolbox * { scroll-behavior: auto; transition-duration: 0.01ms !important; } }
+
+/* Avisos transitorios: arriba y centrados, sobre paneles y diálogos. */
+.app-toast {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  width: max-content;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.24);
+  overflow-wrap: anywhere;
+}
+.app-toast--success { background: #ecfdf5; border-color: #34d399; color: #065f46; }
+.app-toast--error { background: #fef2f2; border-color: #f87171; color: #991b1b; }
+.app-toast--info { background: #eff6ff; border-color: #93c5fd; color: #1e3a5f; }
+.app-toast button { flex-shrink: 0; background: none; border: none; padding: 0; color: inherit; cursor: pointer; }
+.app-toast button:hover { opacity: 0.65; }

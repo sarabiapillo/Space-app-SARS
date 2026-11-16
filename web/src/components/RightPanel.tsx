@@ -8,12 +8,12 @@ import {
   EyeOff,
   Layers,
   Loader2,
-  MapPin,
   Sun,
   X,
   Zap,
 } from 'lucide-react'
 import type { LngLat, SolarSimulationState } from '../types/workspace'
+import { confirmedSolarRoi } from '../utils/solarRoi'
 import { getColormapSpec } from '../utils/colormapLut'
 import { runSolarSimulation, type SolarSimulationResponse } from '../api/client'
 import { RoiChartsSection } from './RoiChartsSection'
@@ -27,111 +27,7 @@ import {
   type HeatmapScaleMode,
 } from '../utils/solarHeatmap'
 
-/** Radios disponibles (km). Límite del backend: 10 km (medido: ~61 s y ~92 MB en Windows). */
-const RADIUS_OPTIONS_KM = [1, 2, 3, 5, 7.5, 10] as const
-
-/** Caja cuadrada de radio `km` alrededor de un punto, con la conversión grados↔km de la latitud. */
-function squareAround(lon: number, lat: number, km: number): [number, number, number, number] {
-  const dLat = km / 111.32
-  const dLon = km / (111.32 * Math.cos((lat * Math.PI) / 180))
-  return [lon - dLon, lat - dLat, lon + dLon, lat + dLat].map((v) => Number(v.toFixed(5))) as [
-    number, number, number, number,
-  ]
-}
-
 const fmtW = (v: number) => (Number.isFinite(v) ? `${v.toFixed(0)} W/m²` : '—')
-
-export interface SolarZoneOption {
-  id: string
-  name: string
-  shortLabel: string
-  center: LngLat
-  zoom: number
-  description: string
-  bbox?: [number, number, number, number] // [west, south, east, north]
-}
-
-export const SOLAR_PRESET_ZONES: readonly SolarZoneOption[] = [
-  {
-    id: 'sumidero',
-    name: 'ROI Principal: Cañón del Sumidero (Chiapas)',
-    shortLabel: 'Sumidero (ROI Oficial)',
-    center: [-93.0901, 16.7600],
-    zoom: 13,
-    description: 'Relieve escarpado del Cañón del Sumidero (ROI oficial NISAR)',
-    bbox: [-93.1081, 16.7420, -93.0721, 16.7780],
-  },
-  {
-    id: 'chicoasen',
-    name: 'Presa Chicoasén (M. Moreno Torres)',
-    shortLabel: 'Presa Chicoasén',
-    center: [-93.1380, 16.9450],
-    zoom: 13,
-    description: 'Cañón profundo y central hidroeléctrica de gran desnivel',
-    bbox: [-93.1560, 16.9270, -93.1200, 16.9630],
-  },
-  {
-    id: 'tuxtla',
-    name: 'Valle de Tuxtla Gutiérrez',
-    shortLabel: 'Tuxtla Gutiérrez',
-    center: [-93.1180, 16.7530],
-    zoom: 13,
-    description: 'Cuenca urbana y meseta central chiapaneca',
-    bbox: [-93.1360, 16.7350, -93.1000, 16.7710],
-  },
-  {
-    id: 'sancristobal',
-    name: 'Altos de Chiapas (San Cristóbal)',
-    shortLabel: 'Altos de Chiapas',
-    center: [-92.6370, 16.7370],
-    zoom: 13,
-    description: 'Macizo montañoso de alta elevación (~2,200 m)',
-    bbox: [-92.6550, 16.7190, -92.6190, 16.7550],
-  },
-  {
-    id: 'soconusco_costa',
-    name: 'Llanura Costera del Soconusco (Río Coatán · Tapachula)',
-    shortLabel: 'Soconusco (Costa Húmeda)',
-    center: [-92.4200, 14.9000],
-    zoom: 12,
-    description: 'Zona húmeda pacífica de alta pluviosidad e inundaciones por crecidas torrenciales',
-    bbox: [-92.6500, 14.7800, -92.2000, 15.0200],
-  },
-  {
-    id: 'encrucijada',
-    name: 'Humedales y Manglares La Encrucijada (Pacífico)',
-    shortLabel: 'La Encrucijada (Marismas)',
-    center: [-92.8500, 15.1500],
-    zoom: 12,
-    description: 'Red de estuarios, albuferas y marismas costeras permanentemente inundables',
-    bbox: [-93.0500, 15.0000, -92.6500, 15.3000],
-  },
-  {
-    id: 'malpaso_grijalva',
-    name: 'Llanura Aluvial Presa Malpaso (Río Grijalva)',
-    shortLabel: 'Malpaso / Grijalva',
-    center: [-93.6000, 17.1800],
-    zoom: 12,
-    description: 'Cuenca tropical húmeda y llanuras fluviales aluviales del norte de Chiapas',
-    bbox: [-93.7500, 17.0500, -93.4500, 17.3000],
-  },
-  {
-    id: 'current_view',
-    name: 'Vista actual en el mapa',
-    shortLabel: 'Vista Actual',
-    center: [-93.0901, 16.7600],
-    zoom: 13,
-    description: 'Calcula la simulación centrada en la cámara visible',
-  },
-  {
-    id: 'custom_roi',
-    name: 'Polígono de Recorte ROI (Manual)',
-    shortLabel: 'Recorte Manual',
-    center: [-93.0901, 16.7600],
-    zoom: 13,
-    description: 'Centrado en el polígono trazado con la herramienta de recorte',
-  },
-]
 
 interface SolarPanelProps {
   solar: SolarSimulationState
@@ -168,7 +64,6 @@ export function RightPanel({
   solar,
   onSolarChange,
   onClose,
-  center,
   croppedRegion,
   onFlyToZone,
   roiLayers,
@@ -179,20 +74,24 @@ export function RightPanel({
   const [simulationResult, setSimulationResult] = useState<SolarSimulationResponse | null>(null)
   const [simulationError, setSimulationError] = useState<string | null>(null)
   const [heatmap, setHeatmap] = useState<DecodedHeatmap | null>(null)
-  const [runInfo, setRunInfo] = useState<{ intensity: number; radiusKm: number; areaKm2: number } | null>(null)
-  const radiusKm = solar.radiusKm ?? 2
+  const [runInfo, setRunInfo] = useState<{ intensity: number } | null>(null)
+  const [simulationDate, setSimulationDate] = useState(() =>
+    new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()),
+  )
+  const requestVersion = useRef(0)
+  const roiKey = JSON.stringify(croppedRegion ?? null)
+  useEffect(() => {
+    const versionRef = requestVersion
+    versionRef.current++
+    return () => { versionRef.current++ }
+  }, [roiKey])
   const heatmapMode: HeatmapScaleMode = solar.heatmapMode ?? 'estirado'
   const upperWm2 = simulationResult?.clear_sky.dni_adjusted_w_m2 ?? 0
   const [vmin, vmax] = heatmap ? scaleFor(heatmapMode, heatmap.stats, upperWm2) : [0, 0]
   const ticks = heatmap ? legendTicks(vmin, vmax) : []
 
-  const selectedZoneId = solar.selectedZoneId || 'sumidero'
-  const currentZone =
-    SOLAR_PRESET_ZONES.find((z) => z.id === selectedZoneId) || SOLAR_PRESET_ZONES[0]
-
   const angleId = useId()
   const radId = useId()
-  const zoneSelectId = useId()
   const infernoSpec = getColormapSpec('inferno')
 
   const { x: sunX, y: sunY } = sunArcCoords(solar.sunAngle)
@@ -215,83 +114,53 @@ export function RightPanel({
     })
   }
 
-  const handleSelectZone = (zoneId: string) => {
-    const targetZone = SOLAR_PRESET_ZONES.find((z) => z.id === zoneId)
-    if (!targetZone) return
-
-    onSolarChange({
-      ...solar,
-      selectedZoneId: zoneId,
-    })
-
-    if (zoneId === 'current_view') {
-      // No vuela, se queda en la vista actual
-      return
-    }
-
-    if (zoneId === 'custom_roi' && croppedRegion && croppedRegion.length >= 3) {
-      const cLon = croppedRegion.reduce((acc, p) => acc + p[0], 0) / croppedRegion.length
-      const cLat = croppedRegion.reduce((acc, p) => acc + p[1], 0) / croppedRegion.length
-      onFlyToZone?.([cLon, cLat], 13.5)
-      return
-    }
-
-    // Vuela a la zona predefinida
-    onFlyToZone?.(targetZone.center, targetZone.zoom)
-  }
-
   const handleRunBackendSimulation = async () => {
+    const version = ++requestVersion.current
+    const isCurrent = () => requestVersion.current === version
     setIsSimulating(true)
     setSimulationError(null)
 
     try {
-      // 1. Determinar centro y coordenadas de la zona seleccionada
-      let cLon = currentZone.center[0]
-      let cLat = currentZone.center[1]
-
-      if (selectedZoneId === 'current_view' && center) {
-        cLon = center[0]
-        cLat = center[1]
-      } else if (selectedZoneId === 'custom_roi' && croppedRegion && croppedRegion.length >= 3) {
-        cLon = croppedRegion.reduce((acc, p) => acc + p[0], 0) / croppedRegion.length
-        cLat = croppedRegion.reduce((acc, p) => acc + p[1], 0) / croppedRegion.length
-      }
-
-      // Caja cuadrada del radio elegido (antes fija en ~2 km)
-      const [w, s, e, n] = squareAround(cLon, cLat, radiusKm)
-      const roiPolygon: number[][][] = [[[w, s], [e, s], [e, n], [w, n], [w, s]]]
+      // Use the confirmed polygon, not a preselected place or an invented square.
+      const roiPolygon = confirmedSolarRoi(croppedRegion ?? null)
+      const lons = roiPolygon.coordinates[0].map(([lon]) => lon)
+      const lats = roiPolygon.coordinates[0].map(([, lat]) => lat)
+      const w = Math.min(...lons), s = Math.min(...lats), e = Math.max(...lons), n = Math.max(...lats)
+      const cLon = (w + e) / 2, cLat = (s + n) / 2
 
       // 2. Mapear ángulo a hora local
       const totalMinutes = Math.round(6 * 60 + (solar.sunAngle / 180) * 12 * 60)
       const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0')
       const mm = String(totalMinutes % 60).padStart(2, '0')
-      const datetimeLocal = `2026-06-21T${hh}:${mm}:00`
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(simulationDate)) throw new Error('Seleccioná una fecha para simular.')
+      const datetimeLocal = `${simulationDate}T${hh}:${mm}:00`
 
       const intensity = Math.max(1, Math.min(100, Math.round(solar.radiationIntensity || 65)))
 
       const res = await runSolarSimulation({
-        roi: {
-          type: 'Polygon',
-          coordinates: roiPolygon,
-        },
+        roi: roiPolygon,
         datetime_local: datetimeLocal,
         timezone: 'America/Mexico_City',
         intensity_percent: intensity,
       })
+      if (!isCurrent()) return
 
       setSimulationResult(res)
-      setRunInfo({ intensity, radiusKm, areaKm2: (2 * radiusKm) ** 2 })
+      setRunInfo({ intensity })
 
       // Recuperar W/m² del PNG Inferno y redibujarlo con más contraste; si falla, usar el PNG original.
       let previewUrl = res.layers.incident.preview_url
       try {
         const decoded = await loadHeatmap(res.layers.incident.preview_url, res.clear_sky.dni_adjusted_w_m2)
+        if (!isCurrent()) return
         const [lo, hi] = scaleFor(heatmapMode, decoded.stats, res.clear_sky.dni_adjusted_w_m2)
         previewUrl = renderHeatmap(decoded, lo, hi).dataUrl
         setHeatmap(decoded)
       } catch {
+        if (!isCurrent()) return
         setHeatmap(null)
       }
+      if (!isCurrent()) return
 
       // Actualizar estado solar para renderizar el ráster en el mapa MapLibre
       onSolarChange({
@@ -302,13 +171,14 @@ export function RightPanel({
       })
 
       // Enfocar el mapa en el ráster generado, con un zoom acorde al radio
-      onFlyToZone?.([cLon, cLat], radiusKm <= 2 ? 13.5 : radiusKm <= 5 ? 12.3 : 11.2)
+      onFlyToZone?.([cLon, cLat])
     } catch (err) {
+      if (!isCurrent()) return
       setSimulationError(
         err instanceof Error ? err.message : 'Error al conectar con la API de simulación'
       )
     } finally {
-      setIsSimulating(false)
+      if (isCurrent()) setIsSimulating(false)
     }
   }
 
@@ -351,56 +221,8 @@ export function RightPanel({
         </button>
       </div>
 
-      {/* Selector de Región de Interés (ROI) */}
       <div className="solar-zone-group">
-        <label htmlFor={zoneSelectId} className="solar-zone-label">
-          <MapPin size={12} className="solar-zone-label__icon" />
-          <span>Zona / Región de Interés (ROI):</span>
-        </label>
-        <select
-          id={zoneSelectId}
-          value={selectedZoneId}
-          onChange={(e) => handleSelectZone(e.target.value)}
-          className="solar-zone-select"
-        >
-          {SOLAR_PRESET_ZONES.map((zone) => {
-            if (zone.id === 'custom_roi' && (!croppedRegion || croppedRegion.length < 3)) {
-              return null
-            }
-            return (
-              <option key={zone.id} value={zone.id}>
-                {zone.name}
-              </option>
-            )
-          })}
-        </select>
-        <div className="solar-zone-info">
-          <span>{currentZone.description}</span>
-        </div>
-
-        {/* Radio de la zona de cálculo */}
-        <div className="solar-radius">
-          <span className="solar-zone-label">Radio de cálculo alrededor del centro:</span>
-          <div className="solar-radius__options" role="radiogroup" aria-label="Radio de cálculo">
-            {RADIUS_OPTIONS_KM.map((km) => (
-              <button
-                key={km}
-                type="button"
-                role="radio"
-                aria-checked={radiusKm === km}
-                className={`solar-radius__btn ${radiusKm === km ? 'is-active' : ''}`}
-                onClick={() => onSolarChange({ ...solar, radiusKm: km })}
-              >
-                {km} km
-              </button>
-            ))}
-          </div>
-          <small className="solar-radius__hint">
-            Zona de {(2 * radiusKm).toLocaleString('es-MX')} × {(2 * radiusKm).toLocaleString('es-MX')} km
-            ({((2 * radiusKm) ** 2).toLocaleString('es-MX')} km²) con DEM de 30 m
-            {radiusKm >= 7.5 ? ' · tarda alrededor de 1 minuto' : radiusKm >= 5 ? ' · tarda unos 15 s' : ''}
-          </small>
-        </div>
+        <p role="status">{croppedRegion?.length ? 'Se calculará únicamente para la ROI delimitada y confirmada en este mapa.' : 'Delimitá y confirmá una ROI antes de calcular la simulación.'}</p>
       </div>
 
       {/* Recuadro técnico con arco Este a Oeste y esfera solar arrastrable */}
@@ -489,6 +311,19 @@ export function RightPanel({
       </div>
 
       {/* Deslizador 1: Ángulo del Sol / Hora */}
+      <div className="solar-control">
+        <label htmlFor="solar-simulation-date" className="opacity-control__label">Fecha de simulación (hora local de Chiapas)</label>
+        <input id="solar-simulation-date" type="date" value={simulationDate} onChange={(event) => {
+          requestVersion.current++
+          setSimulationDate(event.target.value)
+          setSimulationResult(null)
+          setRunInfo(null)
+          setHeatmap(null)
+          setIsSimulating(false)
+          onSolarChange({ ...solar, rasterPreviewUrl: null, rasterBounds: null })
+        }} />
+      </div>
+
       <div className="solar-control">
         <div className="opacity-control__header">
           <label htmlFor={angleId} className="opacity-control__label">
@@ -604,7 +439,7 @@ export function RightPanel({
         <button
           type="button"
           className="solar-api-btn"
-          disabled={isSimulating}
+          disabled={isSimulating || !croppedRegion || croppedRegion.length < 3 || !simulationDate}
           onClick={handleRunBackendSimulation}
           title="Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend para la ROI seleccionada"
         >
@@ -709,14 +544,7 @@ export function RightPanel({
                   {simulationResult.position.altitude_m.toFixed(0)} m (EGM96)
                 </span>
               </div>
-              {runInfo && (
-                <div className="solar-api-stat">
-                  <span className="solar-api-stat__label">Zona calculada</span>
-                  <span className="solar-api-stat__val">
-                    radio {runInfo.radiusKm} km · {runInfo.areaKm2.toLocaleString('es-MX')} km²
-                  </span>
-                </div>
-              )}
+              {runInfo && <div className="solar-api-stat"><span className="solar-api-stat__label">Zona calculada</span><span className="solar-api-stat__val">ROI delimitada por el usuario</span></div>}
               {heatmap && (
                 <>
                   <div className="solar-api-stat">

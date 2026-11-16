@@ -1,24 +1,49 @@
-import {
-  MOCK_CHANGES,
-  MOCK_ROIS,
-  MOCK_SCENES,
-  buildMockChangeDetail,
-  buildMockChangeReport,
-  type C4ChangeDetail,
-  type C4ChangeReport,
-  type C4ChangeSummary,
-  type C4CompatReport,
-  type C4Roi,
-  type C4SceneMeta,
+import type {
+  C4ChangeDetail,
+  C4ChangeReport,
+  C4ChangeSummary,
+  C4CompatReport,
+  C4Roi,
+  C4SceneMeta,
 } from '../mocks/c4CatalogMocks'
-import {
-  checkPairCompat,
-  type ExploreChartsManifest,
-  type ExploreLayerEntry,
-  type ExploreLayerId,
-  type ExploreWebManifest,
-  type GcovStackSpec,
+import type {
+  ExploreChartsManifest,
+  ExploreLayerEntry,
+  ExploreLayerId,
+  ExploreWebManifest,
+  GcovStackSpec,
 } from '../mocks/initialWorkspaces'
+
+export interface LocationResult {
+  place_id: number | string | null
+  name: string
+  category: string | null
+  type: string | null
+  address: Record<string, string>
+  geometry: { type: 'Point' | 'Polygon' | 'MultiPolygon'; coordinates: unknown }
+  selectable_roi: boolean
+}
+
+export interface GcovSearchScene {
+  scene_id: string
+  product: string
+  start_time: string
+  date: string | null
+  track: number | null
+  frame: number | null
+  direction: string | null
+  polarizations: string[]
+  crid: string | null
+  maturity: string | null
+  size_bytes: number | null
+  frame_coverage: string | null
+  footprint: unknown
+  roi_intersection: unknown
+  coverage_pct: number | null
+  coverage_source: string | null
+  downloaded?: boolean
+  local_path?: string | null
+}
 
 export type {
   C4Roi,
@@ -33,6 +58,34 @@ export type {
   ExploreWebManifest,
 }
 
+async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(init?.headers ?? {}) } })
+  const body = await response.json().catch(() => ({})) as { detail?: string }
+  if (!response.ok) throw new Error(body.detail || `Error HTTP ${response.status}`)
+  return body as T
+}
+
+export const searchLocations = (query: string) => apiJson<{ results: LocationResult[]; attribution: string; license: string }>(`/api/locations?q=${encodeURIComponent(query)}`)
+
+/** Photon suggests text only; the selected name is resolved through the explicit Nominatim search. */
+export const suggestLocations = (query: string, signal?: AbortSignal) => apiJson<{ suggestions: Array<{ name: string; query: string }>; attribution: string }>(`/api/locations/suggest?q=${encodeURIComponent(query)}`, { signal })
+
+export interface LocationRoiResponse {
+  geometry: { type: 'Polygon' | 'MultiPolygon'; coordinates: unknown }
+  original_geometry: { type: 'Polygon' | 'MultiPolygon'; coordinates: unknown }
+  metadata: { name: string; center: [number, number]; radius_km: number; applied_radius_km: number; source: string; generation: string }
+}
+
+export function generateLocationRoi(input: { place_id: number | string | null; query: string; radius_km: number }) {
+  return apiJson<LocationRoiResponse>('/api/locations/roi', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
+  })
+}
+export const searchGcov = (roi: unknown, start?: string, end?: string) => apiJson<{ scenes: GcovSearchScene[]; count: number; coverage_note: string }>('/api/gcov/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roi, ...(start ? { start } : {}), ...(end ? { end } : {}) }) })
+export interface GcovDownloadStatus { job_id?: string; status?: 'queued' | 'running' | 'ready' | 'error'; progress: string; scene_id?: string; path?: string; already_present?: boolean }
+export const requestGcovDownload = (scene_id: string, roi: unknown) => apiJson<GcovDownloadStatus>('/api/gcov/downloads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scene_id, roi }) })
+export const getGcovDownloadStatus = (jobId: string) => apiJson<GcovDownloadStatus>(`/api/gcov/downloads/${encodeURIComponent(jobId)}`)
+
 export interface GetScenesParams {
   roi?: string
   track?: number
@@ -44,38 +97,23 @@ export interface ApiEnvelope<T> {
   isSyntheticMock: boolean
 }
 
-async function fetchOrFallback<T>(path: string, fallback: () => T): Promise<ApiEnvelope<T>> {
-  try {
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => controller.abort(), 1600)
-    const res = await fetch(path, {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    })
-    window.clearTimeout(timeoutId)
-
-    if (res.ok) {
-      const contentType = res.headers.get('content-type') ?? ''
-      if (contentType.includes('application/json')) {
-        const json = (await res.json()) as T
-        return { data: json, isSyntheticMock: false }
-      }
-    }
-  } catch {
-    // El backend local de Django aún no está levantado; se devuelve el mock sintético de C4.
+async function fetchApi<T>(path: string): Promise<ApiEnvelope<T>> {
+  const res = await fetch(path, { headers: { Accept: 'application/json' } })
+  const contentType = res.headers.get('content-type') ?? ''
+  const body = contentType.includes('application/json')
+    ? await res.json().catch(() => null) as T | { detail?: string }
+    : null
+  if (!res.ok) {
+    const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : null
+    throw new Error(detail || `Error HTTP ${res.status}`)
   }
-
-  return {
-    data: fallback(),
-    isSyntheticMock: true,
-  }
+  if (body === null) throw new Error(`Respuesta JSON inválida de ${path}`)
+  return { data: body as T, isSyntheticMock: false }
 }
 
 /** `GET /api/rois` — Regiones de interés registradas en PostGIS (Contrato C4). */
 export async function getRois(): Promise<ApiEnvelope<C4Roi[]>> {
-  return fetchOrFallback('/api/rois', () =>
-    MOCK_ROIS.map((r) => ({ ...r, isSyntheticMock: true })),
-  )
+  return fetchApi('/api/rois')
 }
 
 /** `GET /api/scenes?roi=&track=&maturity=` — Escenas NISAR GCOV normalizadas (Contrato C4). */
@@ -86,27 +124,17 @@ export async function getScenes(params: GetScenesParams = {}): Promise<ApiEnvelo
   if (params.maturity) qs.set('maturity', params.maturity)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
 
-  return fetchOrFallback(`/api/scenes${suffix}`, () =>
-    MOCK_SCENES.filter((s) => {
-      if (params.track !== undefined && s.track !== params.track) return false
-      if (params.maturity !== undefined && s.maturity !== params.maturity) return false
-      return true
-    }).map((s) => ({ ...s, isSyntheticMock: true })),
-  )
+  return fetchApi(`/api/scenes${suffix}`)
 }
 
 /** `GET /api/changes` — Lista de corridas de cambio Δγ⁰/Δσ⁰ en dB (Contrato C4). */
 export async function getChanges(): Promise<ApiEnvelope<C4ChangeSummary[]>> {
-  return fetchOrFallback('/api/changes', () =>
-    MOCK_CHANGES.map((c) => ({ ...c, isSyntheticMock: true })),
-  )
+  return fetchApi('/api/changes')
 }
 
 /** `GET /api/changes/{id}` — Detalle de corrida con `run.json` y `validation.json` incrustados (Contrato C4). */
 export async function getChangeDetail(id: string): Promise<ApiEnvelope<C4ChangeDetail>> {
-  return fetchOrFallback(`/api/changes/${encodeURIComponent(id)}`, () =>
-    buildMockChangeDetail(id),
-  )
+  return fetchApi(`/api/changes/${encodeURIComponent(id)}`)
 }
 
 /** `GET /api/compat?t1=&t2=` — Verificación estricta de comparabilidad de par (Contrato C4). */
@@ -116,26 +144,12 @@ export async function checkCompat(
   stackId: GcovStackSpec['id'] = 'T62/F10',
 ): Promise<ApiEnvelope<C4CompatReport>> {
   const qs = new URLSearchParams({ t1, t2, stack: stackId })
-  return fetchOrFallback(`/api/compat?${qs.toString()}`, () => {
-    const res = checkPairCompat(t1, t2, stackId)
-    return {
-      t1,
-      t2,
-      t1_scene_id: res.t1SceneId,
-      t2_scene_id: res.t2SceneId,
-      comparable: res.comparable,
-      errors: res.errors,
-      warnings: res.warnings,
-      isSyntheticMock: true,
-    }
-  })
+  return fetchApi(`/api/compat?${qs.toString()}`)
 }
 
 /** `GET /api/changes/{id}/report` — Datos estructurados del reporte reproducible (Contrato C4). */
 export async function getChangeReport(id: string): Promise<ApiEnvelope<C4ChangeReport>> {
-  return fetchOrFallback(`/api/changes/${encodeURIComponent(id)}/report`, () =>
-    buildMockChangeReport(id),
-  )
+  return fetchApi(`/api/changes/${encodeURIComponent(id)}/report`)
 }
 
 interface ExploreDiskIndex {

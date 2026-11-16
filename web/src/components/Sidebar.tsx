@@ -1,9 +1,7 @@
 import type { useRoiLayers } from '../hooks/useRoiLayers'
 import {
   useEffect,
-  useId,
   useState,
-  type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -14,7 +12,6 @@ import {
   Folder,
   FolderOpen,
   FolderTree,
-  Layers,
   Map as MapIcon,
   Pencil,
   Trash,
@@ -23,29 +20,32 @@ import {
 import {
   CARPETAS,
   type Carpeta,
-  type EscenaNisar,
   type WorkspaceMap,
 } from '../types/workspace'
-import { type GcovStackSpec } from '../mocks/initialWorkspaces'
-import { ExploradorFeature } from '../features/explorador'
-import { ComparadorFeature } from '../features/comparador'
-import { Etapa1ChartsPanel } from './Etapa1ChartsPanel'
 import { RoiChartsSection } from './RoiChartsSection'
 import { formatRelative } from '../utils/time'
+import { LocationSearch } from './LocationSearch'
+import { GcovCatalog } from './GcovCatalog'
+import type { AdministrativeGeometry, EffectiveRoiMetadata, RoiGeometry } from '../utils/roi'
+import type { ToastKind } from './Toast'
 
 interface SidebarProps {
   roiLayers?: ReturnType<typeof useRoiLayers>
   maps: WorkspaceMap[]
   /** Id de la copia activa en "Mapa Editado"; `null` si se está viendo el Mapa General. */
   activeMapId: string | null
-  escena: EscenaNisar
   onSelectMap: (id: string) => void
   onRenameMap: (id: string, newName: string) => void
   onDeleteMap: (id: string) => void
   opacity: number
   onOpacityChange: (value: number) => void
-  onSelectStack?: (stack: GcovStackSpec) => void
-  onChangePair?: (t1: string, t2: string) => void
+  locationPreview?: AdministrativeGeometry | null
+  onLocationPreview: (geometry: AdministrativeGeometry | null) => void
+  onConfirmLocationROI: (geometry: RoiGeometry, metadata: EffectiveRoiMetadata) => boolean | void
+  onDrawLocationROI: () => void
+  onGcovFootprint: (feature: unknown | null) => void
+  confirmedROI: unknown | null
+  onNotify: (kind: ToastKind, text: string) => void
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 360
@@ -78,15 +78,13 @@ export function Sidebar({
   roiLayers,
   maps,
   activeMapId,
-  escena,
   onSelectMap,
   onRenameMap,
   onDeleteMap,
-  opacity,
-  onOpacityChange,
-  onSelectStack,
-  onChangePair,
+  onLocationPreview, onConfirmLocationROI, onDrawLocationROI, onGcovFootprint, confirmedROI, onNotify,
 }: SidebarProps) {
+  const [gcovStart, setGcovStart] = useState('')
+  const [gcovEnd, setGcovEnd] = useState('')
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => loadInitialSidebarWidth())
   const [isResizing, setIsResizing] = useState(false)
   const [folderFilter, setFolderFilter] = useState<Carpeta | null>(null)
@@ -94,28 +92,14 @@ export function Sidebar({
   const [editingName, setEditingName] = useState('')
   const [openNodes, setOpenNodes] = useState<{
     savedMaps: boolean
-    catalogAndC1: boolean
-    chartsEtapa1: boolean
-    compat: boolean
-    sceneParams: boolean
+    locationSearch: boolean
+    gcovCatalog: boolean
   }>({
     savedMaps: true,
-    catalogAndC1: true,
-    chartsEtapa1: true,
-    compat: true,
-    sceneParams: true,
-  })
-  const [pairDraft, setPairDraft] = useState<{
-    stack: EscenaNisar['pila']
-    t1: string
-    t2: string
-  }>({
-    stack: escena.pila,
-    t1: escena.t1,
-    t2: escena.t2,
+    locationSearch: true,
+    gcovCatalog: true,
   })
   const now = useNow(30_000)
-  const sliderId = useId()
 
   useEffect(() => {
     try {
@@ -182,9 +166,6 @@ export function Sidebar({
     setOpenNodes((prev) => ({ ...prev, [node]: !prev[node] }))
   }
 
-  const activeT1 = pairDraft.stack === escena.pila ? pairDraft.t1 : escena.t1
-  const activeT2 = pairDraft.stack === escena.pila ? pairDraft.t2 : escena.t2
-
   const visibleMaps = folderFilter ? maps.filter((m) => m.carpeta === folderFilter) : maps
 
   const startRename = (map: WorkspaceMap) => {
@@ -220,7 +201,16 @@ export function Sidebar({
         {/* Raíz del árbol del proyecto */}
         <div className="tree-root-label">
           <span className="tree-root-label__icon">▣</span>
-          <span>{roiLayers ? 'ROI seleccionada ? NISAR GCOV' : `Chiapas ? EPSG:${escena.epsg}`} </span>
+          <span>{roiLayers ? 'ROI del usuario · NISAR GCOV' : 'Sin ROI confirmada'}</span>
+        </div>
+
+        <div className="tree-node">
+          <button type="button" className="tree-node__header" onClick={() => toggleNode('locationSearch')} aria-expanded={openNodes.locationSearch}><span className="tree-node__caret">{openNodes.locationSearch ? '▾' : '▸'}</span><span className="tree-node__title">Buscar ubicación</span></button>
+          {openNodes.locationSearch && <div className="tree-node__body"><LocationSearch key={activeMapId ?? 'general'} onPreview={onLocationPreview} onConfirmROI={onConfirmLocationROI} onDrawROI={onDrawLocationROI} onNotify={onNotify} /></div>}
+        </div>
+        <div className="tree-node">
+          <button type="button" className="tree-node__header" onClick={() => toggleNode('gcovCatalog')} aria-expanded={openNodes.gcovCatalog}><span className="tree-node__caret">{openNodes.gcovCatalog ? '▾' : '▸'}</span><span className="tree-node__title">Catálogo GCOV · ASF</span></button>
+          {openNodes.gcovCatalog && <div className="tree-node__body"><GcovCatalog key={`${activeMapId ?? 'general'}:${JSON.stringify(confirmedROI)}`} roi={confirmedROI} start={gcovStart} end={gcovEnd} onStartChange={setGcovStart} onEndChange={setGcovEnd} onFootprint={onGcovFootprint} onNotify={onNotify} /><button type="button" className="link-btn" onClick={() => onGcovFootprint(null)}>Limpiar huella seleccionada</button></div>}
         </div>
 
         {/* Nodo 1: Mis Mapas Guardados */}
@@ -232,7 +222,7 @@ export function Sidebar({
             aria-expanded={openNodes.savedMaps}
           >
             <span className="tree-node__caret">{openNodes.savedMaps ? '▾' : '▸'}</span>
-            <span className="tree-node__title">Mis Mapas Guardados ({maps.length})</span>
+            <span className="tree-node__title">Explorador · Mapas guardados ({maps.length})</span>
           </button>
 
           {openNodes.savedMaps && (
@@ -360,177 +350,28 @@ export function Sidebar({
           )}
         </div>
 
-        {roiLayers ? <section className="roi-scene-details">
+        {roiLayers ? <section className="roi-scene-details" aria-label="Resultados de la ROI delimitada">
           <h3>Escenas de la ROI seleccionada</h3>
           <p role="status">{roiLayers.error || roiLayers.message}</p>
           {roiLayers.manifests.map((manifest, i) => <article key={manifest.escena.granuleId}>
             <h4>t{i + 1}: {manifest.escena.fecha_inicio.slice(0, 10)}</h4>
             <p>T{manifest.escena.trayectoria}/F{manifest.escena.marco} · {manifest.escena.direccion}</p>
-            <p>{manifest.escena.crid} · {manifest.escena.madurez_catalogo}</p>
+            <p>{manifest.escena.crid} · {manifest.escena.madurez_catalogo ?? 'Madurez desconocida'}</p>
             <p>Polarizaciones: {manifest.escena.polarizaciones.join(', ')}</p>
             <code>{manifest.escena.granuleId}</code>
             {manifest.capas.map(layer => <p key={layer.id}>
               {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% de píxeles válidos en el recorte · {layer.pixel_m} m
             </p>)}
           </article>)}
-          <h3>Gráficas NISAR de la ROI</h3>
-          <RoiChartsSection roiLayers={roiLayers} compact />
-          <p>Los resultados se conservan por región. Duplica el mapa para guardar otra ROI.</p>
-        </section> : <>
-        {/* Nodo 2: Catálogo ASF (3 Pilas GCOV Chiapas) + Capas Contrato C1 (data/raw) */}
-        <div className="tree-node">
-          <button
-            type="button"
-            className="tree-node__header"
-            onClick={() => toggleNode('catalogAndC1')}
-            aria-expanded={openNodes.catalogAndC1}
-          >
-            <span className="tree-node__caret">{openNodes.catalogAndC1 ? '▾' : '▸'}</span>
-            <span className="tree-node__title">
-              Catálogo ASF (3 Pilas GCOV Chiapas) & Capas Contrato C1 (data/raw)
-            </span>
-          </button>
-
-          {openNodes.catalogAndC1 && (
-            <div className="tree-node__body">
-              <ExploradorFeature
-                activeStackId={escena.pila}
-                onSelectStack={(stack) => {
-                  setPairDraft({ stack: stack.id, t1: stack.defaultT1, t2: stack.defaultT2 })
-                  onSelectStack?.(stack)
-                }}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Nodo 2b: Gráficas Etapa 1 (Chart.js · T62/F10 Principal) */}
-        <div className="tree-node">
-          <button
-            type="button"
-            className="tree-node__header"
-            onClick={() => toggleNode('chartsEtapa1')}
-            aria-expanded={openNodes.chartsEtapa1}
-          >
-            <span className="tree-node__caret">{openNodes.chartsEtapa1 ? '▾' : '▸'}</span>
-            <span className="tree-node__title">Gráficas Etapa 1 (Chart.js · T62/F10)</span>
-          </button>
-
-          {openNodes.chartsEtapa1 && (
-            <div className="tree-node__body">
-              <Etapa1ChartsPanel compact />
-            </div>
-          )}
-        </div>
-
-        {/* Nodo 3: Validador de Comparabilidad y Selección de Par t1/t2 */}
-        <div className="tree-node">
-          <button
-            type="button"
-            className="tree-node__header"
-            onClick={() => toggleNode('compat')}
-            aria-expanded={openNodes.compat}
-          >
-            <span className="tree-node__caret">{openNodes.compat ? '▾' : '▸'}</span>
-            <span className="tree-node__title">Control de Comparabilidad ({escena.pila})</span>
-          </button>
-
-          {openNodes.compat && (
-            <div className="tree-node__body">
-              <ComparadorFeature
-                stackId={escena.pila}
-                t1={activeT1}
-                t2={activeT2}
-                onChangePair={(nextT1, nextT2) => {
-                  setPairDraft({ stack: escena.pila, t1: nextT1, t2: nextT2 })
-                  onChangePair?.(nextT1, nextT2)
-                }}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Nodo 4: Parámetros de Escena */}
-        <div className="tree-node">
-          <button
-            type="button"
-            className="tree-node__header"
-            onClick={() => toggleNode('sceneParams')}
-            aria-expanded={openNodes.sceneParams}
-          >
-            <span className="tree-node__caret">{openNodes.sceneParams ? '▾' : '▸'}</span>
-            <span className="tree-node__title">Parámetros de Escena ({escena.producto})</span>
-          </button>
-
-          {openNodes.sceneParams && (
-            <div className="tree-node__body">
-              <table className="ws-param-table" aria-label="Tabla técnica de parámetros de escena">
-                <tbody>
-                  <tr>
-                    <th>Producto / Banda</th>
-                    <td>{escena.producto} · Band L (Freq A, 20 MHz)</td>
-                  </tr>
-                  <tr>
-                    <th>Pila / Órbita</th>
-                    <td>
-                      {escena.pila} · {escena.direccion}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Fechas (t1 → t2)</th>
-                    <td className="ws-mono">
-                      {escena.t1} → {escena.t2}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>CRID / Madurez</th>
-                    <td className="ws-mono">
-                      {escena.crid} · {escena.madurez}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Malla / CRS</th>
-                    <td className="ws-mono">
-                      EPSG:{escena.epsg} · {escena.resolucionM}
-                    </td>
-                  </tr>
-                  <tr>
-                    <th>Cobertura ROI</th>
-                    <td>{escena.coberturaRoiPct}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        </>}
+          {roiLayers.manifests.length > 0 && <><h3>Gráficas NISAR de la ROI</h3>
+            <RoiChartsSection roiLayers={roiLayers} compact /></>}
+        </section> : <p className="roi-empty-state" role="status">Sin datos calculados para una ROI todavía. Delimitá y confirmá una región para iniciar el análisis.</p>}
       </div>
 
       <div className="sidebar__footer">
-        <div className="opacity-control">
-          <div className="opacity-control__header">
-            <label htmlFor={sliderId} className="opacity-control__label">
-              <Layers size={13} aria-hidden="true" />
-              Opacidad de capa SAR (0% - 100%)
-            </label>
-            <span className="opacity-control__value">{opacity}%</span>
-          </div>
-          <input
-            id={sliderId}
-            type="range"
-            min={0}
-            max={100}
-            step={1}
-            value={opacity}
-            onChange={(e) => onOpacityChange(Number(e.target.value))}
-            className="slider"
-            style={{ '--slider-fill': `${opacity}%` } as CSSProperties}
-          />
-        </div>
-
         <div className="sidebar-trace-box" aria-label="Metadatos de trazabilidad NISAR">
           <div className="sidebar-trace-box__line">
-            {roiLayers ? 'ROI personalizada · inspección exploratoria' : `${escena.producto} · ${escena.pila} · ${escena.t1} → ${escena.t2} · ${escena.crid}`}
+            {roiLayers ? 'ROI del usuario · inspección exploratoria' : 'Sin datos calculados para una ROI todavía.'}
           </div>
           <div
             className="sidebar-trace-box__badge"

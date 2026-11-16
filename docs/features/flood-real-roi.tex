@@ -1,0 +1,28 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,mexico]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\title{Simulación de inundación con ROI seleccionada}
+\author{TerraPulse AI}
+\date{}
+\begin{document}
+\maketitle
+
+\section{Objetivo}
+La interfaz de inundaciones exige una región de interés (ROI) seleccionada y válida antes de enviar una solicitud. No inventa zonas ni genera resultados locales de respaldo. Se retiró el generador sintético exclusivo de este simulador.
+
+\section{Uso}
+Dibuja y aplica un polígono en el mapa. El panel indica si la ROI puede enviarse y mantiene deshabilitado el botón cuando no existe una geometría válida. Ajusta los parámetros de lluvia y ejecuta la solicitud al servicio; si este falla, el error se muestra y el resultado previo se limpia.
+
+\section{Implementación}
+\texttt{web/src/utils/floodRoi.ts} convierte el anillo seleccionado a GeoJSON Polygon cerrado y comprueba coordenadas finitas dentro del rango EPSG:4326, área positiva e intersecciones de aristas. \texttt{RainDg2Panel.tsx} usa únicamente ese resultado como ROI y descarta respuestas pendientes al desmontar el panel. \texttt{App.tsx} invalida el resultado guardado cuando cambia la ROI, incluso si el panel está cerrado; \texttt{MapCanvas.tsx} oculta rásteres y comparaciones cuya ROI ya no coincide. Se presentan únicamente resultados devueltos por el servicio. La validación del backend continúa siendo necesaria.
+
+\section{Limitaciones}
+La validación del cliente no reemplaza la validación geométrica del servidor ni demuestra que el servicio produzca un resultado hidráulico correcto. Los valores de lluvia son entradas configuradas por el usuario, no observaciones meteorológicas.
+
+\section{Verificación}
+Desde \texttt{web/}, \texttt{node --test tests/floodRoi.test.mjs tests/roi.test.mjs}: 8 pruebas aprobadas. \texttt{npm run build} y ESLint de los componentes y utilidades modificados: aprobados. Desde la raíz, \verb|python -m pytest -q pipeline/tests/test_flood_inputs.py|: 39 pruebas aprobadas. Este documento compiló con \texttt{pdflatex} en un directorio temporal del proyecto. La alineación visual y un cálculo remoto real no se comprobaron. El código de cálculo del backend no se modificó; la interfaz ya no presenta sus estimaciones de vías basadas en un factor fijo como medidas de carreteras.
+
+\end{document}

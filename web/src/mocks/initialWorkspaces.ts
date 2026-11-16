@@ -533,7 +533,7 @@ export const DEFAULT_SOLAR: Readonly<SolarSimulationState> = Object.freeze({
 
 export const DEFAULT_FLOOD: Readonly<FloodSimulationState> = Object.freeze({
   enabled: false,
-  selectedZoneId: 'sumidero',
+  selectedZoneId: '',
   rainfallAmount: 25,
   rainfallDuration: 3,
   rasterUrl: null,
@@ -548,14 +548,14 @@ export const MAPA_GENERAL_ID = 'mapa-general-chiapas'
 /** Estado base de solo lectura (Par de trabajo principal: T62/F10 ASC, 2026-06-18 -> 2026-10-16, P05023). */
 export const MAPA_GENERAL: Readonly<WorkspaceMap> = Object.freeze({
   id: MAPA_GENERAL_ID,
-  nombre: 'Mapa General - Chiapas (GCOV T62/F10 · 99.6% ROI)',
+  nombre: 'Mapa General',
   carpeta: null,
   fechaModificacion: '2026-11-15T02:43:39.000Z',
   esEditable: false,
   opacidadSar: 72,
-  centro: CHIAPAS_CENTRO,
-  zoom: CHIAPAS_ZOOM,
-  escena: ESCENA_CHIAPAS,
+  centro: [0, 0] as LngLat,
+  zoom: 1.5,
+  escena: { granuleId: '', t1SceneId: '', t2SceneId: '', producto: '', descripcionProducto: '', epsg: 0, resolucionM: '', coberturaRoiPct: '', banda: '', polarizacion: '', madurez: 'PROVISIONAL', cicloRepeticion: '', pila: 'T62/F10', direccion: 'ASCENDING', t1: '', t2: '', crid: '', unidad: '', fuente: '' } as EscenaNisar,
   annotations: [],
   geojson: buildAnnotationsGeoJSON([], [], null),
   croppedRegion: null,
@@ -615,86 +615,6 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
 
 export type CenterDockTab = 'map' | 'rain-dg2'
 
-export type Dg2SectorId = 'grijalva-chicoasen' | 'canon-laderas' | 'tuxtla-urbana'
-
-export interface NonUrbanSector {
-  id: Dg2SectorId
-  nombre: string
-  tipo: 'elegible' | 'excluida'
-  criterio: string
-  nota: string
-  coordinates: [number, number][][]
-}
-
-export const DG2_ROI_SECTORS: readonly NonUrbanSector[] = [
-  {
-    id: 'grijalva-chicoasen',
-    nombre: 'Cauce Río Grijalva / Presa Chicoasén',
-    tipo: 'elegible',
-    criterio: 'Terreno natural / cauce abierto sin red de alcantarillado ni edificios densos',
-    nota: 'Apto para ecuaciones de aguas poco profundas DG2 con DEM hidrográfico + fricción Manning n.',
-    coordinates: [
-      [
-        [-93.2, 16.8],
-        [-93.02, 16.8],
-        [-92.98, 16.89],
-        [-93.16, 16.89],
-        [-93.2, 16.8],
-      ],
-    ],
-  },
-  {
-    id: 'canon-laderas',
-    nombre: 'Laderas y terrazas agrícolas (Valle Central)',
-    tipo: 'elegible',
-    criterio: 'Uso agrícola/forestal no urbano en malla UTM EPSG:32615',
-    nota: 'Candidato para contraste exploratorio frente a Δγ⁰ / Δσ⁰ de NISAR GCOV.',
-    coordinates: [
-      [
-        [-93.38, 16.66],
-        [-93.21, 16.66],
-        [-93.21, 16.88],
-        [-93.38, 16.88],
-        [-93.38, 16.66],
-      ],
-    ],
-  },
-  {
-    id: 'tuxtla-urbana',
-    nombre: 'Mancha Urbana de Tuxtla Gutiérrez',
-    tipo: 'excluida',
-    criterio: 'Zona urbana con edificios, calles y drenaje pluvial subterráneo',
-    nota: 'Excluida del alcance DG2 (flujo-dg2-simulacion-inundacion.tex §1): el solver no modela drenaje urbano ni obstrucción de edificaciones.',
-    coordinates: [
-      [
-        [-93.19, 16.71],
-        [-93.03, 16.71],
-        [-93.03, 16.79],
-        [-93.19, 16.79],
-        [-93.19, 16.71],
-      ],
-    ],
-  },
-]
-
-export function buildDg2EligibilityGeoJSON(selectedId: Dg2SectorId) {
-  return {
-    type: 'FeatureCollection' as const,
-    features: DG2_ROI_SECTORS.map((sec) => ({
-      type: 'Feature' as const,
-      properties: {
-        id: sec.id,
-        nombre: sec.nombre,
-        tipo: sec.tipo,
-        selected: sec.id === selectedId,
-      },
-      geometry: {
-        type: 'Polygon' as const,
-        coordinates: sec.coordinates,
-      },
-    })),
-  }
-}
 
 /**
  * Contrato `graficas-etapa1-1` (`data/explore/<granuleId>/graficas.json`, `docs/p1-graficas-chartjs.md`).

@@ -40,7 +40,7 @@ function baseOptions(xTitle: string, yTitle: string, horizontal = false): ChartO
 
 /**
  * Gráficas del simulador de inundación, generadas con la respuesta de /api/flood-scenarios/simulate:
- * balance hídrico, distribución de calados, vías afectadas e hietograma de la lluvia simulada.
+ * balance hídrico, distribución de calados e hietograma de la lluvia simulada.
  */
 export function FloodCharts({ flood }: FloodChartsProps) {
   const stats = flood.stats
@@ -69,14 +69,6 @@ export function FloodCharts({ flood }: FloodChartsProps) {
       pct: classes.map((c) => c.pct_mojado),
     }
   }, [flood.charts])
-
-  const roads = useMemo(() => {
-    if (!stats || stats.roadsCutKm === undefined || stats.roadsWarningKm === undefined) return null
-    return {
-      labels: ['Cortadas (h ≥ 0.35 m)', 'En alerta (0.15–0.35 m)'],
-      datasets: [{ data: [stats.roadsCutKm, stats.roadsWarningKm], backgroundColor: ['#DC2626', '#F59E0B'] }],
-    }
-  }, [stats])
 
   // Hietograma: el modelo reparte la lámina de lluvia de forma uniforme en la duración indicada.
   const hyeto = useMemo(() => {
@@ -112,9 +104,7 @@ export function FloodCharts({ flood }: FloodChartsProps) {
     <section className="flood-charts" aria-label="Gráficas del simulador de inundación">
       <p className="flood-charts__source">
         Fuente:{' '}
-        {flood.statsSource === 'local'
-          ? 'generador local de respaldo (el backend NASADEM no respondió); cifras aproximadas'
-          : 'cálculo del backend con DEM NASADEM 30 m'}
+        {'cálculo del backend con DEM NASADEM 30 m'}
         . Escenario simulado, no observación.
       </p>
 
@@ -156,16 +146,6 @@ export function FloodCharts({ flood }: FloodChartsProps) {
           <small>No disponible: solo lo calcula el backend con NASADEM.</small>
         )}
       </figure>
-
-      {roads && (
-        <figure className="flood-charts__fig">
-          <figcaption>Vías afectadas (km estimados)</figcaption>
-          <div className="flood-charts__canvas flood-charts__canvas--short">
-            <Bar data={roads} options={baseOptions('km', '', true)} />
-          </div>
-          <small>Estimación con densidad vial típica de 2.2 km/km² en zonas de pendiente &lt; 8 %; no es un inventario de caminos.</small>
-        </figure>
-      )}
 
       {hyeto && (
         <figure className="flood-charts__fig">

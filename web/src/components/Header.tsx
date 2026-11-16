@@ -23,16 +23,16 @@ import {
   SCIENTIFIC_COLORMAPS,
   type ScientificColormapId,
 } from '../utils/colormapLut'
-import type { DrawTool, EscenaNisar, SolarSimulationState, ViewMode } from '../types/workspace'
+import type { DrawTool, SolarSimulationState, ViewMode } from '../types/workspace'
 
 interface HeaderProps {
   roiLayers?: import('../hooks/useRoiLayers').RoiLayersState
   viewMode: ViewMode
   onViewModeChange: (mode: ViewMode) => void
   canShowEdited: boolean
+  hasConfirmedROI: boolean
   onDuplicate: () => void
   onExportJson: () => void
-  escena: EscenaNisar
   opacity: number
   onOpacityChange: (value: number) => void
   exploreLayerId: ExploreLayerId
@@ -50,8 +50,6 @@ interface HeaderProps {
   onToggleFloatingTools: () => void
   isCaptureMode: boolean
   onStartCaptureMode: () => void
-  /** Abre la galería de figuras científicas oficiales generadas por Matplotlib en el backend. */
-  onOpenFigures?: () => void
   /** Abre la landing institucional del equipo (MonitosCH) sin perder el estado del mapa. */
   onOpenTeamPage: () => void
 }
@@ -136,9 +134,9 @@ export function Header({
   viewMode,
   onViewModeChange,
   canShowEdited,
+  hasConfirmedROI,
   onDuplicate,
   onExportJson,
-  escena,
   opacity,
   onOpacityChange,
   exploreLayerId,
@@ -156,10 +154,11 @@ export function Header({
   onToggleFloatingTools,
   isCaptureMode,
   onStartCaptureMode,
-  onOpenFigures,
   onOpenTeamPage,
 }: HeaderProps) {
   const isEditing = viewMode === 'editado' && canShowEdited
+  const hasFirstScene = Boolean(roiLayers?.manifests[0])
+  const hasSecondScene = Boolean(roiLayers?.manifests[1])
   const [logoFailed, setLogoFailed] = useState(false)
   const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false)
   const [hoveredGroup, setHoveredGroup] = useState<'gamma0' | 'sigma0' | null>(null)
@@ -213,7 +212,8 @@ export function Header({
               onDockTabChange('map')
               onDateViewModeChange(dateViewMode === 't1' ? 't2' : 't1')
             }}
-            title="Alternar escena activa GCOV t1 / t2"
+            disabled={!hasSecondScene}
+            title="Alternar escenas GCOV de la ROI confirmada"
           >
             Escenas GCOV
           </button>
@@ -229,6 +229,7 @@ export function Header({
                   : 'gamma0_HHHH_ml2_dB',
               )
             }}
+            disabled={!hasFirstScene}
             title="Alternar calibración radiométrica RTC γ⁰ / elipsoidal σ⁰"
           >
             Procesamiento SAR
@@ -265,15 +266,13 @@ export function Header({
         <div className="ws-menubar__title">
           <span className="ws-menubar__app-badge">NISAR L2</span>
           <span>
-            {roiLayers ? 'TerraPulse AI — ROI seleccionada · NISAR GCOV' : `TerraPulse AI — Chiapas · ${escena.pila} · ${escena.crid}`}
+            {roiLayers ? 'TerraPulse AI — ROI seleccionada · NISAR GCOV' : 'TerraPulse AI — Delimita y confirma una ROI'}
           </span>
         </div>
 
         <div className="ws-menubar__right">
           <div className="ws-menubar__status">
-            <span>Band L (24 cm · Freq A)</span>
-            <span>|</span>
-            <span>Madurez: {roiLayers ? roiLayers.manifests[0]?.escena.madurez_catalogo ?? 'Pendiente' : escena.madurez}</span>
+            {roiLayers ? <><span>Band L (24 cm · Freq A)</span><span>|</span><span>Madurez: {roiLayers.manifests[0]?.escena.madurez_catalogo ?? 'Pendiente'}</span></> : <span>Sin datos calculados para una ROI</span>}
           </div>
 
           <button
@@ -300,7 +299,8 @@ export function Header({
       </div>
 
       {/* 2. Cinta técnica Ribbon Bar sin controles duplicados */}
-      <div className="ws-ribbon" role="toolbar" aria-label="Cinta de herramientas técnicas">
+      <div className={`ws-ribbon ${isLayerMenuOpen ? 'ws-ribbon--layer-menu-open' : ''}`} role="toolbar" aria-label="Cinta de herramientas técnicas">
+        <div className="ws-ribbon__top-groups">
         {/* Sección 1: Espacio de Trabajo */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
@@ -340,8 +340,6 @@ export function Header({
           <span className="ws-ribbon__label">Espacio de Trabajo</span>
         </div>
 
-        <div className="ws-ribbon__divider" aria-hidden="true" />
-
         {/* Sección 2: Capas GCOV (Frequency A) + Escala de Color */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
@@ -351,6 +349,7 @@ export function Header({
               <button
                 type="button"
                 className={`ws-ribbon__select ws-layer-select-btn ${isLayerMenuOpen ? 'is-active' : ''}`}
+                disabled={!hasFirstScene}
                 onClick={() => {
                   const nextState = !isLayerMenuOpen
                   setIsLayerMenuOpen(nextState)
@@ -369,7 +368,7 @@ export function Header({
               >
                 <Layers size={12} className="ws-layer-select-icon" />
                 <span className="ws-layer-select-val">
-                  {activeLayerOption?.shortLabel ?? 'γ⁰ HH [dB]'}
+                  {hasFirstScene ? activeLayerOption?.shortLabel : 'Sin capa calculada'}
                 </span>
                 <ChevronDown
                   size={11}
@@ -456,10 +455,11 @@ export function Header({
             </div>
 
             <label className="ws-ribbon__inline-field" title="Paleta científica aplicada por LUT sobre el raster en EPSG:3857">
-              <span>Rampa:</span>
+              <span>Paleta de colores:</span>
               <select
                 className="ws-ribbon__select"
                 value={colormapId}
+                disabled={!hasFirstScene}
                 onChange={(e) => onColormapChange(e.target.value as ScientificColormapId)}
                 aria-label="Seleccionar escala científica de color"
               >
@@ -479,6 +479,7 @@ export function Header({
                 max={100}
                 step={1}
                 value={opacity}
+                disabled={!hasFirstScene}
                 onChange={(e) => onOpacityChange(Number(e.target.value))}
                 className="ws-ribbon__range"
                 aria-label="Opacidad de capa SAR en porcentaje"
@@ -487,8 +488,6 @@ export function Header({
           </div>
           <span className="ws-ribbon__label">Capas GCOV (Frequency A · Escala -22 a 0 dB)</span>
         </div>
-
-        <div className="ws-ribbon__divider" aria-hidden="true" />
 
         {/* Sección 3: Comparador Temporal t1/t2 */}
         <div className="ws-ribbon__group">
@@ -500,9 +499,10 @@ export function Header({
                 onDockTabChange('map')
                 onDateViewModeChange('t1')
               }}
-              title={roiLayers ? roiLayers.manifests[0]?.escena.granuleId : escena.t1SceneId}
+              disabled={!hasFirstScene}
+              title={roiLayers?.manifests[0]?.escena.granuleId ?? 'Sin primera escena calculada'}
             >
-              <span>t1: {roiLayers ? roiLayers.manifests[0]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos' : escena.t1}</span>
+              <span>t1: {roiLayers?.manifests[0]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos calculados'}</span>
             </button>
             <button
               type="button"
@@ -511,14 +511,14 @@ export function Header({
                 onDockTabChange('map')
                 onDateViewModeChange('t2')
               }}
-              disabled={Boolean(roiLayers && !roiLayers.manifests[1])}
-              title={roiLayers ? roiLayers.manifests[1]?.escena.granuleId : escena.t2SceneId}
+              disabled={!hasSecondScene}
+              title={roiLayers?.manifests[1]?.escena.granuleId ?? 'Sin segunda escena calculada'}
             >
-              <span>t2: {roiLayers ? roiLayers.manifests[1]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos' : escena.t2}</span>
+              <span>t2: {roiLayers?.manifests[1]?.escena.fecha_inicio.slice(0, 10) ?? 'Sin datos calculados'}</span>
             </button>
             <button
               type="button"
-              disabled={Boolean(roiLayers && !roiLayers.comparable)}
+              disabled={!hasSecondScene || !roiLayers?.comparable}
               className={`ws-ribbon__btn ws-ribbon__btn--swipe ${dateViewMode === 'swipe' ? 'is-active' : ''}`}
               onClick={() => {
                 onDockTabChange('map')
@@ -532,9 +532,9 @@ export function Header({
           </div>
           <span className="ws-ribbon__label">Comparador Temporal t1/t2</span>
         </div>
+        </div>
 
-        <div className="ws-ribbon__divider" aria-hidden="true" />
-
+        <div className="ws-ribbon__bottom-groups">
         {/* Sección 4: Vistas, Dibujo Flotante y Simulación */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
@@ -556,6 +556,7 @@ export function Header({
             <button
               type="button"
               className={`ws-ribbon__btn ws-ribbon__btn--solar ${solar.enabled ? 'is-active' : ''}`}
+              disabled={!hasConfirmedROI}
               onClick={() => {
                 onDockTabChange('map')
                 onSolarChange({ ...solar, enabled: !solar.enabled })
@@ -578,23 +579,10 @@ export function Header({
               <span>Simulador Inundación (DG2)</span>
             </button>
 
-            {onOpenFigures && (
-              <button
-                type="button"
-                className="ws-ribbon__btn ws-ribbon__btn--figures"
-                onClick={onOpenFigures}
-                title="Abrir galería de Figuras Científicas Oficiales de Python (Matplotlib / NISAR QA: Figuras B, C, D, E)"
-              >
-                <Layers size={14} />
-                <span>Figuras Científicas (Backend)</span>
-              </button>
-            )}
 
           </div>
           <span className="ws-ribbon__label">Herramientas y Módulos</span>
         </div>
-
-        <div className="ws-ribbon__divider" aria-hidden="true" />
 
         {/* Sección 5: Acciones de Salida y Captura */}
         <div className="ws-ribbon__group">
@@ -622,6 +610,7 @@ export function Header({
             </button>
           </div>
           <span className="ws-ribbon__label">Captura y Exportación</span>
+        </div>
         </div>
       </div>
     </header>

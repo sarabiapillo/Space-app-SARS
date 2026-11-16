@@ -22,26 +22,28 @@ class RoiPreparationError(ValueError):
 def validate_roi(value):
     from shapely.geometry import shape
     try:
-        if not isinstance(value, dict) or value.get('type') != 'Polygon':
+        if not isinstance(value, dict) or value.get('type') not in ('Polygon', 'MultiPolygon'):
             raise ValueError()
-        rings = value['coordinates']
-        if len(rings) != 1 or not 4 <= len(rings[0]) <= 100:
+        geometry = shape(value)
+        polygons = list(geometry.geoms) if geometry.geom_type == 'MultiPolygon' else [geometry]
+        if not polygons or len(polygons) > 100:
             raise ValueError()
-        for p in rings[0]:
-            if len(p) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in p):
+        for polygon in polygons:
+            if len(polygon.exterior.coords) > 1000 or any(len(ring.coords) > 1000 for ring in polygon.interiors):
                 raise ValueError()
-            if not -180 <= p[0] <= 180 or not -85 <= p[1] <= 85:
-                raise ValueError()
-        if rings[0][0] != rings[0][-1]:
+            for ring in [polygon.exterior, *polygon.interiors]:
+                for p in ring.coords:
+                    if len(p) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in p):
+                        raise ValueError()
+                    if not -180 <= p[0] <= 180 or not -85 <= p[1] <= 85:
+                        raise ValueError()
+        if geometry.is_empty or not geometry.is_valid or geometry.area <= 0:
             raise ValueError()
-        poly = shape(value)
-        if poly.is_empty or not poly.is_valid or poly.area <= 0:
-            raise ValueError()
-        west, south, east, north = poly.bounds
+        west, south, east, north = geometry.bounds
         # Límite sobre la caja leída, no solo sobre el área del polígono.
         if east - west > 0.6 or north - south > 0.6:
             raise ValueError('La ROI admite como máximo 0.6 grados por lado.')
-        return poly.wkt
+        return geometry.wkt
     except (KeyError, TypeError, IndexError, OverflowError):
         raise ValueError('Geometría Polygon inválida en EPSG:4326.') from None
     except ValueError as exc:

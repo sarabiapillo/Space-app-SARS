@@ -4,26 +4,22 @@ import { Sidebar } from './components/Sidebar'
 import { MapCanvas } from './components/MapCanvas'
 import { DuplicateMapModal } from './components/DuplicateMapModal'
 import { TeamLandingPage } from './components/TeamLandingPage'
+import { Toast, type ToastKind, type ToastMessage } from './components/Toast'
 import { useSavedMaps } from './hooks/useSavedMaps'
 import { useRoiLayers } from './hooks/useRoiLayers'
 import {
   DEFAULT_FLOOD,
   DEFAULT_SOLAR,
-  ESCENA_CHIAPAS,
   MAPA_GENERAL,
-  RAW_SCENE_IDS,
-  checkPairCompat,
   type CenterDockTab,
   type ExploreDateViewMode,
   type ExploreLayerId,
-  type GcovStackSpec,
 } from './mocks/initialWorkspaces'
 import type {
   Carpeta,
   DockWindow,
   DockWindowKind,
   DrawTool,
-  EscenaNisar,
   FloodSimulationState,
   LngLat,
   MapAnnotation,
@@ -33,8 +29,8 @@ import type {
   WorkspaceMap,
 } from './types/workspace'
 import { type ScientificColormapId } from './utils/colormapLut'
-import { ScientificFiguresViewer } from './components/ScientificFiguresViewer'
 import { newId } from './utils/id'
+import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
 
 function baseName(nombre: string): string {
   return nombre.replace(/^(Copia \d+|Mapa General)\s*-\s*/i, '').trim() || nombre
@@ -47,10 +43,18 @@ function App() {
   const [generalOpacity, setGeneralOpacity] = useState<number>(MAPA_GENERAL.opacidadSar)
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
   const [generalFlood, setGeneralFlood] = useState<FloodSimulationState>(DEFAULT_FLOOD)
-  const [generalEscena, setGeneralEscena] = useState<EscenaNisar>(ESCENA_CHIAPAS)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
-  const [figuresOpen, setFiguresOpen] = useState(false)
+  const [locationPreview, setLocationPreview] = useState<AdministrativeGeometry | null>(null)
+  const [gcovFootprint, setGcovFootprint] = useState<unknown | null>(null)
+  const [toast, setToast] = useState<ToastMessage | null>(null)
+  const nextToastId = useRef(0)
+  const notify = useCallback((kind: ToastKind, text: string) => {
+    setToast({ id: ++nextToastId.current, kind, text })
+  }, [])
+  const closeToast = useCallback((id: number) => {
+    setToast(current => current?.id === id ? null : current)
+  }, [])
 
   // Controles de estación de trabajo científica compartidos entre Ribbon Bar y Lienzo
   const [exploreLayerId, setExploreLayerId] = useState<ExploreLayerId>('gamma0_HHHH_ml2_dB')
@@ -73,10 +77,16 @@ function App() {
         opacidadSar: generalOpacity,
         solar: generalSolar,
         flood: generalFlood,
-        escena: generalEscena,
       }
 
-  const roiLayers = useRoiLayers(current.croppedRegion, current.id)
+  const manualRoi = current.croppedRegion?.length
+    ? { type: 'Polygon' as const, coordinates: [[...current.croppedRegion, current.croppedRegion[0]]] }
+    : null
+  const confirmedROI = current.effectiveRoi ?? manualRoi
+  const analysisRegionForJob = current.effectiveRoi ?? (current.croppedRegion?.length
+    ? { type: 'Polygon' as const, coordinates: [[...current.croppedRegion, current.croppedRegion[0]]] }
+    : null)
+  const roiLayers = useRoiLayers(analysisRegionForJob, current.id)
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 
   // Ventanas acoplables del área central (mapa normal y agua/DG2): solo cambia la vista activa,
@@ -143,8 +153,18 @@ function App() {
   }
 
   const handleSelectMap = (id: string) => {
+    setLocationPreview(null)
+    setGcovFootprint(null)
     setActiveCopyId(id)
     setViewMode('editado')
+  }
+
+  const handleViewModeChange = (mode: ViewMode) => {
+    if (mode !== viewMode) {
+      setLocationPreview(null)
+      setGcovFootprint(null)
+    }
+    setViewMode(mode)
   }
 
   const handleRenameMap = (id: string, nombre: string) => {
@@ -174,8 +194,21 @@ function App() {
 
   const handleCropRegionChange = (polygon: LngLat[] | null) => {
     if (!activeCopy) return
+    const changed = JSON.stringify(activeCopy.croppedRegion ?? null) !== JSON.stringify(polygon ?? null) || Boolean(activeCopy.effectiveRoi)
+    if (changed) {
+      setGcovFootprint(null)
+      setLocationPreview(null)
+    }
+    const previousFlood = activeCopy.flood
     updateMap(activeCopy.id, {
       croppedRegion: polygon,
+      effectiveRoi: null,
+      effectiveRoiMetadata: null,
+      ...(changed ? { solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null } } : {}),
+      ...(changed && previousFlood ? {
+        flood: { ...previousFlood, enabled: false, rasterUrl: null, rasterBounds: null,
+          stats: null, charts: null, resultRoiKey: undefined, compareMode: false },
+      } : {}),
       fechaModificacion: new Date().toISOString(),
     })
   }
@@ -199,56 +232,6 @@ function App() {
       })
     } else {
       setGeneralFlood(nextFlood)
-    }
-  }
-
-  const handleSelectStack = (stack: GcovStackSpec) => {
-    const nextEscena: EscenaNisar = {
-      ...current.escena,
-      granuleId: stack.t1SceneId,
-      t1SceneId: stack.t1SceneId,
-      t2SceneId: stack.t2SceneId,
-      pila: stack.id,
-      direccion: stack.direction,
-      t1: stack.defaultT1,
-      t2: stack.defaultT2,
-      crid: stack.crid,
-      madurez: stack.maturity,
-      coberturaRoiPct: stack.roiValidPctLabel,
-      resolucionM: stack.gridResolutionLabel,
-    }
-    if (isEditing && activeCopy) {
-      updateMap(activeCopy.id, {
-        escena: nextEscena,
-        fechaModificacion: new Date().toISOString(),
-      })
-    } else {
-      setGeneralEscena(nextEscena)
-    }
-  }
-
-  const handleChangePair = (t1: string, t2: string) => {
-    const compat = checkPairCompat(t1, t2, current.escena.pila)
-    // Si cruza 2026-10-23 (P05023 vs P05036) o t1 === t2, ComparadorFeature muestra el bloqueo visual y no altera el par válido del mapa
-    if (!compat.comparable) return
-
-    const nextEscena: EscenaNisar = {
-      ...current.escena,
-      granuleId: compat.t1SceneId,
-      t1SceneId: compat.t1SceneId,
-      t2SceneId: compat.t2SceneId,
-      t1,
-      t2,
-      crid: compat.cridT1,
-      madurez: compat.maturityT1,
-    }
-    if (isEditing && activeCopy) {
-      updateMap(activeCopy.id, {
-        escena: nextEscena,
-        fechaModificacion: new Date().toISOString(),
-      })
-    } else {
-      setGeneralEscena(nextEscena)
     }
   }
 
@@ -296,18 +279,18 @@ function App() {
   return (
     <div className="app">
       <Header
-        roiLayers={current.croppedRegion ? roiLayers : undefined}
+        roiLayers={confirmedROI ? roiLayers : undefined}
         viewMode={isEditing ? 'editado' : 'general'}
-        onViewModeChange={setViewMode}
+        onViewModeChange={handleViewModeChange}
         canShowEdited={activeCopy !== null}
+        hasConfirmedROI={Boolean(current.effectiveRoi || current.croppedRegion)}
         onDuplicate={() => setDuplicating(true)}
         onExportJson={handleExportJson}
-        escena={current.escena}
         opacity={current.opacidadSar}
         onOpacityChange={handleOpacityChange}
         exploreLayerId={exploreLayerId}
         onExploreLayerChange={setExploreLayerId}
-        dateViewMode={current.croppedRegion && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
+        dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
         onDateViewModeChange={setDateViewMode}
         colormapId={colormapId}
         onColormapChange={setColormapId}
@@ -320,23 +303,46 @@ function App() {
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
         onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
-        onOpenFigures={() => { if (!current.croppedRegion) setFiguresOpen(true) }}
         onOpenTeamPage={() => setTeamPageOpen(true)}
       />
 
       <div className="app__body">
         <Sidebar
-          roiLayers={current.croppedRegion ? roiLayers : undefined}
+          roiLayers={confirmedROI ? roiLayers : undefined}
           maps={maps}
           activeMapId={isEditing && activeCopy ? activeCopy.id : null}
-          escena={current.escena}
           onSelectMap={handleSelectMap}
           onRenameMap={handleRenameMap}
           onDeleteMap={handleDeleteMap}
           opacity={current.opacidadSar}
           onOpacityChange={handleOpacityChange}
-          onSelectStack={handleSelectStack}
-          onChangePair={handleChangePair}
+          locationPreview={locationPreview}
+          confirmedROI={confirmedROI}
+          onNotify={notify}
+          onLocationPreview={setLocationPreview}
+          onGcovFootprint={setGcovFootprint}
+          onConfirmLocationROI={(geometry, metadata) => {
+            if (!activeCopy) { notify('error', 'Duplica o selecciona un mapa editable antes de guardar una ROI.'); return false }
+            setGcovFootprint(null)
+            const isOriginalAdmin = metadata.generation === 'administrative_original' || metadata.generation === 'administrative_bbox'
+            const cropRing = isOriginalAdmin ? geometryToOuterRing(geometry) : automaticCropRing(geometry)
+            updateMap(activeCopy.id, {
+              effectiveRoi: geometry, effectiveRoiMetadata: metadata,
+              croppedRegion: cropRing,
+              solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null },
+              ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: false, rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
+              fechaModificacion: new Date().toISOString(),
+            })
+            notify('success', 'ROI confirmada y guardada en el mapa editable.')
+            return true
+          }}
+          onDrawLocationROI={() => {
+            notify('error', activeCopy
+              ? 'Dibuja una ROI no mayor de 0.6° por lado con la herramienta Recortar ROI; no se asumirá ni truncará un rectángulo.'
+              : 'Duplica un mapa para habilitar herramientas. Después dibuja una ROI no mayor de 0.6° por lado; no se asumirá un rectángulo.')
+            if (activeCopy) setViewMode('editado')
+            setActiveTool('poligono')
+          }}
         />
 
         <MapCanvas
@@ -349,10 +355,11 @@ function App() {
           escena={current.escena}
           annotations={current.annotations}
           croppedRegion={current.croppedRegion}
+          effectiveRoi={current.effectiveRoi ?? null}
           solar={current.solar}
           flood={current.flood || generalFlood}
           exploreLayerId={exploreLayerId}
-          dateViewMode={current.croppedRegion && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
+          dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
           colormapId={colormapId}
           activeTool={activeTool}
           onSelectTool={setActiveTool}
@@ -371,6 +378,9 @@ function App() {
           isCaptureMode={isCaptureMode}
           onStartCaptureMode={() => setIsCaptureMode(true)}
           onCancelCaptureMode={() => setIsCaptureMode(false)}
+          locationPreview={locationPreview ?? current.effectiveRoi ?? null}
+          gcovFootprint={gcovFootprint}
+          onNotify={notify}
         />
       </div>
 
@@ -385,18 +395,8 @@ function App() {
       )}
 
       {teamPageOpen && <TeamLandingPage onClose={() => setTeamPageOpen(false)} />}
+      <Toast message={toast} onClose={closeToast} />
 
-      {figuresOpen && (
-        <div className="ws-sci-modal-backdrop" onClick={() => setFiguresOpen(false)}>
-          <div className="ws-sci-modal ws-sci-modal--standalone" onClick={(e) => e.stopPropagation()}>
-            <ScientificFiguresViewer
-              sceneId={current.escena.granuleId || RAW_SCENE_IDS.T62_T2_20261016}
-              dateLabel={current.escena.t2 ? `${current.escena.t2} (t2)` : '2026-10-16 (t2)'}
-              onClose={() => setFiguresOpen(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

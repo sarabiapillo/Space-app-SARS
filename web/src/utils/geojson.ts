@@ -1,4 +1,5 @@
 import type { LngLat, MapAnnotation } from '../types/workspace'
+import type { RoiGeometry } from './roi'
 
 export interface GeoJSONFeature<G = unknown, P = Record<string, unknown>> {
   type: 'Feature'
@@ -217,6 +218,18 @@ export function buildInverseCropMaskGeoJSON(
       },
     ],
   }
+}
+
+/** Máscara visual del GeoJSON efectivo, sin perder islas ni huecos administrativos. */
+export function buildInverseEffectiveRoiMaskGeoJSON(roi: RoiGeometry): GeoJSONFeatureCollection {
+  const polygons = roi.type === 'Polygon' ? [roi.coordinates] : roi.coordinates
+  const exteriors = polygons.map(polygon => polygon[0])
+  const holes = polygons.flatMap(polygon => polygon.slice(1))
+  return { type: 'FeatureCollection', features: [
+    { type: 'Feature', properties: { role: 'mask' }, geometry: { type: 'Polygon', coordinates: [WORLD_EXTERIOR_RING, ...exteriors] } },
+    ...holes.map(ring => ({ type: 'Feature' as const, properties: { role: 'mask' }, geometry: { type: 'Polygon' as const, coordinates: [ring] } })),
+    ...polygons.flatMap(polygon => polygon.map(ring => ({ type: 'Feature' as const, properties: { role: 'border' }, geometry: { type: 'LineString' as const, coordinates: ring } }))),
+  ] }
 }
 
 /** Calcula bounding box `[minLng, minLat, maxLng, maxLat]` y centroide de una lista de puntos. */

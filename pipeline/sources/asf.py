@@ -42,6 +42,7 @@ def product_to_scene(product, maturity: str | None) -> SceneMeta:
         product_version=version[0] if version else None,
         url=p.get("url"),
         size_bytes=size,
+        footprint=getattr(product, "geometry", None),
         extra={"pge_version": p.get("pgeVersion"), "processing_date": p.get("processingDate")},
     )
 
@@ -73,7 +74,8 @@ class ASFSource(DataSource):
                 maturity_of[prod.properties["sceneName"]] = level
 
         results = asf.search(**base)
-        scenes = [product_to_scene(r, maturity_of.get(r.properties["sceneName"])) for r in results]
+        scenes = [product_to_scene(r, maturity_of.get(r.properties["sceneName"])) for r in results
+                  if r.properties.get("processingLevel") == "GCOV"]
         return sorted(scenes, key=lambda s: s.start_time)
 
     def fetch_subset(self, scene, roi_wkt, layer, out_dir: Path) -> Path:
