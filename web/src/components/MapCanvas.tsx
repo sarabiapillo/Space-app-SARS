@@ -47,7 +47,7 @@ import {
   type ExploreDateViewMode,
   type ExploreLayerId,
 } from '../mocks/initialWorkspaces'
-import { verifyExploreScaleMatch } from '../api/client'
+import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
 import { useTranslation } from '../i18n/useTranslation.ts'
 import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
@@ -84,6 +84,7 @@ import { newId } from '../utils/id'
 import type { ToastKind } from './Toast'
 import { readyRoiToastKey } from '../utils/toastTimer'
 import type { RoiGeometry } from '../utils/roi'
+import type { CatalogRoiPreset } from '../utils/roiCatalog'
 
 interface MapCanvasProps {
   roiLayers: ReturnType<typeof useRoiLayers>
@@ -122,6 +123,7 @@ interface MapCanvasProps {
   locationPreview?: AdministrativeGeometry | null
   gcovFootprint?: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
 }
 
 interface ViewportMetrics {
@@ -281,6 +283,7 @@ export function MapCanvas({
   locationPreview = null,
   gcovFootprint = null,
   onNotify,
+  onSelectPresetROI,
 }: MapCanvasProps) {
   const { t, localizeText, language, locale } = useTranslation()
   const displayDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -354,8 +357,33 @@ export function MapCanvas({
   const [swipePct, setSwipePct] = useState<number>(50)
   const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
   const [isDraggingFloodSwipe, setIsDraggingFloodSwipe] = useState(false)
-  const manifestT1 = hasAnalysisRoi ? roiLayers.manifests[0] ?? null : null
-  const manifestT2 = hasAnalysisRoi ? roiLayers.manifests[1] ?? null : null
+  const [sceneManifestT1, setSceneManifestT1] = useState<ExploreWebManifest | null>(null)
+  const [sceneManifestT2, setSceneManifestT2] = useState<ExploreWebManifest | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const t1Id = escena.t1SceneId || escena.granuleId
+    const t2Id = escena.t2SceneId
+    Promise.all([
+      t1Id ? fetchExploreManifest(t1Id) : Promise.resolve(null),
+      t2Id ? fetchExploreManifest(t2Id) : Promise.resolve(null),
+    ]).then(([m1, m2]) => {
+      if (cancelled) return
+      setSceneManifestT1(m1)
+      setSceneManifestT2(m2)
+    }).catch(() => {
+      if (!cancelled) {
+        setSceneManifestT1(null)
+        setSceneManifestT2(null)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [escena.granuleId, escena.t1SceneId, escena.t2SceneId])
+
+  const manifestT1 = (roiReady && roiLayers.manifests[0]) ? roiLayers.manifests[0] : sceneManifestT1
+  const manifestT2 = (roiReady && roiLayers.manifests[1]) ? roiLayers.manifests[1] : sceneManifestT2
   const [geometryInput, setGeometryInput] = useState('')
   const [geometryError, setGeometryError] = useState<string | null>(null)
   const [colorizedT1Url, setColorizedT1Url] = useState<string>('')
@@ -937,9 +965,9 @@ export function MapCanvas({
     EXPLORE_LAYER_OPTIONS.find((opt) => opt.id === exploreLayerId) ?? EXPLORE_LAYER_OPTIONS[0]
 
   const layerT1 =
-    manifestT1?.capas.find((c) => c.id === exploreLayerId) ?? (hasAnalysisRoi ? null : manifestT1?.capas[0]) ?? null
+    manifestT1?.capas.find((c) => c.id === exploreLayerId) ?? manifestT1?.capas[0] ?? null
   const layerT2 =
-    manifestT2?.capas.find((c) => c.id === exploreLayerId) ?? (hasAnalysisRoi ? null : manifestT2?.capas[0]) ?? null
+    manifestT2?.capas.find((c) => c.id === exploreLayerId) ?? manifestT2?.capas[0] ?? null
   const layerKey = `${layerT1?.png}|${layerT2?.png}|${colormapId}`
   const imagesReady = colorizedKey === layerKey
 
@@ -2996,6 +3024,7 @@ export function MapCanvas({
             onFloodChange={onFloodChange || (() => {})}
             croppedRegion={croppedRegion}
             onFlyToZone={handleFlyToZone}
+            onSelectPresetROI={onSelectPresetROI}
             onClose={() => {
               const mapTab = dockWindows.find((w) => w.kind === 'map')
               if (mapTab) onActivateDockWindow(mapTab.id)
@@ -3012,6 +3041,7 @@ export function MapCanvas({
             center={view.centro}
             croppedRegion={croppedRegion}
             onFlyToZone={handleFlyToZone}
+            onSelectPresetROI={onSelectPresetROI}
             roiLayers={roiLayers}
           />
         )}

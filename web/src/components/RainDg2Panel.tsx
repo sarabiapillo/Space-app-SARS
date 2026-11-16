@@ -22,12 +22,14 @@ import { simulateFloodScenario } from '../api/client'
 import { floodRoiPolygon } from '../utils/floodRoi'
 import { FloodCharts } from './FloodCharts'
 import { useTranslation } from '../i18n/useTranslation'
+import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
 
 interface RainDg2PanelProps {
   flood: FloodSimulationState
   onFloodChange: (next: FloodSimulationState) => void
   croppedRegion?: LngLat[] | null
   onFlyToZone?: (center: LngLat, zoom?: number) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   onClose?: () => void
 }
 
@@ -36,6 +38,7 @@ export function RainDg2Panel({
   onFloodChange,
   croppedRegion,
   onFlyToZone,
+  onSelectPresetROI,
   onClose,
 }: RainDg2PanelProps) {
   const { t, localizeText, locale } = useTranslation()
@@ -169,8 +172,39 @@ export function RainDg2Panel({
             <div className="solar-zone-label"><MapPin size={12} /><span>{t('Región de Interés (ROI)', 'Region of interest (ROI)')}</span></div>
             <div className="solar-zone-info">
               {floodRoiPolygon(croppedRegion)
-                ? t('ROI dibujada y válida para enviar al servicio.', 'Drawn ROI is valid for submission to the service.')
-                : t('Dibuja y aplica una ROI en el mapa para habilitar la simulación.', 'Draw and apply an ROI on the map to enable simulation.')}
+                ? t('✓ ROI confirmada en el mapa. Lista para simulación hidrológica.', '✓ ROI confirmed on map. Ready for hydrological simulation.')
+                : t('Delimita una ROI o elige una zona precargada para simular:', 'Define an ROI or choose a preloaded zone to simulate:')}
+            </div>
+            <div style={{ marginTop: '8px' }}>
+              <select
+                className="ws-rain-select"
+                style={{ width: '100%', fontSize: '12px', padding: '5px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#f8fafc' }}
+                defaultValue=""
+                onChange={(e) => {
+                  const preset = PRESET_ROI_CATALOG.find((p) => p.id === e.target.value)
+                  if (preset) {
+                    onSelectPresetROI?.(preset)
+                    onFlyToZone?.(preset.center, preset.zoom)
+                  }
+                }}
+              >
+                <option value="">{t('— Elegir ROI precargada (Guerrero, Chiapas, Oaxaca) —', '— Choose preloaded ROI (Guerrero, Chiapas, Oaxaca) —')}</option>
+                <optgroup label="🇲🇽 Estado de Guerrero">
+                  {PRESET_ROI_CATALOG.filter((p) => p.state === 'Guerrero').map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🇲🇽 Estado de Chiapas">
+                  {PRESET_ROI_CATALOG.filter((p) => p.state === 'Chiapas').map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🇲🇽 Estado de Oaxaca">
+                  {PRESET_ROI_CATALOG.filter((p) => p.state === 'Oaxaca').map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+              </select>
             </div>
           </div>
 

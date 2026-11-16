@@ -28,6 +28,8 @@ import {
   type HeatmapScaleMode,
 } from '../utils/solarHeatmap'
 
+import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
+
 const fmtW = (v: number) => (Number.isFinite(v) ? `${v.toFixed(0)} W/m²` : '—')
 
 interface SolarPanelProps {
@@ -37,6 +39,7 @@ interface SolarPanelProps {
   center?: LngLat
   croppedRegion?: LngLat[] | null
   onFlyToZone?: (center: LngLat, zoom?: number) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   /** Capas y gráficas NISAR de la ROI dibujada (se generan solas con /api/roi-jobs). */
   roiLayers?: RoiLayersState
 }
@@ -67,6 +70,7 @@ export function RightPanel({
   onClose,
   croppedRegion,
   onFlyToZone,
+  onSelectPresetROI,
   roiLayers,
 }: SolarPanelProps) {
   const { t, localizeText, locale } = useTranslation()
@@ -224,7 +228,42 @@ export function RightPanel({
       </div>
 
       <div className="solar-zone-group">
-        <p role="status">{croppedRegion?.length ? t('Se calculará únicamente para la ROI delimitada y confirmada en este mapa.', 'Only the ROI defined and confirmed on this map will be calculated.') : t('Delimitá y confirmá una ROI antes de calcular la simulación.', 'Define and confirm an ROI before running the simulation.')}</p>
+        <p role="status" style={{ margin: '0 0 6px 0', fontSize: '11px', color: croppedRegion?.length ? '#166534' : '#64748b' }}>
+          {croppedRegion?.length
+            ? t('✓ Se calculará para la ROI delimitada y confirmada en este mapa.', '✓ Will be calculated for the confirmed ROI on this map.')
+            : t('Delimita una ROI o elige una zona precargada para calcular:', 'Define an ROI or choose a preloaded zone to calculate:')}
+        </p>
+        <div>
+          <select
+            className="ws-rain-select"
+            style={{ width: '100%', fontSize: '12px', padding: '5px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#f8fafc' }}
+            defaultValue=""
+            onChange={(e) => {
+              const preset = PRESET_ROI_CATALOG.find((p) => p.id === e.target.value)
+              if (preset) {
+                onSelectPresetROI?.(preset)
+                onFlyToZone?.(preset.center, preset.zoom)
+              }
+            }}
+          >
+            <option value="">{t('— Elegir ROI precargada (Guerrero, Chiapas, Oaxaca) —', '— Choose preloaded ROI (Guerrero, Chiapas, Oaxaca) —')}</option>
+            <optgroup label="🇲🇽 Estado de Guerrero">
+              {PRESET_ROI_CATALOG.filter((p) => p.state === 'Guerrero').map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </optgroup>
+            <optgroup label="🇲🇽 Estado de Chiapas">
+              {PRESET_ROI_CATALOG.filter((p) => p.state === 'Chiapas').map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </optgroup>
+            <optgroup label="🇲🇽 Estado de Oaxaca">
+              {PRESET_ROI_CATALOG.filter((p) => p.state === 'Oaxaca').map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </optgroup>
+          </select>
+        </div>
       </div>
 
       {/* Recuadro técnico con arco Este a Oeste y esfera solar arrastrable */}

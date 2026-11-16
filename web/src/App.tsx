@@ -32,6 +32,7 @@ import type {
 import { type ScientificColormapId } from './utils/colormapLut'
 import { newId } from './utils/id'
 import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
+import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, type CatalogRoiPreset } from './utils/roiCatalog'
 
 function baseName(nombre: string): string {
   return nombre.replace(/^(Copia \d+|Mapa General)\s*-\s*/i, '').trim() || nombre
@@ -194,6 +195,60 @@ function App() {
     })
   }
 
+  const handleSelectPresetROI = useCallback((preset: CatalogRoiPreset) => {
+    const polygon = presetToRoiPolygon(preset)
+    const cropRing = presetToCropRing(preset)
+    const metadata = presetToEffectiveMetadata(preset)
+
+    setGcovFootprint(null)
+    setLocationPreview(null)
+
+    if (activeCopy) {
+      updateMap(activeCopy.id, {
+        centro: preset.center,
+        zoom: preset.zoom,
+        effectiveRoi: polygon,
+        effectiveRoiMetadata: metadata,
+        croppedRegion: cropRing,
+        solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null },
+        ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: false, rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
+        fechaModificacion: new Date().toISOString(),
+      })
+    } else {
+      const newCopy: WorkspaceMap = {
+        ...current,
+        id: newId(),
+        nombre: `Análisis - ${preset.shortLabel}`,
+        carpeta: 'Mis Análisis',
+        esEditable: true,
+        fechaModificacion: new Date().toISOString(),
+        centro: preset.center,
+        zoom: preset.zoom,
+        escena: { ...current.escena },
+        annotations: [],
+        croppedRegion: cropRing,
+        effectiveRoi: polygon,
+        effectiveRoiMetadata: metadata,
+        solar: { ...DEFAULT_SOLAR, enabled: false },
+        flood: { ...DEFAULT_FLOOD, enabled: false },
+      }
+      addMap(newCopy)
+      setActiveCopyId(newCopy.id)
+      setViewMode('editado')
+    }
+
+    cameraRef.current = { centro: preset.center, zoom: preset.zoom }
+    notify('success', t(`ROI activada: ${preset.name} (${preset.state}).`, `ROI activated: ${preset.name} (${preset.state}).`))
+  }, [activeCopy, current.escena, updateMap, addMap, notify, t])
+
+  const handleOpenSimulation = useCallback((mode: 'flood' | 'solar') => {
+    if (mode === 'flood') {
+      handleDockTabChange('rain-dg2')
+    } else {
+      handleSolarChange({ ...current.solar, enabled: true })
+    }
+  }, [handleDockTabChange, current.solar])
+
   const handleCropRegionChange = (polygon: LngLat[] | null) => {
     if (!activeCopy) return
     const changed = JSON.stringify(activeCopy.croppedRegion ?? null) !== JSON.stringify(polygon ?? null) || Boolean(activeCopy.effectiveRoi)
@@ -323,11 +378,32 @@ function App() {
           onNotify={notify}
           onLocationPreview={setLocationPreview}
           onGcovFootprint={setGcovFootprint}
+          onSelectPresetROI={handleSelectPresetROI}
+          onOpenSimulation={handleOpenSimulation}
           onConfirmLocationROI={(geometry, metadata) => {
-            if (!activeCopy) { notify('error', 'Duplica o selecciona un mapa editable antes de guardar una ROI.'); return false }
             setGcovFootprint(null)
             const isOriginalAdmin = metadata.generation === 'administrative_original' || metadata.generation === 'administrative_bbox'
             const cropRing = isOriginalAdmin ? geometryToOuterRing(geometry) : automaticCropRing(geometry)
+            if (!activeCopy) {
+              const newCopy: WorkspaceMap = {
+                ...current,
+                id: newId(),
+                nombre: `Análisis - ${metadata.name || 'ROI'}`,
+                carpeta: 'Mis Análisis',
+                esEditable: true,
+                fechaModificacion: new Date().toISOString(),
+                croppedRegion: cropRing,
+                effectiveRoi: geometry,
+                effectiveRoiMetadata: metadata,
+                solar: { ...DEFAULT_SOLAR, enabled: false },
+                flood: { ...DEFAULT_FLOOD, enabled: false },
+              }
+              addMap(newCopy)
+              setActiveCopyId(newCopy.id)
+              setViewMode('editado')
+              notify('success', t('Mapa de análisis creado y ROI confirmada.', 'Analysis map created and ROI confirmed.'))
+              return true
+            }
             updateMap(activeCopy.id, {
               effectiveRoi: geometry, effectiveRoiMetadata: metadata,
               croppedRegion: cropRing,
@@ -383,6 +459,7 @@ function App() {
           locationPreview={locationPreview ?? current.effectiveRoi ?? null}
           gcovFootprint={gcovFootprint}
           onNotify={notify}
+          onSelectPresetROI={handleSelectPresetROI}
         />
       </div>
 

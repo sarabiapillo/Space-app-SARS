@@ -27,6 +27,8 @@ import { formatRelative } from '../utils/time'
 import { useTranslation } from '../i18n/useTranslation'
 import { LocationSearch } from './LocationSearch'
 import { GcovCatalog } from './GcovCatalog'
+import { RoiCatalogSection } from './RoiCatalogSection'
+import type { CatalogRoiPreset } from '../utils/roiCatalog'
 import type { AdministrativeGeometry, EffectiveRoiMetadata, RoiGeometry } from '../utils/roi'
 import type { ToastKind } from './Toast'
 
@@ -47,6 +49,8 @@ interface SidebarProps {
   onGcovFootprint: (feature: unknown | null) => void
   confirmedROI: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onOpenSimulation?: (mode: 'flood' | 'solar') => void
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 360
@@ -83,6 +87,7 @@ export function Sidebar({
   onRenameMap,
   onDeleteMap,
   onLocationPreview, onConfirmLocationROI, onDrawLocationROI, onGcovFootprint, confirmedROI, onNotify,
+  onSelectPresetROI, onOpenSimulation,
 }: SidebarProps) {
   const { t, localizeText } = useTranslation()
   const [gcovStart, setGcovStart] = useState('')
@@ -93,13 +98,15 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [openNodes, setOpenNodes] = useState<{
-    savedMaps: boolean
+    roiCatalog: boolean
     locationSearch: boolean
     gcovCatalog: boolean
+    savedMaps: boolean
   }>({
+    roiCatalog: true,
+    locationSearch: false,
+    gcovCatalog: false,
     savedMaps: true,
-    locationSearch: true,
-    gcovCatalog: true,
   })
   const now = useNow(30_000)
 
@@ -204,6 +211,23 @@ export function Sidebar({
         <div className="tree-root-label">
           <span className="tree-root-label__icon">▣</span>
           <span>{roiLayers ? t('ROI del usuario · NISAR GCOV', 'User-defined ROI · NISAR GCOV') : t('Sin ROI confirmada', 'No confirmed ROI')}</span>
+        </div>
+
+        <div className="tree-node">
+          <button type="button" className="tree-node__header" onClick={() => toggleNode('roiCatalog')} aria-expanded={openNodes.roiCatalog}>
+            <span className="tree-node__caret">{openNodes.roiCatalog ? '▾' : '▸'}</span>
+            <span className="tree-node__title">
+              {t('Catálogo de ROIs (Guerrero, Chiapas, Oaxaca)', 'ROI Catalog (Guerrero, Chiapas, Oaxaca)')}
+            </span>
+          </button>
+          {openNodes.roiCatalog && (
+            <div className="tree-node__body">
+              <RoiCatalogSection
+                onSelectPreset={(preset) => onSelectPresetROI?.(preset)}
+                onOpenSimulation={onOpenSimulation}
+              />
+            </div>
+          )}
         </div>
 
         <div className="tree-node">

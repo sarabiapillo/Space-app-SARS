@@ -5043,3 +5043,326 @@ button:disabled {
 .app-toast--info { background: #eff6ff; border-color: #93c5fd; color: #1e3a5f; }
 .app-toast button { flex-shrink: 0; background: none; border: none; padding: 0; color: inherit; cursor: pointer; }
 .app-toast button:hover { opacity: 0.65; }
+
+/* ==========================================================================
+   Catálogo de ROIs por Estado y País (Guerrero, Chiapas, Oaxaca)
+   ========================================================================== */
+.roi-catalog-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 10px 0;
+  width: 100%;
+}
+
+.roi-catalog-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.roi-catalog-search__icon {
+  position: absolute;
+  left: 9px;
+  color: var(--color-text-muted, #64748b);
+  pointer-events: none;
+}
+
+.roi-catalog-search__input {
+  width: 100%;
+  height: 30px;
+  padding: 4px 26px 4px 28px;
+  font-size: 11px;
+  border: 1px solid var(--color-border, #cbd5e1);
+  border-radius: 4px;
+  background: var(--color-panel, #ffffff);
+  color: var(--color-text, #1e293b);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.roi-catalog-search__input:focus {
+  border-color: var(--color-primary, #0284c7);
+  box-shadow: 0 0 0 1px var(--color-primary, #0284c7);
+}
+
+.roi-catalog-search__clear {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-text-muted, #94a3b8);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.roi-catalog-search__clear:hover {
+  color: var(--color-text, #0f172a);
+}
+
+.roi-catalog-results-header {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--color-text-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.roi-catalog-empty {
+  padding: 12px;
+  font-size: 11px;
+  color: var(--color-text-muted, #64748b);
+  text-align: center;
+  font-style: italic;
+}
+
+.roi-catalog-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.roi-country-group {
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 5px;
+  background: var(--color-panel, #ffffff);
+  overflow: hidden;
+}
+
+.roi-country-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-text, #0f172a);
+}
+
+.roi-country-flag {
+  font-size: 14px;
+}
+
+.roi-country-states {
+  display: flex;
+  flex-direction: column;
+  divide-y: 1px solid #f1f5f9;
+}
+
+.roi-state-group {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.roi-state-group:last-child {
+  border-bottom: none;
+}
+
+.roi-state-group.is-highlighted-state {
+  background: #f0fdf4;
+}
+
+.roi-state-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 11px;
+  color: var(--color-text, #1e293b);
+  transition: background 0.15s ease;
+}
+
+.roi-state-header:hover {
+  background: #f1f5f9;
+}
+
+.roi-state-group.is-highlighted-state .roi-state-header:hover {
+  background: #dcfce7;
+}
+
+.roi-state-header__title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.roi-state-count {
+  font-size: 10px;
+  color: var(--color-text-muted, #64748b);
+  font-family: var(--font-mono, monospace);
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.roi-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+}
+
+.roi-badge--gold {
+  background: #fef08a;
+  color: #854d0e;
+  border: 1px solid #fde047;
+}
+
+.roi-badge--category {
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 9px;
+  border: 1px solid #bae6fd;
+}
+
+.roi-state-cards,
+.roi-catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px 8px;
+  background: rgba(248, 250, 252, 0.7);
+}
+
+.roi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid var(--color-border, #cbd5e1);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s ease;
+}
+
+.roi-card:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+
+.roi-card.is-active {
+  border-color: #0284c7;
+  background: #f0f9ff;
+  box-shadow: 0 0 0 1px #0284c7;
+}
+
+.roi-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.roi-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roi-card__pin {
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+.roi-card__title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-text, #0f172a);
+}
+
+.roi-card__desc {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--color-text-muted, #475569);
+}
+
+.roi-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.roi-card__btn-select {
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--color-border-strong, #94a3b8);
+  background: #ffffff;
+  color: var(--color-text, #0f172a);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.roi-card__btn-select:hover {
+  background: #f8fafc;
+  border-color: #64748b;
+}
+
+.roi-card__btn-select.is-selected {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+}
+
+.roi-card__quick-sims {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roi-card__sim-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.roi-card__sim-btn--flood {
+  background: #e0f2fe;
+  color: #0369a1;
+  border-color: #bae6fd;
+}
+
+.roi-card__sim-btn--flood:hover {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.roi-card__sim-btn--solar {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.roi-card__sim-btn--solar:hover {
+  background: #f59e0b;
+  color: #ffffff;
+}
