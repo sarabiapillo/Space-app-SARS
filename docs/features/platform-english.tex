@@ -1,0 +1,46 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{hyperref}
+\title{TerraPulse AI: interfaz en español e inglés}
+\author{TerraPulse AI}
+\date{\today}
+\begin{document}
+\maketitle
+\section{Objetivo}
+Ofrecer la interfaz web en español e inglés sin modificar mediciones, geometrías,
+identificadores científicos, contratos de la API ni contenido introducido por usuarios.
+La traducción de navegación, mapa y paneles está en implementación; este documento
+se actualiza con las comprobaciones de cada unidad.
+\section{Uso}
+La base inicia en español y permite cambiar a inglés. La integración del selector
+en la barra de navegación está pendiente en esta primera unidad.
+La preferencia utiliza exclusivamente la clave
+\texttt{terrapulse:language:v1} del almacenamiento local del navegador.
+El idioma del documento HTML se sincroniza con la selección. Si el navegador
+bloquea el almacenamiento, el idioma puede cambiar durante la sesión.
+\section{Implementación}
+\texttt{web/src/i18n/core.ts} administra idioma, suscripciones, interpolación
+y traducciones contextuales explícitas. \texttt{useTranslation.ts} utiliza
+\texttt{useSyncExternalStore} para actualizar componentes sin volver a montar
+los mapas. No se agregan dependencias.
+La terminología distingue retrodispersión (\emph{backscatter}), calado
+(\emph{water depth}), escorrentía (\emph{runoff}) e irradiancia
+(\emph{irradiance}). GCOV, NISAR, CRID, EPSG, dB, polarizaciones y fórmulas
+conservan su significado y sus identificadores.
+\section{Limitaciones}
+Los datos originales, nombres propios y nombres de mapas creados por usuarios
+no se traducen. La localización no convierte una simulación en observación ni
+establece exactitud hidráulica o validación científica.
+La cobertura completa de la interfaz aún está pendiente de integración.
+\section{Verificación}
+Primera unidad: \texttt{node --test tests/i18n.test.mjs} falló inicialmente por
+ausencia del módulo; después de implementarlo aprobó cinco pruebas.
+\texttt{node --test tests/*.test.mjs}: 56 pruebas aprobadas, ninguna fallida.
+\texttt{npx tsc -b}: código de salida cero.
+Las pruebas comprueban idioma inicial, selección, persistencia independiente de
+mapas, suscripciones, interpolación y almacenamiento bloqueado.
+No se encontró \texttt{pdflatex}; la compilación PDF no está disponible.
+El documento se entrega como fuente LaTeX; la revisión estructural final está pendiente.
+\end{document}
