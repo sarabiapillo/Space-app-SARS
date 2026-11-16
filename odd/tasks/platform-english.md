@@ -11,7 +11,7 @@ S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escen
 T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
 T2 [S1-S3] completada — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: abf2453.
 T3 [S1-S2] en curso (continuación autorizada, máximo dos rondas adicionales) — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
-T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commit: pendiente.
+T4 [S1-S2] completada — ruta: writer charts; inspección, figuras y módulos C4 — commits: 07f0f5f (visor/catálogo), segunda unidad en preparación.
 T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: 8e4a794.
 T6 [S1-S3] pendiente — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
 
@@ -38,3 +38,5 @@ L13. Usuario: «Si», en respuesta a la propuesta exacta de completar textos con
 
 L14. Integración T4: padre detectó RED real en locale de Chart.js (undefined frente a en-US), añadió locale y corrigió dependencias reactivas de memos. GREEN: 14/14 en comprobación inicial ampliada; después de separar pruebas por unidad, 7/7 (catálogo4, visor1, render ROI/comparador2), tsc exit0. El render público conserva IDs, datos de máscara, nombres del usuario, URL de PNG y visibilidad original de advertencias. División en dos commits: visor/catálogos y paneles/módulos, con pruebas al lado.
 L15. Lint de integración inicial: exit1, un error de react-refresh por export SCIENTIFIC_FIGURES ya existente en base59884b9 y diez advertencias de dependencias de hooks. Se corrigieron las de gráficos; las de mapa corresponden al escritor en curso. No se modifica el contrato exportado para ocultar un error previo. Confirmación ejecutable de lint base y lint final pendientes.
+
+L16. T4 primera unidad commit07f0f5f (visor/catálogo y render de figuras). Segunda unidad paneles Chart.js/módulos incluye prueba pública de ejes y preservación de advertencias, sin ampliar comportamiento. La comprobación de whitespace detectó y corrigió una línea vacía final en una prueba antes de commit.

@@ -17,6 +17,7 @@ import {
 import { Bar, Doughnut, Line } from 'react-chartjs-2'
 import { AlertTriangle, BarChart3, CheckCircle2, FileJson, Info } from 'lucide-react'
 import { fetchExploreCharts, type ExploreChartsFetchResult } from '../api/client'
+import { useTranslation } from '../i18n/useTranslation'
 import { ScientificFiguresViewer } from './ScientificFiguresViewer'
 import type { RoiChartsEntry } from '../hooks/useRoiLayers'
 import {
@@ -54,13 +55,8 @@ type DateChoice = 't1' | 't2'
 type PolFilter = 'both' | 'HHHH' | 'HVHV'
 type MaskChartMode = 'bar' | 'doughnut'
 
-function formatInt(n: number): string {
-  return n.toLocaleString('es-MX')
-}
-
-/** Mismo formato que la figura C (`f"{n:,}"`): 14,699,508. */
-function formatIntEn(n: number): string {
-  return n.toLocaleString('en-US')
+function formatInt(n: number, locale: string): string {
+  return n.toLocaleString(locale)
 }
 
 /** Colores de la figura D (`etapa1_figuras.mask`: tab:red, tab:green, blue, lightgray). */
@@ -201,6 +197,7 @@ const maskValueLabels: Plugin<'bar'> = {
 }
 
 export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etapa1ChartsPanelProps) {
+  const { t, localizeText, locale } = useTranslation()
   const [dateChoice, setDateChoice] = useState<DateChoice>('t2')
   const [chosenViewMode, setViewMode] = useState<'matplotlib' | 'chartjs'>('matplotlib')
   const [roiIndexChoice, setRoiIndex] = useState<number | null>(null)
@@ -269,7 +266,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
   const histogramPanels = useMemo(() => {
     if (!histogramChart || histogramChart.series.length === 0) return []
     const anchoBin = histogramChart.eje_x.ancho_bin || 0.1
-    const etiqueta = histogramChart.eje_x.etiqueta || 'γ⁰'
+    const etiqueta = localizeText(histogramChart.eje_x.etiqueta || 'γ⁰')
     const unidad = histogramChart.eje_x.unidad || 'dB'
     const activeSeries =
       polFilter === 'both'
@@ -284,7 +281,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
       const data = {
         datasets: [
           {
-            label: `${serie.nombre} · % de píxeles`,
+            label: `${serie.nombre} · ${t('% de píxeles', '% of pixels')}`,
             // Un punto por bin en su centro exacto, dibujado en escalón (ax.step where='mid').
             data: serie.conteos.map((conteo, k) => ({
               x: Number((serie.bin_inicio_dB + (k + 0.5) * anchoBin).toFixed(3)),
@@ -302,6 +299,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
       }
 
       const options: ChartOptions<'line'> = {
+        locale,
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
@@ -313,7 +311,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               title: (items) =>
                 `${etiqueta} ${serie.nombre} ≈ ${Number(items[0]?.parsed.x ?? 0).toFixed(2)} ${unidad}`,
               label: (ctx) =>
-                `${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(3) : '0'} % de píxeles`,
+                `${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(3) : '0'} ${t('% de píxeles', '% of pixels')}`,
             },
           },
         },
@@ -342,7 +340,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
             grace: '5%',
             title: {
               display: true,
-              text: `% de píxeles (bin ${anchoBin} dB)`,
+              text: t('% de píxeles (bin {bin} dB)', '% of pixels ({bin} dB bin)', { bin: anchoBin }),
               font: { size: 11 },
             },
             ticks: { font: { size: 10 } },
@@ -375,16 +373,16 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         recortado: (100 * fuera) / denom,
       }
     })
-  }, [histogramChart, polFilter])
+  }, [histogramChart, polFilter, t, localizeText, locale])
 
   const maskChartData = useMemo(() => {
     if (!maskChart || !maskChart.series[0]) return null
     const values = maskChart.series[0].valores
     return {
-      labels: maskChart.etiquetas,
+      labels: maskChart.etiquetas.map(localizeText),
       datasets: [
         {
-          label: `${maskChart.series[0].nombre} (${maskChart.eje_y.unidad})`,
+          label: `${localizeText(maskChart.series[0].nombre)} (${maskChart.eje_y.unidad})`,
           data: values,
           backgroundColor: maskChart.etiquetas.map(maskColor),
           borderColor: '#94A3B8',
@@ -392,10 +390,11 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         },
       ],
     }
-  }, [maskChart])
+  }, [maskChart, localizeText])
 
   const maskBarOptions: ChartOptions<'bar'> = useMemo(
     () => ({
+      locale,
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
@@ -403,13 +402,13 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         tooltip: {
           callbacks: {
             label: (ctx) =>
-              `${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(4) : '0'} % de la ventana`,
+              `${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(4) : '0'} ${t('% de la ventana', '% of window')}`,
           },
         },
       },
       scales: {
         x: {
-          title: { display: true, text: 'Categoría de máscara', font: { size: 11, weight: 'bold' } },
+          title: { display: true, text: t('Categoría de máscara', 'Mask category'), font: { size: 11, weight: 'bold' } },
           ticks: { font: { size: 10 } },
         },
         y: {
@@ -417,18 +416,19 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
           max: 100,
           title: {
             display: true,
-            text: `${maskChart?.eje_y.etiqueta ?? '% de la ventana'} [${maskChart?.eje_y.unidad ?? '%'}]`,
+            text: `${localizeText(maskChart?.eje_y.etiqueta ?? '% de la ventana')} [${maskChart?.eje_y.unidad ?? '%'}]`,
             font: { size: 11, weight: 'bold' },
           },
           ticks: { callback: (v) => `${v}%`, font: { size: 10 } },
         },
       },
     }),
-    [maskChart],
+    [maskChart, t, localizeText, locale],
   )
 
   const maskDoughnutOptions: ChartOptions<'doughnut'> = useMemo(
     () => ({
+      locale,
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
@@ -441,7 +441,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         },
       },
     }),
-    [],
+    [locale],
   )
 
   const incidenceData = useMemo(() => {
@@ -452,7 +452,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
       labels: incidenceChart.x.map((h) => `${h} m`),
       datasets: [
         {
-          label: `${incidenceChart.series[0].nombre} (${incidenceChart.eje_y.unidad})`,
+          label: `${localizeText(incidenceChart.series[0].nombre)} (${incidenceChart.eje_y.unidad})`,
           data: values,
           borderColor: '#3399FF',
           backgroundColor: 'rgba(51, 153, 255, 0.14)',
@@ -467,7 +467,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         },
       ],
     }
-  }, [incidenceChart])
+  }, [incidenceChart, localizeText])
 
   // El span real es ~0.40° en 10 000 m: con el eje arrancando en 0 la curva parece plana y engaña.
   const incidenceRange = useMemo(() => {
@@ -481,6 +481,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
 
   const incidenceOptions: ChartOptions<'line'> = useMemo(
     () => ({
+      locale,
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
@@ -488,7 +489,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         tooltip: {
           callbacks: {
             label: (ctx) =>
-              `Incidencia media: ${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(4) : '0'} ${incidenceChart?.eje_y.unidad ?? 'degrees'}`,
+              `${t('Incidencia media', 'Mean incidence angle')}: ${typeof ctx.parsed.y === 'number' ? ctx.parsed.y.toFixed(4) : '0'} ${(incidenceChart?.eje_y.unidad ?? 'degrees') === 'degrees' ? t('grados', 'degrees') : incidenceChart?.eje_y.unidad}`,
           },
         },
       },
@@ -496,7 +497,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         x: {
           title: {
             display: true,
-            text: `${incidenceChart?.eje_x.etiqueta ?? 'Altura WGS84'} [${incidenceChart?.eje_x.unidad ?? 'm'}]`,
+            text: `${localizeText(incidenceChart?.eje_x.etiqueta ?? 'Altura WGS84')} [${incidenceChart?.eje_x.unidad ?? 'm'}]`,
             font: { size: 11, weight: 'bold' },
           },
           ticks: { font: { size: 10 }, maxTicksLimit: 11 },
@@ -506,7 +507,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
           max: incidenceRange?.max,
           title: {
             display: true,
-            text: `${incidenceChart?.eje_y.etiqueta ?? 'Ángulo de incidencia'} [${incidenceChart?.eje_y.unidad ?? 'degrees'}]`,
+            text: `${localizeText(incidenceChart?.eje_y.etiqueta ?? 'Ángulo de incidencia')} [${(incidenceChart?.eje_y.unidad ?? 'degrees') === 'degrees' ? t('grados', 'degrees') : incidenceChart?.eje_y.unidad}]`,
             font: { size: 11, weight: 'bold' },
           },
           ticks: {
@@ -516,7 +517,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         },
       },
     }),
-    [incidenceChart, incidenceRange],
+    [incidenceChart, incidenceRange, t, localizeText, locale],
   )
 
   const highlightIdx = incidenceChart
@@ -535,17 +536,17 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
           <BarChart3 size={14} className="ws-charts-panel__icon" />
           <div>
             <strong>
-              {roiMode ? 'Gráficas NISAR de la ROI (Chart.js)' : 'Gráficas Etapa 1 · T62/F10 (Chart.js)'}
+              {roiMode ? t('Gráficas NISAR de la ROI (Chart.js)', 'NISAR ROI charts (Chart.js)') : t('Gráficas Etapa 1 · T62/F10 (Chart.js)', 'Stage 1 charts · T62/F10 (Chart.js)')}
             </strong>
             <div className="ws-charts-panel__sub">
               {roiMode ? (
                 <>
-                  Ángulo de incidencia · retrodispersión γ⁰ · máscara QA de subfranja
+                  {t('Ángulo de incidencia · retrodispersión γ⁰ · máscara QA de subfranja', 'Incidence angle · γ⁰ backscatter · subswath QA mask')}
                   {roiLabel ? <> · ROI {roiLabel}</> : null}
                 </>
               ) : (
                 <>
-                  <code>graficas.json</code> · sin CSV de <code>control/</code>
+                  <code>graficas.json</code> · {t('sin CSV de', 'without CSV from')} <code>control/</code>
                 </>
               )}
             </div>
@@ -575,15 +576,15 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               type="button"
               className={`ws-tool-btn ${viewMode === 'matplotlib' ? 'is-active' : ''}`}
               onClick={() => setViewMode('matplotlib')}
-              title="Figuras científicas oficiales de Python Matplotlib (Figuras B, C, D, E)"
+              title={t('Figuras científicas oficiales de Python Matplotlib (Figuras B, C, D, E)', 'Scientific Python Matplotlib figures (Figures B, C, D, E)')}
             >
-              📊 Figuras Python
+              📊 {t('Figuras Python', 'Python figures')}
             </button>
             <button
               type="button"
               className={`ws-tool-btn ${viewMode === 'chartjs' ? 'is-active' : ''}`}
               onClick={() => setViewMode('chartjs')}
-              title="Gráficas interactivas vectoriales Chart.js"
+              title={t('Gráficas interactivas vectoriales Chart.js', 'Interactive vector charts in Chart.js')}
             >
               📈 Chart.js
             </button>
@@ -594,7 +595,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               type="button"
               className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't1' ? 'is-active' : ''}`}
               onClick={() => setDateChoice('t1')}
-              title={`Cargar t1 (2026-06-18): ${RAW_SCENE_IDS.T62_T1_20260618}`}
+              title={t('Cargar t1 (2026-06-18): {id}', 'Load t1 (2026-06-18): {id}', { id: RAW_SCENE_IDS.T62_T1_20260618 })}
             >
               t1 (2026-06-18)
             </button>
@@ -602,7 +603,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               type="button"
               className={`ws-tool-btn ws-tool-btn--mono ${dateChoice === 't2' ? 'is-active' : ''}`}
               onClick={() => setDateChoice('t2')}
-              title={`Cargar t2 (2026-10-16): ${RAW_SCENE_IDS.T62_T2_20261016}`}
+              title={t('Cargar t2 (2026-10-16): {id}', 'Load t2 (2026-10-16): {id}', { id: RAW_SCENE_IDS.T62_T2_20261016 })}
             >
               t2 (2026-10-16)
             </button>
@@ -620,7 +621,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         <>
           {loading && (
             <div className="ws-charts-panel__empty">
-              Cargando <code>{sourceUrl || `/data/explore/${targetGranuleId}/graficas.json`}</code> para{' '}
+              {t('Cargando', 'Loading')} <code>{sourceUrl || `/data/explore/${targetGranuleId}/graficas.json`}</code> {t('para', 'for')}{' '}
               {targetDateLabel}…
             </div>
           )}
@@ -629,8 +630,8 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
         <div className="ws-charts-panel__error" role="alert">
           <AlertTriangle size={16} />
           <div>
-            <strong>No hay datos de gráficas disponibles para esta escena</strong>
-            <p>{error}</p>
+            <strong>{t('No hay datos de gráficas disponibles para esta escena', 'No chart data available for this scene')}</strong>
+            <p>{localizeText(error)}</p>
           </div>
         </div>
       )}
@@ -641,26 +642,26 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
           <div className="ws-charts-trace-card">
             <div className="ws-charts-trace-card__grid">
               <div>
-                <span>granuleId</span>
+                <span>{t('ID de gránulo', 'Granule ID')}</span>
                 <code>{manifest.escena.granuleId}</code>
               </div>
               <div>
-                <span>fecha_inicio</span>
+                <span>{t('Inicio de adquisición', 'Acquisition start')}</span>
                 <code>{manifest.escena.fecha_inicio}</code>
               </div>
               <div>
-                <span>version_codigo</span>
+                <span>{t('Versión del código', 'Code version')}</span>
                 <code>{manifest.version_codigo}</code>
               </div>
               <div>
-                <span>Escena / Pila</span>
+                <span>{t('Escena / Pila', 'Scene / Stack')}</span>
                 <code>
                   {manifest.escena.producto} · T{manifest.escena.trayectoria}/F{manifest.escena.marco} (
                   {manifest.escena.direccion}) · {manifest.escena.crid} · {manifest.escena.madurez_catalogo}
                 </code>
               </div>
               <div>
-                <span>Fuente metadatos</span>
+                <span>{t('Fuente metadatos', 'Metadata source')}</span>
                 <code>
                   <FileJson size={11} style={{ verticalAlign: 'middle', marginRight: 4 }} />
                   {manifest.fuentes.metadatos}
@@ -673,7 +674,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                 <AlertTriangle size={14} className="ws-charts-warnings__icon" />
                 <ul>
                   {manifest.advertencias.map((adv) => (
-                    <li key={adv}>{adv}</li>
+                    <li key={adv}>{localizeText(adv)}</li>
                   ))}
                 </ul>
               </div>
@@ -685,10 +686,10 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
             <section className="ws-chart-card">
               <div className="ws-chart-card__header">
                 <div>
-                  <h3>1. {histogramChart.titulo}</h3>
+                  <h3>1. {localizeText(histogramChart.titulo)}</h3>
                   <p className="ws-chart-card__meta">
-                    Fecha: <code>{manifest.escena.fecha_inicio}</code> · Unidad:{' '}
-                    <code>{histogramChart.eje_x.unidad}</code> / <code>% de píxeles</code> · Fuente:{' '}
+                    {t('Fecha:', 'Date:')} <code>{manifest.escena.fecha_inicio}</code> · {t('Unidad:', 'Unit:')}{' '}
+                    <code>{histogramChart.eje_x.unidad}</code> / <code>{t('% de píxeles', '% of pixels')}</code> · {t('Fuente:', 'Source:')}{' '}
                     <code>{manifest.escena.granuleId}</code> (<code>{manifest.version_codigo}</code>)
                   </p>
                 </div>
@@ -698,7 +699,7 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                     className={`ws-tool-btn ${polFilter === 'both' ? 'is-active' : ''}`}
                     onClick={() => setPolFilter('both')}
                   >
-                    Ambas (HH + HV)
+                    {t('Ambas (HH + HV)', 'Both (HH + HV)')}
                   </button>
                   <button
                     type="button"
@@ -723,23 +724,22 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                   return (
                     <figure key={panel.serie.nombre} className="ws-hist-panel">
                       <figcaption className="ws-hist-panel__title">
-                        {panel.serie.nombre} · n = {formatIntEn(st.n_validos)} píxeles válidos en la ROI
+                        {panel.serie.nombre} · n = {formatInt(st.n_validos, locale)} {t('píxeles válidos en la ROI', 'valid pixels in the ROI')}
                       </figcaption>
                       <div className="ws-hist-panel__plot">
                         <ul className="ws-hist-legend">
                           <li>
-                            <i className="ws-hist-legend__line" /> media de los dB: {st.media_dB.toFixed(3)}
+                            <i className="ws-hist-legend__line" /> {t('media de los dB:', 'mean dB:')} {st.media_dB.toFixed(3)}
                           </li>
                           <li>
-                            <i className="ws-hist-legend__line ws-hist-legend__line--dashed" /> mediana:{' '}
+                            <i className="ws-hist-legend__line ws-hist-legend__line--dashed" /> {t('mediana:', 'median:')}{' '}
                             {st.mediana_dB.toFixed(3)}
                           </li>
                           <li>
-                            <i className="ws-hist-legend__line ws-hist-legend__line--dotted" /> dB de la media
-                            lineal: {st.dB_de_la_media.toFixed(3)}
+                            <i className="ws-hist-legend__line ws-hist-legend__line--dotted" /> {t('dB de la media lineal:', 'dB of the linear mean:')} {st.dB_de_la_media.toFixed(3)}
                           </li>
                           <li>
-                            <i className="ws-hist-legend__band" /> p5–p95: {st.p5_dB.toFixed(2)} a{' '}
+                            <i className="ws-hist-legend__band" /> p5–p95: {st.p5_dB.toFixed(2)} {t('a', 'to')}{' '}
                             {st.p95_dB.toFixed(2)}
                           </li>
                         </ul>
@@ -748,8 +748,8 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                         </div>
                       </div>
                       <p className="ws-chart-card__meta">
-                        Ventana <code>{panel.xMin.toFixed(2)} a {panel.xMax.toFixed(2)} dB</code> (p0.2–p99.8,
-                        igual que la figura C) · fuera de la ventana: <code>{panel.recortado.toFixed(3)} %</code>
+                        {t('Ventana', 'Window')} <code>{panel.xMin.toFixed(2)} {t('a', 'to')} {panel.xMax.toFixed(2)} dB</code> (p0.2–p99.8,
+                        {t('igual que la figura C', 'as in Figure C')}) · {t('fuera de la ventana:', 'outside the window:')} <code>{panel.recortado.toFixed(3)} %</code>
                       </p>
                     </figure>
                   )
@@ -760,38 +760,38 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                 {histogramChart.series.map((s) => (
                   <div key={s.nombre} className="ws-stat-box">
                     <div className="ws-stat-box__title">
-                      <strong>Canal {s.nombre}</strong>
+                      <strong>{t('Canal', 'Channel')} {s.nombre}</strong>
                       <span>
-                        en rango: {formatInt(s.total_en_rango)} px · fuera: {formatInt(s.fuera_de_rango)} px
+                        {t('en rango:', 'in range:')} {formatInt(s.total_en_rango, locale)} px · {t('fuera:', 'outside:')} {formatInt(s.fuera_de_rango, locale)} px
                       </span>
                     </div>
                     <div className="ws-stat-box__items">
                       <div>
-                        <span>n_validos</span>
-                        <code>{formatInt(s.estadisticas.n_validos)}</code>
+                        <span>{t('Píxeles válidos', 'Valid pixels')}</span>
+                        <code>{formatInt(s.estadisticas.n_validos, locale)}</code>
                       </div>
                       <div>
-                        <span>media_dB</span>
+                        <span>{t('Media dB', 'Mean dB')}</span>
                         <code>{s.estadisticas.media_dB.toFixed(3)} dB</code>
                       </div>
                       <div>
-                        <span>mediana_dB</span>
+                        <span>{t('Mediana dB', 'Median dB')}</span>
                         <code>{s.estadisticas.mediana_dB.toFixed(3)} dB</code>
                       </div>
                       <div>
-                        <span>dB_de_la_media</span>
+                        <span>{t('dB de la media lineal', 'dB of linear mean')}</span>
                         <code>{s.estadisticas.dB_de_la_media.toFixed(3)} dB</code>
                       </div>
                       <div>
-                        <span>desv_std_dB</span>
+                        <span>{t('Desviación estándar dB', 'Standard deviation dB')}</span>
                         <code>{s.estadisticas.desv_std_dB.toFixed(3)} dB</code>
                       </div>
                       <div>
-                        <span>p5_dB</span>
+                        <span>{t('Percentil 5 dB', '5th percentile dB')}</span>
                         <code>{s.estadisticas.p5_dB.toFixed(3)} dB</code>
                       </div>
                       <div>
-                        <span>p95_dB</span>
+                        <span>{t('Percentil 95 dB', '95th percentile dB')}</span>
                         <code>{s.estadisticas.p95_dB.toFixed(3)} dB</code>
                       </div>
                     </div>
@@ -807,10 +807,10 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               <section className="ws-chart-card">
                 <div className="ws-chart-card__header">
                   <div>
-                    <h3>2. {maskChart.titulo}</h3>
+                    <h3>2. {localizeText(maskChart.titulo)}</h3>
                     <p className="ws-chart-card__meta">
-                      Fecha: <code>{manifest.escena.fecha_inicio}</code> · Unidad:{' '}
-                      <code>{maskChart.eje_y.unidad}</code> · Válidos en polígono:{' '}
+                      {t('Fecha:', 'Date:')} <code>{manifest.escena.fecha_inicio}</code> · {t('Unidad:', 'Unit:')}{' '}
+                      <code>{maskChart.eje_y.unidad}</code> · {t('Válidos en polígono:', 'Valid in polygon:')}{' '}
                       <strong>{maskChart.pct_validos_en_poligono.toFixed(2)}%</strong>
                     </p>
                   </div>
@@ -820,14 +820,14 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                       className={`ws-tool-btn ${maskMode === 'bar' ? 'is-active' : ''}`}
                       onClick={() => setMaskMode('bar')}
                     >
-                      Barras
+                      {t('Barras', 'Bars')}
                     </button>
                     <button
                       type="button"
                       className={`ws-tool-btn ${maskMode === 'doughnut' ? 'is-active' : ''}`}
                       onClick={() => setMaskMode('doughnut')}
                     >
-                      Dona
+                      {t('Dona', 'Doughnut')}
                     </button>
                   </div>
                 </div>
@@ -840,15 +840,12 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                   )}
                 </div>
                 <p className="ws-chart-card__meta">
-                  Eje de 0 a 100 % porque «válido» es casi toda la ventana: el valor exacto de cada
-                  categoría está escrito sobre su barra. «Fuera de la adquisición» vale 0.000 % de
-                  verdad (no hay píxeles con máscara 255 en esta escena). <code>graficas.json</code> solo
-                  trae estos 4 porcentajes, no la distribución espacial de la figura D.
+                  {t('Eje de 0 a 100 % porque «válido» es casi toda la ventana: el valor exacto de cada categoría está escrito sobre su barra. «Fuera de la adquisición» vale 0.000 % de verdad (no hay píxeles con máscara 255 en esta escena).', 'Axis spans 0 to 100% because “valid” covers almost the entire window: the exact value of each category appears above its bar. “Outside acquisition” is genuinely 0.000% (there are no pixels with mask value 255 in this scene).')} <code>graficas.json</code> {t('solo trae estos 4 porcentajes, no la distribución espacial de la figura D.', 'contains only these four percentages, not the spatial distribution in Figure D.')}
                 </p>
 
                 <div className="ws-chart-pill-row">
                   <span className="ws-chart-pill">
-                    <CheckCircle2 size={12} /> pct_validos_en_poligono:{' '}
+                    <CheckCircle2 size={12} /> {t('Válidos en polígono:', 'Valid in polygon:')}{' '}
                     <strong>{maskChart.pct_validos_en_poligono.toFixed(4)}%</strong>
                   </span>
                 </div>
@@ -859,15 +856,15 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
               <section className="ws-chart-card">
                 <div className="ws-chart-card__header">
                   <div>
-                    <h3>3. {incidenceChart.titulo}</h3>
+                    <h3>3. {localizeText(incidenceChart.titulo)}</h3>
                     <p className="ws-chart-card__meta">
-                      Fecha: <code>{manifest.escena.fecha_inicio}</code> · Unidades:{' '}
+                      {t('Fecha:', 'Date:')} <code>{manifest.escena.fecha_inicio}</code> · {t('Unidades:', 'Units:')}{' '}
                       <code>{incidenceChart.eje_x.unidad}</code> vs{' '}
                       <code>{incidenceChart.eje_y.unidad}</code>
                       {incidenceRange && (
                         <>
                           {' '}
-                          · span real: <code>{incidenceRange.span.toFixed(4)}°</code> en 10 000 m
+                          · {t('amplitud real:', 'actual span:')} <code>{incidenceRange.span.toFixed(4)}°</code> {t('en', 'over')} 10 000 m
                         </>
                       )}
                     </p>
@@ -878,18 +875,16 @@ export function Etapa1ChartsPanel({ compact = false, roiCharts, roiLabel }: Etap
                   <Line data={incidenceData} options={incidenceOptions} />
                 </div>
                 <p className="ws-chart-card__meta">
-                  Media de la incidencia en la ROI para cada capa de altura del cubo. No es el mapa de la
-                  figura E: la media borra la variación oeste–este del mapa y por eso el rango es de solo
-                  0.40°. <code>graficas.json</code> no trae la malla 2-D del mapa.
+                  {t('Media de la incidencia en la ROI para cada capa de altura del cubo. No es el mapa de la figura E: la media borra la variación oeste–este del mapa y por eso el rango es de solo 0.40°.', 'Mean incidence angle in the ROI for each height layer of the cube. This is not the map in Figure E: averaging removes the east–west variation, so the range is only 0.40°.')} <code>graficas.json</code> {t('no trae la malla 2-D del mapa.', 'does not contain the 2-D map grid.')}
                 </p>
 
                 <div className="ws-chart-pill-row">
                   <span className="ws-chart-pill ws-chart-pill--accent">
-                    <Info size={12} /> altura_figura_m: <strong>{incidenceChart.altura_figura_m} m</strong>
+                    <Info size={12} /> {t('Altura de figura:', 'Figure height:')} <strong>{incidenceChart.altura_figura_m} m</strong>
                     {highlightAngle !== null && (
                       <>
                         {' '}
-                        → incidencia media: <strong>{highlightAngle.toFixed(4)} degrees</strong>
+                        → {t('incidencia media:', 'mean incidence angle:')} <strong>{highlightAngle.toFixed(4)} {t('grados', 'degrees')}</strong>
                       </>
                     )}
                   </span>

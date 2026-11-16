@@ -3,6 +3,7 @@ import {
   PILAS_GCOV_CHIAPAS,
   type GcovStackSpec,
 } from '../../mocks/initialWorkspaces'
+import { useTranslation } from '../../i18n/useTranslation'
 
 export interface ExploradorStackCardProps {
   activeStackId: GcovStackSpec['id']
@@ -15,10 +16,11 @@ export interface ExploradorStackCardProps {
  * y las 5 capas extraídas de `Frequency A` en el Contrato C1.
  */
 export function ExploradorFeature({ activeStackId, onSelectStack }: ExploradorStackCardProps) {
+  const { t, localizeText } = useTranslation()
   return (
-    <section className="c4-module" aria-label="Explorador de Pilas GCOV y Capas C1 en Chiapas">
+    <section className="c4-module" aria-label={t('Explorador de Pilas GCOV y Capas C1 en Chiapas', 'GCOV stack and C1 layer explorer in Chiapas')}>
       <div className="c4-module__header">
-        <span className="c4-module__title">Pilas NISAR L2 GCOV · ROI Chiapas</span>
+        <span className="c4-module__title">{t('Pilas NISAR L2 GCOV · ROI Chiapas', 'NISAR L2 GCOV stacks · Chiapas ROI')}</span>
         <span className="c4-module__tag">EPSG:32615 · 10×10 m</span>
       </div>
 
@@ -34,14 +36,14 @@ export function ExploradorFeature({ activeStackId, onSelectStack }: ExploradorSt
               >
                 <div className="c4-stack-item__top">
                   <strong>
-                    {stack.id} · {stack.directionLabel}
+                    {stack.id} · {localizeText(stack.directionLabel)}
                   </strong>
                   <span className="c4-stack-item__crid">CRID {stack.crid}</span>
                 </div>
-                <div className="c4-stack-item__role">{stack.roleLabel}</div>
+                <div className="c4-stack-item__role">{localizeText(stack.roleLabel)}</div>
                 <div className="c4-stack-item__sub">
-                  Cobertura ROI: <strong>{stack.roiValidPctLabel}</strong> · {stack.dates.length}{' '}
-                  fechas ({stack.defaultT1} → {stack.defaultT2})
+                  {t('Cobertura ROI:', 'ROI coverage:')} <strong>{localizeText(stack.roiValidPctLabel)}</strong> · {stack.dates.length}{' '}
+                  {t('fechas', 'dates')} ({stack.defaultT1} → {stack.defaultT2})
                 </div>
               </button>
             </li>
@@ -49,15 +51,15 @@ export function ExploradorFeature({ activeStackId, onSelectStack }: ExploradorSt
         })}
       </ul>
 
-      <div className="c1-layers-box" aria-label="Capas extraídas en Contrato C1 (Frequency A)">
+      <div className="c1-layers-box" aria-label={t('Capas extraídas en Contrato C1 (Frequency A)', 'Layers extracted under Contract C1 (Frequency A)')}>
         <div className="c1-layers-box__title">
-          Capas Contrato C1 en <code>data/raw/</code> (Frequency A · 2687×5504 px)
+          {t('Capas Contrato C1 en', 'Contract C1 layers in')} <code>data/raw/</code> (Frequency A · 2687×5504 px)
         </div>
         <ul className="c1-layers-list">
           {C1_RAW_LAYERS.map((layer) => (
             <li key={layer.id} className="c1-layers-item" title={layer.h5Path}>
               <code>{layer.archivo}</code>
-              <span>{layer.descripcion}</span>
+              <span>{localizeText(layer.descripcion)}</span>
             </li>
           ))}
         </ul>
