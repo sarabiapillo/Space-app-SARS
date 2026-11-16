@@ -8,11 +8,11 @@ S2. «Encargate de traducir todo el programa, utiliza las traducciones adecuadas
 S3. «Agrega la opción en la barra de navegación, donde esta "Archivo", "Escenas GCOV", "Procesamiento SAR", etc.»
 
 ## Tasks
-T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: en preparación.
-T2 [S1-S3] pendiente — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: pendiente.
-T3 [S1-S2] pendiente — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
-T4 [S1-S2] pendiente — ruta: writer charts; inspección, figuras y módulos C4 — commit: pendiente.
-T5 [S1-S2] pendiente — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: pendiente.
+T1 [S1-S3] completada — ruta: parent inline; base i18n español/inglés, persistencia y pruebas RED/GREEN — commit: 6a526ce.
+T2 [S1-S3] en curso — ruta: writer shell; navegación, selector, avisos, portada y rutas — commit: pendiente.
+T3 [S1-S2] en curso — ruta: writer map; mapa, búsqueda, GCOV y errores visibles — commit: pendiente.
+T4 [S1-S2] en curso — ruta: writer charts; inspección, figuras y módulos C4 — commit: pendiente.
+T5 [S1-S2] completada — ruta: writer simulation; lluvia, inundación y radiación, formatos — commit: en preparación.
 T6 [S1-S3] pendiente — ruta: parent; integración, auditoría terminológica/cobertura, regresiones, compilación y documentación LaTeX — commit: pendiente.
 
 ## Log
@@ -23,3 +23,7 @@ L4. Evidencia inicial: árbol limpio; no existe web/node_modules. Pruebas existe
 L5. Glosario: retrodispersión=backscatter; adquisición=acquisition; región de interés=region of interest; trayectoria=track; marco=frame; madurez=data maturity; calado=water depth (no draft); caudal=discharge; escorrentía=runoff; radiación incidente=incident irradiance; observación/inferencia/predicción y exploratorio/no validado conservados.
 
 L6. T1 RED: node --test tests/i18n.test.mjs falló por módulo ausente. GREEN: 5/5 focales; suite 56/56; npx tsc -b exit 0. npm ci instaló 191 paquetes del lockfile sin cambios de dependencias. Fuente LaTeX creada; pdflatex no disponible.
+
+L7. T2–T5 se ejecutan en paralelo con superficies disjuntas; la lista visible mantiene T2 como frente activo mientras se integran resultados. T1 commit 6a526ce. Cada escritor debe añadir pruebas y reportar evidencia; padre conserva documentación y commits.
+
+L8. T5: escritor reportó RED 4 fallos y GREEN 4/4; padre observó 15/15 pruebas de simulación/ROI/radiación, exit 0. No se cambiaron algoritmos, DTOs ni valores; imágenes originales y mensajes desconocidos conservan idioma fuente. Verificación manual de navegador no disponible.

@@ -12,6 +12,7 @@ import {
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
 import type { FloodSimulationState } from '../types/workspace'
+import { useTranslation } from '../i18n/useTranslation'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend)
 
@@ -22,10 +23,11 @@ interface FloodChartsProps {
 // Mismos tonos que la paleta del ráster de calados (analyses/simulate.py).
 const DEPTH_COLORS = ['#22D3EE', '#06B6D4', '#0284C7', '#1D4ED8', '#1E3A8A']
 
-const fmt = (v: number, d = 1) => v.toLocaleString('es-MX', { maximumFractionDigits: d })
+const fmt = (v: number, locale: string, d = 1) => v.toLocaleString(locale, { maximumFractionDigits: d })
 
-function baseOptions(xTitle: string, yTitle: string, horizontal = false): ChartOptions<'bar'> {
+function baseOptions(xTitle: string, yTitle: string, locale: string, horizontal = false): ChartOptions<'bar'> {
   return {
+    locale,
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
@@ -43,22 +45,23 @@ function baseOptions(xTitle: string, yTitle: string, horizontal = false): ChartO
  * balance hídrico, distribución de calados e hietograma de la lluvia simulada.
  */
 export function FloodCharts({ flood }: FloodChartsProps) {
+  const { t, locale } = useTranslation()
   const stats = flood.stats
 
   const balance = useMemo(() => {
     if (!stats) return null
     const rows: Array<[string, number | undefined, string]> = [
-      ['Lluvia total', stats.totalVolumeM3, '#64748B'],
-      ['Infiltrado', stats.infiltratedVolumeM3, '#A16207'],
-      ['Escorrentía efectiva', stats.effectiveVolumeM3, '#0EA5E9'],
-      ['Almacenado en láminas ≥ 3 cm', stats.floodedVolumeM3, '#1D4ED8'],
+      [t('Lluvia total', 'Total rainfall'), stats.totalVolumeM3, '#64748B'],
+      [t('Infiltrado', 'Infiltrated'), stats.infiltratedVolumeM3, '#A16207'],
+      [t('Escorrentía efectiva', 'Effective runoff'), stats.effectiveVolumeM3, '#0EA5E9'],
+      [t('Almacenado en láminas ≥ 3 cm', 'Stored in water depths ≥ 3 cm'), stats.floodedVolumeM3, '#1D4ED8'],
     ]
     const known = rows.filter((r): r is [string, number, string] => typeof r[1] === 'number')
     return {
       labels: known.map((r) => r[0]),
       datasets: [{ data: known.map((r) => r[1] / 1000), backgroundColor: known.map((r) => r[2]) }],
     }
-  }, [stats])
+  }, [stats, t])
 
   const depth = useMemo(() => {
     const classes = flood.charts?.depth_classes
@@ -82,7 +85,7 @@ export function FloodCharts({ flood }: FloodChartsProps) {
     for (let i = 0; i < n; i++) {
       const start = i * step
       const end = Math.min(hours, (i + 1) * step)
-      labels.push(`${fmt(start, 1)}–${fmt(end, 1)} h`)
+      labels.push(`${fmt(start, locale, 1)}–${fmt(end, locale, 1)} h`)
       perStep.push(Number((intensity * (end - start)).toFixed(3)))
     }
     return {
@@ -90,73 +93,79 @@ export function FloodCharts({ flood }: FloodChartsProps) {
       step,
       data: { labels, datasets: [{ data: perStep, backgroundColor: '#38BDF8' }] },
     }
-  }, [stats])
+  }, [stats, locale])
 
   if (!stats) {
     return (
       <p className="flood-charts__empty">
-        Ejecuta la simulación para generar las gráficas de la zona seleccionada.
+        {t('Ejecuta la simulación para generar las gráficas de la zona seleccionada.', 'Run the simulation to generate charts for the selected area.')}
       </p>
     )
   }
 
   return (
-    <section className="flood-charts" aria-label="Gráficas del simulador de inundación">
+    <section className="flood-charts" aria-label={t('Gráficas del simulador de inundación', 'Flood simulator charts')}>
       <p className="flood-charts__source">
-        Fuente:{' '}
-        {'cálculo del backend con DEM NASADEM 30 m'}
-        . Escenario simulado, no observación.
+        {t('Fuente:', 'Source:')}{' '}
+        {t('cálculo del backend con DEM NASADEM 30 m', 'backend computation with NASADEM 30 m DEM')}
+        {t('. Escenario simulado, no observación.', '. Simulated scenario, not an observation.')}
       </p>
 
       {balance && (
         <figure className="flood-charts__fig">
-          <figcaption>Balance hídrico de la ROI (miles de m³)</figcaption>
+          <figcaption>{t('Balance hídrico de la ROI (miles de m³)', 'ROI water balance (thousands of m³)')}</figcaption>
           <div className="flood-charts__canvas">
-            <Bar data={balance} options={baseOptions('miles de m³', '', true)} />
+            <Bar data={balance} options={{
+              ...baseOptions(t('miles de m³', 'thousands of m³'), '', locale, true),
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(Number(ctx.parsed.x), locale, 3)} ${t('miles de m³', 'thousands of m³')}` } } },
+            }} />
           </div>
           <small>
-            Infiltrado + escorrentía = lluvia total. El volumen almacenado es el de las celdas con calado ≥ 3 cm.
+            {t('Infiltrado + escorrentía = lluvia total. El volumen almacenado es el de las celdas con calado ≥ 3 cm.', 'Infiltration + runoff = total rainfall. Stored volume is from cells with water depth ≥ 3 cm.')}
           </small>
         </figure>
       )}
 
       <figure className="flood-charts__fig">
-        <figcaption>Distribución de calados en las celdas mojadas</figcaption>
+        <figcaption>{t('Distribución de calados en las celdas mojadas', 'Water depth distribution in wet cells')}</figcaption>
         {depth ? (
           <>
             <div className="flood-charts__canvas">
               <Bar
                 data={{ labels: depth.labels, datasets: depth.datasets }}
                 options={{
-                  ...baseOptions('clase de calado', 'área [km²]'),
+                  ...baseOptions(t('clase de calado', 'water depth class'), t('área [km²]', 'area [km²]'), locale),
                   plugins: {
                     legend: { display: false },
                     tooltip: {
                       callbacks: {
-                        label: (ctx) => `${fmt(Number(ctx.parsed.y), 4)} km² · ${depth.pct[ctx.dataIndex]} % del área mojada`,
+                        label: (ctx) => t('{area} km² · {pct} % del área mojada', '{area} km² · {pct} % of wet area', { area: fmt(Number(ctx.parsed.y), locale, 4), pct: depth.pct[ctx.dataIndex] }),
                       },
                     },
                   },
                 }}
               />
             </div>
-            <small>Clases con los mismos cortes que la paleta del mapa. Celda de {flood.charts?.cell_size_m} m.</small>
+            <small>{t('Clases con los mismos cortes que la paleta del mapa. Celda de {size} m.', 'Classes use the same boundaries as the map palette. Cell size: {size} m.', { size: flood.charts?.cell_size_m ?? '—' })}</small>
           </>
         ) : (
-          <small>No disponible: solo lo calcula el backend con NASADEM.</small>
+          <small>{t('No disponible: solo lo calcula el backend con NASADEM.', 'Unavailable: only the NASADEM backend computes this.')}</small>
         )}
       </figure>
 
       {hyeto && (
         <figure className="flood-charts__fig">
           <figcaption>
-            Hietograma de la lluvia simulada ({fmt(stats.rainfallMm)} mm en {fmt(stats.durationHours)} h)
+            {t('Hietograma de la lluvia simulada ({amount} mm en {hours} h)', 'Simulated rainfall hyetograph ({amount} mm over {hours} h)', { amount: fmt(stats.rainfallMm, locale), hours: fmt(stats.durationHours, locale) })}
           </figcaption>
           <div className="flood-charts__canvas">
-            <Bar data={hyeto.data} options={baseOptions(`intervalo de ${hyeto.step} h`, 'lluvia [mm]')} />
+            <Bar data={hyeto.data} options={{
+              ...baseOptions(t('intervalo de {step} h', '{step} h interval', { step: hyeto.step }), t('lluvia [mm]', 'rainfall [mm]'), locale),
+              plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${fmt(Number(ctx.parsed.y), locale, 3)} mm` } } },
+            }} />
           </div>
           <small>
-            Intensidad uniforme de {fmt(hyeto.intensity, 2)} mm/h: es el supuesto del modelo, no un registro de lluvia.
+            {t('Intensidad uniforme de {intensity} mm/h: es el supuesto del modelo, no un registro de lluvia.', 'Uniform intensity of {intensity} mm/h: this is a model assumption, not a rainfall observation.', { intensity: fmt(hyeto.intensity, locale, 2) })}
           </small>
         </figure>
       )}

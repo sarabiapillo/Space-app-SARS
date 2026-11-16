@@ -17,6 +17,7 @@ import { confirmedSolarRoi } from '../utils/solarRoi'
 import { getColormapSpec } from '../utils/colormapLut'
 import { runSolarSimulation, type SolarSimulationResponse } from '../api/client'
 import { RoiChartsSection } from './RoiChartsSection'
+import { useTranslation } from '../i18n/useTranslation'
 import type { RoiLayersState } from '../hooks/useRoiLayers'
 import {
   legendTicks,
@@ -68,6 +69,7 @@ export function RightPanel({
   onFlyToZone,
   roiLayers,
 }: SolarPanelProps) {
+  const { t, localizeText, locale } = useTranslation()
   const svgRef = useRef<SVGSVGElement>(null)
   const [dragging, setDragging] = useState(false)
   const [isSimulating, setIsSimulating] = useState(false)
@@ -199,30 +201,30 @@ export function RightPanel({
   }
 
   return (
-    <aside className="solar-card" aria-label="Simulación Solar y Radiación (Inferno)">
+    <aside className="solar-card" aria-label={t('Simulación Solar y Radiación (Inferno)', 'Solar simulation and irradiance (Inferno)')}>
       <div className="solar-card__header">
         <div>
           <h3 className="solar-card__title">
             <Sun size={14} className="solar-card__icon" aria-hidden="true" />
-            Simulador Solar & Radiación
+            {t('Simulador Solar & Radiación', 'Solar & irradiance simulator')}
           </h3>
           <p className="solar-card__subtitle">
-            Relieve DEM · NREL SPA · Rampa <strong>Inferno</strong>
+            {t('Relieve DEM · NREL SPA · Rampa', 'DEM terrain · NREL SPA · Palette')} <strong>Inferno</strong>
           </p>
         </div>
         <button
           type="button"
           className="icon-btn icon-btn--xs"
           onClick={onClose}
-          title="Cerrar Simulación Solar"
-          aria-label="Cerrar Simulación Solar"
+          title={t('Cerrar Simulación Solar', 'Close solar simulation')}
+          aria-label={t('Cerrar Simulación Solar', 'Close solar simulation')}
         >
           <X size={14} />
         </button>
       </div>
 
       <div className="solar-zone-group">
-        <p role="status">{croppedRegion?.length ? 'Se calculará únicamente para la ROI delimitada y confirmada en este mapa.' : 'Delimitá y confirmá una ROI antes de calcular la simulación.'}</p>
+        <p role="status">{croppedRegion?.length ? t('Se calculará únicamente para la ROI delimitada y confirmada en este mapa.', 'Only the ROI defined and confirmed on this map will be calculated.') : t('Delimitá y confirmá una ROI antes de calcular la simulación.', 'Define and confirm an ROI before running the simulation.')}</p>
       </div>
 
       {/* Recuadro técnico con arco Este a Oeste y esfera solar arrastrable */}
@@ -232,7 +234,7 @@ export function RightPanel({
           className={`solar-arc-svg ${dragging ? 'is-dragging' : ''}`}
           viewBox="0 0 260 116"
           role="slider"
-          aria-label="Arco solar interactivo de Este a Oeste"
+          aria-label={t('Arco solar interactivo de Este a Oeste', 'Interactive solar arc from east to west')}
           aria-valuemin={0}
           aria-valuemax={180}
           aria-valuenow={solar.sunAngle}
@@ -299,20 +301,20 @@ export function RightPanel({
 
           {/* Etiquetas Este / Mediodía / Oeste */}
           <text x={52} y={111} textAnchor="middle" className="solar-arc-svg__label">
-            Este (06:00)
+            {t('Este (06:00)', 'East (06:00)')}
           </text>
           <text x={130} y={12} textAnchor="middle" className="solar-arc-svg__label">
-            Cenit ({formatSolarHour(solar.sunAngle)})
+            {t('Cenit ({hour})', 'Noon ({hour})', { hour: formatSolarHour(solar.sunAngle) })}
           </text>
           <text x={208} y={111} textAnchor="middle" className="solar-arc-svg__label">
-            Oeste (18:00)
+            {t('Oeste (18:00)', 'West (18:00)')}
           </text>
         </svg>
       </div>
 
       {/* Deslizador 1: Ángulo del Sol / Hora */}
       <div className="solar-control">
-        <label htmlFor="solar-simulation-date" className="opacity-control__label">Fecha de simulación (hora local de Chiapas)</label>
+        <label htmlFor="solar-simulation-date" className="opacity-control__label">{t('Fecha de simulación (hora local de Chiapas)', 'Simulation date (Chiapas local time)')}</label>
         <input id="solar-simulation-date" type="date" value={simulationDate} onChange={(event) => {
           requestVersion.current++
           setSimulationDate(event.target.value)
@@ -327,7 +329,7 @@ export function RightPanel({
       <div className="solar-control">
         <div className="opacity-control__header">
           <label htmlFor={angleId} className="opacity-control__label">
-            Ángulo Solar / Hora Local
+            {t('Ángulo Solar / Hora Local', 'Solar angle / local time')}
           </label>
           <span className="opacity-control__value">
             {formatSolarHour(solar.sunAngle)} ({solar.sunAngle}°)
@@ -356,7 +358,7 @@ export function RightPanel({
       <div className="solar-control">
         <div className="opacity-control__header">
           <label htmlFor={radId} className="opacity-control__label">
-            Intensidad de Radiación (Inferno)
+            {t('Intensidad de Radiación (Inferno)', 'Irradiance intensity (Inferno)')}
           </label>
           <span className="opacity-control__value">{solar.radiationIntensity}%</span>
         </div>
@@ -382,9 +384,9 @@ export function RightPanel({
       {/* Barra de leyenda con gradiente exacto Inferno y valores en W/m² */}
       <div className="solar-legend">
         <div className="solar-legend__head">
-          <span className="solar-legend__title">Irradiancia incidente (Inferno)</span>
+          <span className="solar-legend__title">{t('Irradiancia incidente (Inferno)', 'Incident irradiance (Inferno)')}</span>
           {heatmap && (
-            <div className="solar-legend__modes" role="radiogroup" aria-label="Escala de color">
+            <div className="solar-legend__modes" role="radiogroup" aria-label={t('Escala de color', 'Color scale')}>
               {(['estirado', 'absoluto'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -395,11 +397,11 @@ export function RightPanel({
                   onClick={() => onSolarChange({ ...solar, heatmapMode: mode })}
                   title={
                     mode === 'estirado'
-                      ? 'Percentiles 2–98 de esta simulación: distingue mejor el relieve'
-                      : '0 a DNI ajustado: comparable entre horas'
+                      ? t('Percentiles 2–98 de esta simulación: distingue mejor el relieve', 'Percentiles 2–98 of this simulation: improves terrain contrast')
+                      : t('0 a DNI ajustado: comparable entre horas', '0 to adjusted DNI: comparable across times')
                   }
                 >
-                  {mode === 'estirado' ? 'Contraste' : 'Absoluta'}
+                  {mode === 'estirado' ? t('Contraste', 'Contrast') : t('Absoluta', 'Absolute')}
                 </button>
               ))}
             </div>
@@ -421,15 +423,15 @@ export function RightPanel({
             <small className="solar-legend__note">
               W/m² ·{' '}
               {heatmapMode === 'estirado'
-                ? `p2–p98 de esta simulación (${vmin.toFixed(0)}–${vmax.toFixed(0)}); los extremos se saturan`
-                : `0 a DNI ajustado (${vmax.toFixed(0)}), comparable entre horas`}
+                ? t('p2–p98 de esta simulación ({min}–{max}); los extremos se saturan', 'p2–p98 of this simulation ({min}–{max}); extremes are clipped', { min: vmin.toFixed(0), max: vmax.toFixed(0) })
+                : t('0 a DNI ajustado ({max}), comparable entre horas', '0 to adjusted DNI ({max}), comparable across times', { max: vmax.toFixed(0) })}
             </small>
           </>
         ) : (
           <div className="solar-legend__labels">
-            <span>Menor radiación</span>
-            <span>Media</span>
-            <span>Mayor radiación</span>
+            <span>{t('Menor radiación', 'Lower irradiance')}</span>
+            <span>{t('Media', 'Medium')}</span>
+            <span>{t('Mayor radiación', 'Higher irradiance')}</span>
           </div>
         )}
       </div>
@@ -441,17 +443,17 @@ export function RightPanel({
           className="solar-api-btn"
           disabled={isSimulating || !croppedRegion || croppedRegion.length < 3 || !simulationDate}
           onClick={handleRunBackendSimulation}
-          title="Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend para la ROI seleccionada"
+          title={t('Ejecutar cálculo de radiación con NASADEM y NREL SPA en backend para la ROI seleccionada', 'Run backend irradiance calculation with NASADEM and NREL SPA for the selected ROI')}
         >
           {isSimulating ? (
             <>
               <Loader2 size={13} className="spin" />
-              <span>Calculando física NASADEM...</span>
+              <span>{t('Calculando física NASADEM...', 'Calculating NASADEM physics...')}</span>
             </>
           ) : (
             <>
               <Zap size={13} />
-              <span>Calcular Simulación en Mapa</span>
+              <span>{t('Calcular Simulación en Mapa', 'Calculate simulation on map')}</span>
             </>
           )}
         </button>
@@ -459,7 +461,7 @@ export function RightPanel({
         {simulationError && (
           <div className="solar-api-error">
             <AlertCircle size={13} />
-            <span>{simulationError}</span>
+            <span>{localizeText(simulationError)}</span>
           </div>
         )}
 
@@ -470,13 +472,13 @@ export function RightPanel({
               type="button"
               className={`solar-map-toggle__btn ${solar.showRasterOnMap !== false ? 'is-active' : ''}`}
               onClick={handleToggleRasterOnMap}
-              title="Mostrar u ocultar la capa ráster de radiación en el mapa"
+              title={t('Mostrar u ocultar la capa ráster de radiación en el mapa', 'Show or hide the irradiance raster on the map')}
             >
               {solar.showRasterOnMap !== false ? <Eye size={13} /> : <EyeOff size={13} />}
               <span>
                 {solar.showRasterOnMap !== false
-                  ? 'Capa de Radiación en Mapa: Activa'
-                  : 'Capa en Mapa: Oculta'}
+                  ? t('Capa de Radiación en Mapa: Activa', 'Irradiance layer on map: active')
+                  : t('Capa en Mapa: Oculta', 'Map layer: hidden')}
               </span>
             </button>
             <button
@@ -488,10 +490,10 @@ export function RightPanel({
                   onFlyToZone?.([(w + e) / 2, (s + n) / 2], 13.5)
                 }
               }}
-              title="Enfocar mapa en el área calculada"
+              title={t('Enfocar mapa en el área calculada', 'Focus map on calculated area')}
             >
               <Layers size={12} />
-              <span>Enfocar</span>
+              <span>{t('Enfocar', 'Focus')}</span>
             </button>
           </div>
         )}
@@ -500,61 +502,60 @@ export function RightPanel({
           <div className="solar-api-results">
             <div className="solar-api-results__header">
               <CheckCircle2 size={13} className="solar-api-results__ok" />
-              <span className="solar-api-results__title">Cálculo Físico Concluido</span>
+              <span className="solar-api-results__title">{t('Cálculo Físico Concluido', 'Physical calculation complete')}</span>
             </div>
 
             {runInfo && runInfo.intensity !== Math.max(1, Math.min(100, Math.round(solar.radiationIntensity || 65))) && (
               <div className="solar-api-stale" role="status">
-                Elegiste {solar.radiationIntensity}% de radiación; estos resultados son de {runInfo.intensity}%.
-                Pulsa «Calcular» para actualizar.
+                {t('Elegiste {chosen}% de radiación; estos resultados son de {previous}%. Pulsa «Calcular» para actualizar.', 'You selected {chosen}% irradiance; these results are for {previous}%. Click “Calculate” to update.', { chosen: solar.radiationIntensity, previous: runInfo.intensity })}
               </div>
             )}
             <div className="solar-api-grid">
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">Radiación elegida</span>
+                <span className="solar-api-stat__label">{t('Radiación elegida', 'Selected irradiance')}</span>
                 <span className="solar-api-stat__val">{runInfo ? `${runInfo.intensity}%` : '—'}</span>
               </div>
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">DNI cielo despejado</span>
+                <span className="solar-api-stat__label">{t('DNI cielo despejado', 'Clear-sky DNI')}</span>
                 <span className="solar-api-stat__val">
                   {simulationResult.clear_sky.dni_clear_sky_w_m2.toFixed(1)} W/m²
                 </span>
               </div>
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">DNI Ajustado</span>
+                <span className="solar-api-stat__label">{t('DNI Ajustado', 'Adjusted DNI')}</span>
                 <span className="solar-api-stat__val">
                   {simulationResult.clear_sky.dni_adjusted_w_m2.toFixed(1)} W/m²
                 </span>
               </div>
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">Elevación Solar</span>
+                <span className="solar-api-stat__label">{t('Elevación Solar', 'Solar elevation')}</span>
                 <span className="solar-api-stat__val">
                   {simulationResult.position.apparent_elevation_deg.toFixed(1)}°
                 </span>
               </div>
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">Azimut</span>
+                <span className="solar-api-stat__label">{t('Azimut', 'Azimuth')}</span>
                 <span className="solar-api-stat__val">
                   {simulationResult.position.azimuth_deg.toFixed(1)}°
                 </span>
               </div>
               <div className="solar-api-stat">
-                <span className="solar-api-stat__label">Altitud DEM</span>
+                <span className="solar-api-stat__label">{t('Altitud DEM', 'DEM altitude')}</span>
                 <span className="solar-api-stat__val">
                   {simulationResult.position.altitude_m.toFixed(0)} m (EGM96)
                 </span>
               </div>
-              {runInfo && <div className="solar-api-stat"><span className="solar-api-stat__label">Zona calculada</span><span className="solar-api-stat__val">ROI delimitada por el usuario</span></div>}
+              {runInfo && <div className="solar-api-stat"><span className="solar-api-stat__label">{t('Zona calculada', 'Calculated area')}</span><span className="solar-api-stat__val">{t('ROI delimitada por el usuario', 'User-defined ROI')}</span></div>}
               {heatmap && (
                 <>
                   <div className="solar-api-stat">
-                    <span className="solar-api-stat__label">Incidente mín / máx</span>
+                    <span className="solar-api-stat__label">{t('Incidente mín / máx', 'Incident min / max')}</span>
                     <span className="solar-api-stat__val">
                       {heatmap.stats.min.toFixed(0)} / {fmtW(heatmap.stats.max)}
                     </span>
                   </div>
                   <div className="solar-api-stat">
-                    <span className="solar-api-stat__label">Incidente mediana / media</span>
+                    <span className="solar-api-stat__label">{t('Incidente mediana / media', 'Incident median / mean')}</span>
                     <span className="solar-api-stat__val">
                       {heatmap.stats.p50.toFixed(0)} / {fmtW(heatmap.stats.mean)}
                     </span>
@@ -564,8 +565,7 @@ export function RightPanel({
             </div>
             {heatmap && (
               <small className="solar-legend__note">
-                Valores leídos del PNG de 256 colores (±{heatmap.stats.halfStep.toFixed(1)} W/m²) sobre{' '}
-                {heatmap.stats.validPixels.toLocaleString('es-MX')} píxeles; los exactos están en incident.tif.
+                {t('Valores leídos del PNG de 256 colores (±{step} W/m²) sobre {pixels} píxeles; los exactos están en incident.tif.', 'Values read from the 256-color PNG (±{step} W/m²) over {pixels} pixels; exact values are in incident.tif.', { step: heatmap.stats.halfStep.toFixed(1), pixels: heatmap.stats.validPixels.toLocaleString(locale) })}
               </small>
             )}
 
@@ -575,7 +575,7 @@ export function RightPanel({
                 href={simulationResult.layers.incident.export_url}
                 download="incident.tif"
                 className="solar-api-link"
-                title="Descargar GeoTIFF Float32 con la irradiancia incidente calculada"
+                title={t('Descargar GeoTIFF Float32 con la irradiancia incidente calculada', 'Download Float32 GeoTIFF with calculated incident irradiance')}
               >
                 <Download size={12} />
                 <span>incident.tif</span>
@@ -585,10 +585,10 @@ export function RightPanel({
                 target="_blank"
                 rel="noreferrer"
                 className="solar-api-link"
-                title="Abrir imagen de previsualización en alta resolución"
+                title={t('Abrir imagen de previsualización en alta resolución', 'Open high-resolution preview image')}
               >
                 <ExternalLink size={12} />
-                <span>Preview PNG</span>
+                <span>{t('Preview PNG', 'Preview PNG')}</span>
               </a>
             </div>
 
@@ -597,7 +597,7 @@ export function RightPanel({
               <div className="solar-api-preview-box">
                 <img
                   src={simulationResult.layers.incident.preview_url}
-                  alt="Previsualización de radiación solar calculada"
+                  alt={t('Previsualización de radiación solar calculada', 'Preview of calculated solar irradiance')}
                   className="solar-api-preview-img"
                 />
               </div>
@@ -607,7 +607,7 @@ export function RightPanel({
 
         {/* Gráficas NISAR de la ROI: ángulo de incidencia, retrodispersión γ⁰ y máscara QA de subfranja */}
         {roiLayers && croppedRegion && (
-          <section className="solar-roi-charts" aria-label="Gráficas NISAR de la ROI">
+          <section className="solar-roi-charts" aria-label={t('Gráficas NISAR de la ROI', 'NISAR charts for the ROI')}>
             <RoiChartsSection roiLayers={roiLayers} region={croppedRegion} compact />
           </section>
         )}

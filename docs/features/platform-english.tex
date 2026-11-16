@@ -33,7 +33,10 @@ conservan su significado y sus identificadores.
 Los datos originales, nombres propios y nombres de mapas creados por usuarios
 no se traducen. La localización no convierte una simulación en observación ni
 establece exactitud hidráulica o validación científica.
-La cobertura completa de la interfaz aún está pendiente de integración.
+Los paneles de radiación e inundación, sus gráficas, mensajes conocidos y fechas
+relativas ya están traducidos. La navegación y las demás áreas están pendientes
+de integración. Los mensajes variables no incluidos en el catálogo conservan
+su idioma de origen; las imágenes científicas originales no se modifican.
 \section{Verificación}
 Primera unidad: \texttt{node --test tests/i18n.test.mjs} falló inicialmente por
 ausencia del módulo; después de implementarlo aprobó cinco pruebas.
@@ -41,6 +44,9 @@ ausencia del módulo; después de implementarlo aprobó cinco pruebas.
 \texttt{npx tsc -b}: código de salida cero.
 Las pruebas comprueban idioma inicial, selección, persistencia independiente de
 mapas, suscripciones, interpolación y almacenamiento bloqueado.
+Unidad de simulaciones: cuatro pruebas de renderizado y mensajes aprobadas;
+revisión focal ampliada del padre: 15 pruebas aprobadas, sin fallos. Se comprueban
+unidades, entradas numéricas sin cambios, etiquetas y advertencias de simulación.
 No se encontró \texttt{pdflatex}; la compilación PDF no está disponible.
 El documento se entrega como fuente LaTeX; la revisión estructural final está pendiente.
 \end{document}
