@@ -379,6 +379,13 @@ export function Sidebar({
         {roiLayers ? <section className="roi-scene-details" aria-label={t('Resultados de la ROI delimitada', 'Results for the delineated ROI')}>
           <h3>{t('Escenas de la ROI seleccionada', 'Scenes for the selected ROI')}</h3>
           <p role="status">{localizeText(roiLayers.error || roiLayers.message)}</p>
+          {roiLayers.preparationSeconds !== null && <p>{t('Tiempo hasta cargar imágenes:', 'Time until images load:')} {roiLayers.preparationSeconds.toFixed(1)} s</p>}
+          {roiLayers.timings && <details><summary>{t('Duración por fase (servidor)', 'Duration by phase (server)')}</summary>
+            <p>{t('Consulta ASF:', 'ASF search:')} {roiLayers.timings.search_asf_seconds.toFixed(1)} s</p>
+            {roiLayers.timings.scene_processing_seconds.map((seconds, index) => <p key={index}>t{index + 1} ({t('lectura y exportación', 'read and export')}): {seconds.toFixed(1)} s</p>)}
+            <p>{t('Comparación de mallas:', 'Grid comparison:')} {roiLayers.timings.grid_compare_seconds.toFixed(1)} s · {t('Copia de gráficas:', 'Chart copy:')} {roiLayers.timings.chart_copy_seconds.toFixed(1)} s</p>
+            <p>{t('Preparación del servidor:', 'Server preparation:')} {roiLayers.timings.server_prepare_total_seconds.toFixed(1)} s</p>
+          </details>}
           {roiLayers.manifests.map((manifest, i) => <article key={manifest.escena.granuleId}>
             <h4>t{i + 1}: {manifest.escena.fecha_inicio.slice(0, 10)}</h4>
             <p>{t('Trayectoria', 'Track')} {manifest.escena.trayectoria}/{t('Marco', 'Frame')} {manifest.escena.marco} · {manifest.escena.direccion === 'ASCENDING' ? t('Ascendente', 'Ascending') : manifest.escena.direccion === 'DESCENDING' ? t('Descendente', 'Descending') : manifest.escena.direccion}</p>

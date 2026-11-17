@@ -29,6 +29,8 @@ El resultado se describe como **inspección exploratoria**: no es un mapa de cam
 | `GET /api/roi-jobs/{id}` | `{"status": "queued" \| "running" \| "ready" \| "error", "message": "…"}`. En `ready` agrega `manifests` (uno o dos `capas.json`), `comparable`, `charts` (`[{granuleId, fecha, manifest: graficas.json}]`), `copia_disco` y `copia` (estado de la copia en disco y en base) |
 | `GET /api/roi-jobs/{id}/assets/<ruta>` | El `.png` o `.tif` de una capa. Solo sirve archivos dentro de `layers/` del trabajo |
 
+En estado `ready`, la API incluye `timings` con duraciones en segundos (`float`): `search_asf_seconds`, `scene_processing_seconds` (un elemento por escena; lectura H5 y exportación son una fase conjunta), `grid_compare_seconds`, `chart_copy_seconds` y `server_prepare_total_seconds`. `copia.timings.database_copy_seconds` mide la copia a PostGIS cuando esta se intenta. El navegador muestra el tiempo hasta cargar las imágenes y un desglose desplegable de las fases del servidor; el hook expone `preparationSeconds`, desde el inicio del POST hasta que se cargan las imágenes. Al cambiar o reintentar la ROI, borra los tiempos previos. Son mediciones monotónicas locales; no incluyen espera atribuible a tiempos absolutos ni identifican el desglose interno de la fase por escena. No se incluyen URLs, credenciales ni datos por píxel.
+
 **Reglas de la ROI** (`validate_roi`):
 - un `Polygon` de 4 a 100 vértices, cerrado, válido y sin agujeros;
 - longitud entre −180 y 180, latitud entre −85 y 85;

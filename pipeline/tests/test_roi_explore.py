@@ -70,6 +70,41 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     assert not list(run.rglob('*.h5'))
 
 
+def test_preparation_records_phase_timings_with_monotonic_clock(tmp_path, monkeypatch):
+    import json
+    from dataclasses import replace
+    from shapely import wkt
+    from shapely.geometry import mapping
+    from pipeline.tests.test_subset import make_gcov, scene as synthetic_scene, ROI as synthetic_roi
+    from pipeline.tests.test_etapa1 import add_radar_grid, FakeHTTPS
+    from pipeline import sources, roi_explore
+    from pipeline.sources import asf
+
+    h5, _ = make_gcov(tmp_path / 'synthetic.h5')
+    add_radar_grid(h5)
+    selected = replace(synthetic_scene(), url='https://example.invalid/synthetic.h5')
+    class Source:
+        def search(self, roi, product):
+            return [selected]
+    monkeypatch.setattr(sources, 'get_source', lambda _: Source())
+    monkeypatch.setattr(asf, 'earthdata_https_fs', lambda: FakeHTTPS(h5))
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'graficas-roi')
+    ticks = iter(range(100, 200))
+    monkeypatch.setattr(roi_explore.time, 'monotonic', lambda: next(ticks))
+    run = tmp_path / 'timed'
+    run.mkdir()
+    roi_explore.write_json(run / 'request.json', {'roi': mapping(wkt.loads(synthetic_roi))})
+
+    roi_explore.prepare(run)
+    timings = json.loads((run / 'result.json').read_text(encoding='utf-8'))['timings']
+    assert timings['search_asf_seconds'] == 1.0
+    assert timings['scene_processing_seconds'] == [1.0]
+    assert timings['grid_compare_seconds'] == 1.0
+    assert timings['chart_copy_seconds'] == 1.0
+    assert timings['server_prepare_total_seconds'] == 9.0
+    assert all(isinstance(value, float) for value in timings.values() if not isinstance(value, list))
+
+
 def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
     """La ROI devuelve sus gráficas (incidencia, retrodispersión, máscara) y deja una copia en disco."""
     import json

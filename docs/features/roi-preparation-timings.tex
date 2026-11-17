@@ -1,0 +1,22 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,mexico]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\title{Tiempos de preparación de una ROI}
+\author{TerraPulse AI}
+\date{}
+\begin{document}
+\maketitle
+\section{Objetivo}
+Registrar duraciones de las fases de preparación de una región de interés (ROI) para facilitar su diagnóstico y comparación. Las duraciones no describen desempeño medido en una ejecución real de Acapulco.
+\section{Uso}
+Al consultar \texttt{GET /api/roi-jobs/\{id\}} cuando el trabajo está listo, el objeto \texttt{timings} informa segundos para búsqueda ASF, procesamiento individual por escena, comparación de mallas, copia de gráficas y preparación total en servidor. El campo \texttt{copia.timings.database\_copy\_seconds} informa el tiempo empleado en la copia a base de datos. En el hook \texttt{useRoiLayers}, \texttt{preparationSeconds} mide desde el inicio del POST hasta que las imágenes se cargan. La barra lateral muestra este tiempo y ofrece un desglose desplegable de las fases del servidor; una nueva ROI o un reintento borra las mediciones previas.
+\section{Implementación}
+El servidor usa reloj monotónico y serializa duraciones numéricas. La fase por escena agrupa lectura H5 y exportación: no se reporta un desglose que no se mide. El navegador también usa reloj monotónico. Los tiempos se agregan sin alterar los productos científicos ni los estados existentes.
+\section{Limitaciones}
+Los valores dependen del entorno, la ROI, la red y la disponibilidad de servicios. No se incluyen URLs, credenciales ni valores por píxel. La medición real de Acapulco permanece pendiente y no se sustituye por cifras simuladas.
+\section{Verificación}
+Ejecutar \texttt{pytest -q pipeline/tests/test\_roi\_explore.py pipeline/tests/test\_roi\_http.py}: 13 pruebas aprobadas con datos sintéticos; 51 advertencias de Rasterio. Ejecutar \texttt{node --test web/tests/roi.test.mjs}: 20 pruebas aprobadas, incluida la comprobación estructural del indicador visual. Ejecutar \texttt{cd web \&\& npm run build}: compilación aprobada con advertencia de tamaño de paquete. El documento compiló con \texttt{pdflatex}. La suite web completa aprobó 84 pruebas. La suite Python completa aprobó 441 y falló 16: faltan artefactos locales DG2 y cuatro pruebas de API solar recibieron HTTP 404 por configuración de rutas. La medición real de Acapulco requiere acceso a Earthdata y queda pendiente.
+\end{document}

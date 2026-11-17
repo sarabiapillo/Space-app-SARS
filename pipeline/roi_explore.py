@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import shutil
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -83,7 +84,11 @@ def prepare(run_dir):
     def progress(message):
         write_json(run_dir / 'status.json', {'status': 'running', 'message': message})
     progress('Consultando escenas GCOV disponibles en ASF…')
+    timings = {}
+    total_started = time.monotonic()
+    phase_started = time.monotonic()
     scenes = get_source('asf').search(wkt, 'GCOV')
+    timings['search_asf_seconds'] = float(time.monotonic() - phase_started)
     selected = select_scenes(scenes)
     if not selected:
         raise RoiPreparationError('No hay escenas GCOV con madurez conocida para esta ROI.')
@@ -95,7 +100,9 @@ def prepare(run_dir):
     config = run_dir / 'config.yaml'
     config.write_text(yaml.safe_dump({'roi': {'wkt': wkt}, 'source': 'asf'}), encoding='utf-8')
     manifests, charts = [], []
+    scene_timings = []
     for index, scene in enumerate(selected):
+        phase_started = time.monotonic()
         progress(f'Leyendo bloques HTTPS del H5 y preparando capas ({index + 1}/{len(selected)})…')
         out = inspect_scene([scene.scene_id, '--catalogo', str(catalog), '--config', str(config),
                              '--salida', str(run_dir / 'layers'), '--sin-vista', '--sin-figuras',
@@ -109,6 +116,9 @@ def prepare(run_dir):
             charts.append({'granuleId': manifest['escena']['granuleId'],
                            'fecha': str(manifest['escena'].get('fecha_inicio', ''))[:10],
                            'manifest': json.loads(charts_file.read_text(encoding='utf-8'))})
+        scene_timings.append(float(time.monotonic() - phase_started))
+    timings['scene_processing_seconds'] = scene_timings
+    phase_started = time.monotonic()
     comparable = False
     if len(manifests) == 2:
         a, b = manifests
@@ -119,10 +129,14 @@ def prepare(run_dir):
             paths = [next(c['cog'] for c in m['capas'] if c['id'] == layer_id) for m in manifests]
             with rasterio.open(root / paths[0]) as x, rasterio.open(root / paths[1]) as y:
                 comparable &= (x.crs == y.crs and x.transform == y.transform and x.shape == y.shape)
+    timings['grid_compare_seconds'] = float(time.monotonic() - phase_started)
     progress('Guardando copia de las gráficas de la ROI…')
+    phase_started = time.monotonic()
     copy_dir = save_chart_copy(run_dir, wkt, [run_dir / 'layers' / m['escena']['granuleId'] for m in manifests])
+    timings['chart_copy_seconds'] = float(time.monotonic() - phase_started)
+    timings['server_prepare_total_seconds'] = float(time.monotonic() - total_started)
     write_json(run_dir / 'result.json', {'manifests': manifests, 'comparable': comparable,
-        'charts': charts, 'copia_disco': copy_dir,
+        'charts': charts, 'copia_disco': copy_dir, 'timings': timings,
         'message': 'Capas listas. Inspección exploratoria; no identifica causas.' if comparable else
         'Capas listas. No hay un par con malla comparable; deslizador deshabilitado.'})
     write_json(run_dir / 'status.json', {'status': 'ready', 'message': 'Capas listas.'})

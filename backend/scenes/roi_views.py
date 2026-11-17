@@ -47,6 +47,7 @@ def copy_to_database(path):
 
     result = json.loads((path / 'result.json').read_text(encoding='utf-8'))
     copy_dir = ROOT / result['copia_disco'] if result.get('copia_disco') else None
+    started = time.monotonic()
     loaded, errors = [], []
     folders = sorted(p for p in copy_dir.iterdir() if p.is_dir()) if copy_dir and copy_dir.is_dir() else []
     for folder in folders:
@@ -60,6 +61,7 @@ def copy_to_database(path):
         'disco': result.get('copia_disco'),
         'base_datos': 'ok' if loaded and not errors else ('parcial' if loaded else 'no disponible'),
         'escenas': loaded, 'errores': errors,
+        'timings': {'database_copy_seconds': float(time.monotonic() - started)},
     })
 
 
@@ -67,10 +69,12 @@ def run_job(path):
     try:
         subprocess.run([sys.executable, '-m', 'pipeline.roi_explore', str(path)], cwd=ROOT,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800, check=True)
+        database_started = time.monotonic()
         try:
             copy_to_database(path)
         except Exception:  # la copia en base nunca invalida un trabajo terminado
-            write_json(path / 'copia.json', {'base_datos': 'no disponible', 'escenas': [], 'errores': []})
+            write_json(path / 'copia.json', {'base_datos': 'no disponible', 'escenas': [], 'errores': [],
+                                             'timings': {'database_copy_seconds': float(time.monotonic() - database_started)}})
         finally:
             from django.db import connection
             connection.close()   # este hilo del pool no debe dejar conexiones abiertas
