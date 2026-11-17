@@ -49,7 +49,7 @@ interface SidebarProps {
   onGcovFootprint: (feature: unknown | null) => void
   confirmedROI: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
-  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { withHeatmap?: boolean; simulation?: 'flood' | 'solar' | 'seismic' }) => void
   onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
 }
 
@@ -223,7 +223,7 @@ export function Sidebar({
           {openNodes.roiCatalog && (
             <div className="tree-node__body">
               <RoiCatalogSection
-                onSelectPreset={(preset) => onSelectPresetROI?.(preset)}
+                onSelectPreset={(preset, opts) => onSelectPresetROI?.(preset, opts)}
                 onOpenSimulation={onOpenSimulation}
               />
             </div>

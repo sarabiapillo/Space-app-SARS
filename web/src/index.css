@@ -1459,6 +1459,104 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.ws-panel-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.ws-tab-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.ws-tab-action-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.ws-tab-action-btn--heat {
+  color: #c2410c;
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.ws-tab-action-btn--heat:hover {
+  background: #ea580c;
+  color: #ffffff;
+  border-color: #c2410c;
+}
+
+.ws-tab-action-btn--water {
+  color: #0369a1;
+  border-color: #bae6fd;
+  background: #f0f9ff;
+}
+
+.ws-tab-action-btn--water:hover {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #0369a1;
+}
+
+.ws-tab-action-btn--seismic {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.ws-tab-action-btn--seismic:hover {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #b91c1c;
+}
+
+.ws-ribbon__btn--heat {
+  color: #c2410c;
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.ws-ribbon__btn--heat:hover:not(:disabled) {
+  background: #ffedd5;
+  border-color: #ea580c;
+}
+
+.ws-ribbon__btn--water {
+  color: #0369a1;
+  border-color: #bae6fd;
+  background: #f0f9ff;
+}
+
+.ws-ribbon__btn--water:hover:not(:disabled) {
+  background: #e0f2fe;
+  border-color: #0284c7;
+}
+
+.ws-ribbon__btn--seismic {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.ws-ribbon__btn--seismic:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #dc2626;
+}
+
 /* ---------- 2. PANEL IZQUIERDO ("Model Builder / Árbol del Proyecto") ---------- */
 
 .sidebar {
@@ -5375,6 +5473,17 @@ button:disabled {
 
 .roi-card__sim-btn--seismic:hover {
   background: #dc2626;
+  color: #ffffff;
+}
+
+.roi-card__sim-btn--heat {
+  background: #ffedd5;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+
+.roi-card__sim-btn--heat:hover {
+  background: #ea580c;
   color: #ffffff;
 }
 
