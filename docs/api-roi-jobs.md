@@ -7,13 +7,13 @@
 
 1. El usuario dibuja un rectángulo en el mapa a partir de dos esquinas (`rectangleFromCorners`).
 2. El frontend lo envía a `POST /api/roi-jobs` como `Polygon` GeoJSON en EPSG:4326.
-3. El backend crea un trabajo en disco y lo ejecuta en un **proceso aparte** (`python -m pipeline.roi_explore <carpeta>`), con un límite de 30 minutos. Ese proceso:
+3. El backend crea un trabajo en disco y lo ejecuta en un **proceso aparte** (`python -m pipeline.roi_explore <carpeta>`), con un límite de 30 minutos. En POSIX, el coordinador inicia una sesión nueva y, al vencer el límite o terminar con error, envía `SIGKILL` a su grupo y recoge al coordinador; el alcance es ese grupo aislado, no procesos ajenos. Si no se puede señalizar el grupo, el respaldo solo detiene al coordinador y no garantiza terminar descendientes. En Windows intenta detener el árbol con `taskkill /T /F` y recoge al coordinador. Si esa orden no está disponible o no confirma éxito, el respaldo solo puede detener al coordinador: no se garantiza la terminación de sus descendientes. Ese proceso:
    1. **Busca escenas:** consulta en ASF las escenas GCOV que intersectan la ROI (`get_source('asf').search`).
    2. **Elige las escenas** (`select_scenes`):
       - descarta las que no tienen madurez conocida;
       - busca el par **comparable** más reciente según `compat.check_pair`, que nunca mezcla CRID ni madurez;
       - si no hay par, usa una sola fecha.
-   3. **Genera las capas:** corre `etapa1` en remoto por cada escena, con `--sin-vista --sin-figuras --escala-web -22 0`. Solo lee por HTTPS los bloques de la ROI.
+   3. **Genera las capas:** con una sola escena, conserva el flujo directo de `etapa1`; con un par comparable, inicia dos procesos Python independientes, uno por `scene_id`, para ejecutar ambos `etapa1` en paralelo. Cada proceso lee por HTTPS únicamente los bloques de su escena dentro de la ROI y escribe su manifiesto y gráficas en el índice de escena correspondiente. La selección mantiene el orden del par y el ensamblado respeta ese orden. La búsqueda ASF y la comparación de mallas, copia de gráficas y publicación siguen siendo secuenciales. El límite de 25 minutos empieza antes de buscar en ASF, dejando margen frente al límite de 30 minutos del proceso padre; si vence antes de lanzar procesos, no se inicia ninguno. Un fallo o vencimiento detiene y recoge los procesos activos, y el estado público usa un mensaje controlado.
    4. **Compara las mallas:** si hay dos fechas, verifica que los COG tengan el mismo CRS, la misma transformación y la misma forma. Solo entonces marca `comparable: true` y el frontend habilita el deslizador.
    5. **Gráficas y copia (2026-11-15):** junta el `graficas.json` de cada fecha (ángulo de incidencia, histograma de retrodispersión γ⁰ HH/HV y máscara QA de subfranja, **calculados sobre la ROI dibujada**) en `result.json → charts` y guarda una copia en `data/graficas-roi/<id>/` (§2.1).
 4. Al terminar el subproceso, Django carga esa copia en PostGIS con el mismo código que `load_explore` (§2.1).

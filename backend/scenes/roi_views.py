@@ -1,6 +1,8 @@
 """Trabajos locales de ROI: estado en disco y proceso aislado con tiempo límite."""
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -63,10 +65,47 @@ def copy_to_database(path):
     })
 
 
+def _stop_coordinator_tree(process):
+    """Detiene solo el árbol aislado del coordinador y recoge su proceso raíz."""
+    if os.name == 'posix':
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            process.kill()  # respaldo limitado al coordinador si no se puede señalizar el grupo
+    elif os.name == 'nt':
+        try:
+            result = subprocess.run(
+                ['taskkill', '/T', '/F', '/PID', str(process.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
+            if result.returncode != 0:
+                process.kill()  # taskkill no confirmó la terminación del árbol
+        except (OSError, subprocess.SubprocessError):
+            process.kill()      # respaldo limitado al coordinador; descendientes no garantizados
+    else:
+        process.kill()          # plataforma no contemplada: solo raíz
+    process.wait()
+
+
 def run_job(path):
+    process = None
+    tree_stopped = False
     try:
-        subprocess.run([sys.executable, '-m', 'pipeline.roi_explore', str(path)], cwd=ROOT,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800, check=True)
+        options = {'cwd': ROOT, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
+        if os.name == 'posix':
+            options['start_new_session'] = True
+        process = subprocess.Popen([sys.executable, '-m', 'pipeline.roi_explore', str(path)], **options)
+        try:
+            returncode = process.wait(timeout=1800)
+        except subprocess.TimeoutExpired:
+            _stop_coordinator_tree(process)
+            tree_stopped = True
+            raise
+        if returncode != 0:
+            _stop_coordinator_tree(process)
+            tree_stopped = True
+            raise subprocess.CalledProcessError(returncode, process.args)
         try:
             copy_to_database(path)
         except Exception:  # la copia en base nunca invalida un trabajo terminado
@@ -75,6 +114,8 @@ def run_job(path):
             from django.db import connection
             connection.close()   # este hilo del pool no debe dejar conexiones abiertas
     except (OSError, subprocess.SubprocessError):
+        if process is not None and not tree_stopped:
+            _stop_coordinator_tree(process)
         status = json.loads((path / 'status.json').read_text(encoding='utf-8'))
         if status['status'] != 'error':
             write_json(path / 'status.json', {'status': 'error', 'message': 'La preparación falló o excedió 30 minutos. Puedes reintentar.'})

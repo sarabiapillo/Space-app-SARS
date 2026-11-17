@@ -1,0 +1,20 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,mexico]{babel}
+\title{Preparación paralela de escenas para una ROI}
+\author{TerraPulse AI}
+\date{}
+\begin{document}
+\maketitle
+\section{Objetivo}
+Reducir el tiempo de preparación cuando la búsqueda encuentra un par comparable, sin cambiar los productos científicos ni mostrar métricas de rendimiento.
+\section{Uso}
+La preparación se solicita mediante el flujo existente de trabajos ROI. Una solicitud con una sola escena conserva el procesamiento secuencial existente. Para un par, el coordinador ejecuta dos procesos Python, pasando a cada uno el identificador exacto de su escena.
+\section{Implementación}
+Cada proceso ejecuta la inspección de Etapa 1 de forma independiente y escribe bajo el directorio de capas de su escena. El coordinador reúne manifiestos y gráficas por índice estable, y después verifica la malla y copia las gráficas en el flujo habitual. No cambian los COG, PNG, metadatos, verificaciones de identidad, máscaras ni fórmulas científicas. La búsqueda ASF, la comparación de mallas y la copia permanecen secuenciales.
+\section{Limitaciones}
+El plazo de preparación empieza antes de la búsqueda ASF y reserva margen frente al límite del proceso servidor. Si vence, no se lanzan tareas nuevas; ante error o vencimiento se terminan y recogen los procesos activos. La respuesta pública no expone detalles internos. El límite de 30 minutos del servidor también detiene el árbol del coordinador: en POSIX se usa una sesión/grupo aislado y se envía `SIGKILL` al grupo; si falla la señalización, el respaldo solo termina el coordinador y no garantiza detener descendientes. En Windows se intenta `taskkill /T /F`; si esa herramienta falla o no está disponible, el respaldo de Windows solo puede terminar el proceso coordinador y no garantiza detener a sus descendientes. El paralelismo aplica solo cuando se selecciona un par comparable; no garantiza una duración específica ni sustituye la disponibilidad de ASF/Earthdata.
+\section{Verificación}
+Las pruebas enfocadas de ROI y HTTP aprobaron 19 casos con datos H5 sintéticos; se observaron 34 advertencias de Rasterio. La prueba del par ejecuta dos procesos reales sin acceso a red y comprueba el orden, los artefactos y la comparación de mallas. Las pruebas del worker HTTP simulan timeout, salida anormal y éxito; no se ejecutó una terminación real de 30 minutos, una orden `taskkill` ni una prueba remota ASF/Earthdata.
+\end{document}
