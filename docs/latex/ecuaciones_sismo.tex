@@ -1,261 +1,273 @@
-% TerraPulse AI — Ecuaciones de Propagación de Ondas Sísmicas y Modelación de Riesgo
-% Compilar con: pdflatex ecuaciones_sismo.tex (o latexmk -pdf)
+% TerraPulse AI — Documentación Técnica y Científica: Simulación de Terremotos y Propagación de Ondas
+% Compilar con: pdflatex ecuaciones_sismo.tex
 \documentclass[11pt,a4paper]{article}
 \input{preambulo}
-\setlength{\parskip}{0.35em}
+\setlength{\parskip}{0.4em}
 
-\title{TerraPulse AI\\[4pt]\large Modelación de Terremotos: Física de Ondas, Leyes de Atenuación y Zonificación de Riesgo Sísmico}
-\author{Documentación técnica del simulador sísmico}
-\date{16 de noviembre de 2026}
+\title{\textbf{TerraPulse AI}\\[6pt]\Large Manual Técnico y Físico-Matemático: Simulación de Terremotos, Propagación de Ondas Elásticas, Atenuación GMPE y Zonificación de Riesgo Sísmico}
+\author{Ingeniería de Sistemas y Geociencias Computacionales -- TerraPulse AI}
+\date{17 de noviembre de 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Este documento expone la formulación matemática y física incorporada en el Simulador de Terremotos de TerraPulse AI. Se describen las ecuaciones elastodinámicas de ondas primarias ($P$) y secundarias ($S$), las Leyes de Predicción de Movimiento del Suelo (\emph{Ground Motion Prediction Equations}, GMPE) adaptadas al régimen tectónico mexicano (subducción e intraplaca), la escala de aceleración pico ($PGA$), la correlación con la Intensidad Mercalli Modificada ($MMI$), el efecto de sitio mediante $V_{s30}$ y el cálculo analítico de los radios de zonificación de riesgo y tiempos de alerta temprana.
+Este documento constituye la memoria técnica integral de la arquitectura, ecuaciones y funcionamiento del \textbf{Simulador de Terremotos de TerraPulse AI}. Se detalla la formulación física basada en la elastodinámica continua (ecuación de Navier), la determinación de tiempos de viaje para ondas primarias ($P$) y secundarias ($S$), la estimación de la Aceleración Pico del Terreno ($PGA$) mediante Leyes de Predicción de Movimiento del Suelo (\emph{Ground Motion Prediction Equations}, GMPE) calibradas para la zona de subducción e intraplaca de México (Ordaz et al., García et al., Boore-Atkinson), la amplificación estratigráfica por velocidad de onda de corte en 30 metros ($V_{s30}$), la correlación con la escala Mercalli Modificada ($MMI$) de daño estructural, la generación analítica del sismograma sintético $a(t, D)$ con efecto de resonancia de cuenca (Valle de México) y el algoritmo numérico de bisección para la zonificación de 4 anillos concéntricos de isosisma georreferenciados en MapLibre GL.
 \end{abstract}
 
-\section{Parámetros Fundamentales de la Fuente Sísmica}
+\tableofcontents
+\newpage
 
-Un evento sísmico en el simulador queda definido por el hipocentro $(\lambda_e, \phi_e, h)$, donde $\lambda_e$ es la longitud, $\phi_e$ la latitud y $h$ la profundidad focal (en km), junto con su magnitud de momento $M_w$.
+\section{Introducción y Visión General del Sistema}
 
-El momento sísmico escalar $M_0$ (en dyn$\cdot$cm) se relaciona con la magnitud de momento $M_w$ mediante la ecuación clásica de Kanamori (1977):
+TerraPulse AI es una plataforma de análisis geoespacial y computación de riesgos naturales. Su módulo de simulación de terremotos permite a analistas de protección civil, investigadores y tomadores de decisiones simular en tiempo real escenarios de ruptura sísmica, evaluar el impacto destructivo del movimiento del suelo y estimar con precisión el tiempo disponible de alerta temprana.
+
+El simulador opera combinando tres pilares científicos:
+\begin{enumerate}
+  \item \textbf{Física del medio continuo y elastodinámica:} Cálculo riguroso de tiempos de arribo de frentes de onda longitudinales ($P$) y transversales ($S$) a partir de las propiedades elásticas de la corteza continental.
+  \item \textbf{Modelos empíricos y leyes de atenuación GMPE:} Estimación probabilística de aceleraciones espectrales calibradas con registros históricos de la Trinchera Mesoamericana.
+  \item \textbf{Cómputo geoespacial geodésico y series temporales:} Inversión numérica de radios de afectación y generación de trazas sintéticas de acelerogramas $a(t)$ con respuesta de sitio.
+\end{enumerate}
+
+\section{Arquitectura y Flujo de Procesamiento del Simulador}
+
+El ciclo de cómputo y renderizado del simulador opera de forma reactiva e interactiva siguiendo las etapas descritas a continuación:
+
+\begin{enumerate}
+  \item \textbf{Captura de Parámetros de Ruptura (Hipocentro y Mecanismo):}
+    El usuario define las coordenadas del epicentro $(\lambda_e, \phi_e)$ mediante un clic directo en el mapa o seleccionando un sismo histórico (p.~ej., Michoacán 1985 $M_w 8.1$, Puebla-Morelos 2017 $M_w 7.1$ o Tehuantepec 2017 $M_w 8.2$). Se configuran la magnitud de momento $M_w$, la profundidad focal $h$ (km), el mecanismo de falla (subducción interplaca, falla normal intraplaca o cortical superficial) y la litología superior ($V_{s30}$).
+
+  \item \textbf{Cálculo Geodésico y Distancia Hipocentral:}
+    Para cualquier punto del dominio, se evalúa la distancia ortodrómica sobre el esferoide terrestre y la distancia hipocentral $R = \sqrt{D^2 + h^2}$.
+
+  \item \textbf{Evaluación del Campo de Movimiento del Suelo ($PGA$ y $MMI$):}
+    Se evalúa la ecuación GMPE considerando atenuación geométrica $\sim 1/R$, amortiguamiento inelástico $e^{-\gamma R}$ y el factor de amplificación de sitio $S_{\text{sitio}}$. El valor pico resultante se transforma a la escala Mercalli Modificada ($MMI$) para cuantificar daños en infraestructura.
+
+  \item \textbf{Inversión Numérica de Radios de Isosisma (Bisección):}
+    Mediante un algoritmo de bisección se resuelven las 4 distancias epicentrales límites para los umbrales de aceleración destructiva ($\ge 0.34\,g$), daño severo ($0.12\,g$), percepción moderada ($0.03\,g$) y percepción leve ($0.005\,g$).
+
+  \item \textbf{Generación de Polígonos Geodésicos Vectoriales:}
+    A partir de cada radio $R_{\text{zona}}$, se computa una trayectoria circular geodésica de 64 nodos sobre el elipsoide WGS84, ensamblando capas GeoJSON proyectadas dinámicamente en MapLibre GL.
+
+  \item \textbf{Síntesis Temporal del Sismograma $a(t, D)$:}
+    Se genera la serie continua de aceleración en función del tiempo para una estación receptora elegida por el usuario, mostrando la onda $P$, la ventana de advertencia temprana $\Delta t = t_S - t_P$, el impacto cortante de la onda $S$ y la coda con resonancia de estrato blando.
+\end{enumerate}
+
+\section{Ecuaciones de Fuente y Geometría Focal}
+
+El momento sísmico escalar $M_0$ (en dyn$\cdot$cm) representa la energía liberada en la falla:
 \begin{equation}
   M_w = \frac{2}{3} \log_{10}(M_0) - 10.7 \iff M_0 = 10^{\frac{3}{2}(M_w + 10.7)}.
   \label{eq:kanamori}
 \end{equation}
 
-Para cualquier estación o punto de interés ubicado en $(\lambda, \phi)$, la distancia epicentral $D$ sobre el elipsoide se calcula mediante la fórmula de gran círculo:
+Para una estación en $(\lambda, \phi)$ y epicentro en $(\lambda_e, \phi_e)$, la distancia epicentral superficial $D$ se obtiene por la ley de semiversenos (Haversine):
 \begin{equation}
   D = 2 R_T \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_e)\cos(\phi)\sin^2\left(\frac{\Delta \lambda}{2}\right)} \right),
   \label{eq:distancia_epicentral}
 \end{equation}
-donde $R_T \approx 6371\,\text{km}$ es el radio terrestre medio, $\Delta \phi = \phi - \phi_e$ y $\Delta \lambda = \lambda - \lambda_e$.
+donde $R_T \approx 6371\,\text{km}$, $\Delta \phi = \phi - \phi_e$ y $\Delta \lambda = \lambda - \lambda_e$.
 
-La distancia hipocentral $R$ entre el foco y la superficie se deduce por geometría pitagórica euclídea local:
+La distancia hipocentral tridimensional $R$ desde la ruptura hasta la superficie es:
 \begin{equation}
   R = \sqrt{D^2 + h^2}.
   \label{eq:distancia_hipocentral}
 \end{equation}
 
-\section{Propagación de Ondas Elásticas y Tiempos de Viaje}
+\section{Elastodinámica Continua y Tiempos de Viaje de Ondas}
 
-En un medio elástico lineal homogéneo e isótropo caracterizado por los parámetros de Lamé $\lambda$ y $\mu$, y la densidad volumétrica $\rho$, la ecuación de onda elástica de Navier:
+La propagación de deformaciones mecánicas en la corteza terrestre está regida por la ecuación elástica de Navier:
 \begin{equation}
   \rho \frac{\partial^2 \mathbf{u}}{\partial t^2} = (\lambda + \mu)\nabla(\nabla \cdot \mathbf{u}) + \mu \nabla^2 \mathbf{u},
   \label{eq:navier}
 \end{equation}
-admite la descomposición de Helmholtz $\mathbf{u} = \nabla \Phi + \nabla \times \mathbf{\Psi}$, dando origen a dos frentes de onda de cuerpo:
+donde $\mathbf{u}(\mathbf{x}, t)$ es el vector desplazamiento, $\rho$ es la densidad de la roca, y $\lambda, \mu$ son los coeficientes elásticos de Lamé ($\mu$ módulo de corte o rigidez).
 
+Aplicando el teorema de descomposición de Helmholtz $\mathbf{u} = \nabla \Phi + \nabla \times \mathbf{\Psi}$:
 \begin{enumerate}
-  \item \textbf{Ondas P (Primarias / Compresionales):}
-  \begin{equation}
-    v_p = \sqrt{\frac{\lambda + 2\mu}{\rho}} \approx 6.0\,\text{km/s} \quad \text{(en corteza continental típica)}.
-    \label{eq:vp}
-  \end{equation}
-  \item \textbf{Ondas S (Secundarias / Cizalla):}
-  \begin{equation}
-    v_s = \sqrt{\frac{\mu}{\rho}} \approx 3.5\,\text{km/s}.
-    \label{eq:vs}
-  \end{equation}
+  \item \textbf{Potencial escalar $\Phi$ (Onda P, compresional / longitudinal):}
+    \begin{equation}
+      \nabla^2 \Phi = \frac{1}{v_p^2}\frac{\partial^2 \Phi}{\partial t^2}, \qquad v_p = \sqrt{\frac{\lambda + 2\mu}{\rho}} \approx 6.0\,\text{km/s}.
+    \end{equation}
+  \item \textbf{Potencial vectorial $\mathbf{\Psi}$ (Onda S, cizalla / transversal):}
+    \begin{equation}
+      \nabla^2 \mathbf{\Psi} = \frac{1}{v_s^2}\frac{\partial^2 \mathbf{\Psi}}{\partial t^2}, \qquad v_s = \sqrt{\frac{\mu}{\rho}} \approx 3.5\,\text{km/s}.
+    \end{equation}
 \end{enumerate}
 
-Bajo una relación de Poisson estándar $\nu = 0.25$, la razón entre velocidades satisface $v_p / v_s = \sqrt{3} \approx 1.732$.
-
-\subsection{Tiempos de Llegada y Ventana de Alerta Sísmica Temprana}
-
-El tiempo transcurrido desde la ruptura hasta el arribo del primer impulso de onda $P$ y onda $S$ al sitio a distancia $R$ viene dado por:
-\begin{align}
-  t_P(R) &= \frac{R}{v_p}, \label{eq:tp} \\
-  t_S(R) &= \frac{R}{v_s}. \label{eq:ts}
-\end{align}
-
-La diferencia de tiempo $\Delta t = t_S - t_P$ representa el intervalo previo a la llegada de la fase de mayor energía destructiva (onda $S$ y trenes de ondas superficiales de Rayleigh/Love):
+Para un sólido de Poisson ($\nu = 0.25 \implies \lambda = \mu$), la razón cinemática satisface:
 \begin{equation}
-  \Delta t(R) = R \left( \frac{1}{v_s} - \frac{1}{v_p} \right) \approx R \left( \frac{1}{3.5} - \frac{1}{6.0} \right) \approx 0.119\,R\,\text{segundos} \quad (R \text{ en km}).
-  \label{eq:alerta}
+  \frac{v_p}{v_s} = \sqrt{\frac{\lambda + 2\mu}{\mu}} = \sqrt{3} \approx 1.732.
 \end{equation}
 
-Para un sistema de alerta sísmica (como el SASMEX en México), si el sismo es detectado en el epicentro en $t_{\text{det}} \approx 3\,\text{s}$ y la señal de radio se propaga casi a la velocidad de la luz $c \gg v_s$, el tiempo de oportunidad de advertencia en una ciudad distante $D$ es:
+\subsection{Tiempos de Llegada y Ventana Operativa de Alerta Temprana}
+
+Los tiempos de viaje desde el foco hasta el sitio receptor son:
 \begin{equation}
-  T_{\text{aviso}} \approx \frac{\sqrt{D^2 + h^2}}{v_s} - t_{\text{det}} - t_{\text{transmisión}}.
+  t_P(R) = \frac{R}{v_p} = \frac{\sqrt{D^2 + h^2}}{6.0}, \qquad t_S(R) = \frac{R}{v_s} = \frac{\sqrt{D^2 + h^2}}{3.5}.
 \end{equation}
 
-\section{Leyes de Atenuación (GMPE) y Aceleración Pico del Terreno ($PGA$)}
+El margen temporal entre el arribo de la onda $P$ (no destructiva) y el tren cortante destructivo $S$ define la ventana de alerta temprana:
+\begin{equation}
+  \Delta t(D) = t_S - t_P = \sqrt{D^2 + h^2} \left( \frac{1}{3.5} - \frac{1}{6.0} \right) \approx 0.119 \cdot \sqrt{D^2 + h^2} \quad \text{(segundos)}.
+\end{equation}
 
-La aceleración pico del suelo ($PGA$, \emph{Peak Ground Acceleration}) decrece con la distancia debido a dos efectos físicos:
-\begin{itemize}
-  \item \textbf{Atenuación geométrica:} Dispersión de la energía en una superficie esférica creciente ($\propto 1/R$).
-  \item \textbf{Atenuación anelástica o intrínseca:} Pérdida de energía por fricción interna del medio, parametrizada por el factor de calidad $Q(f)$, con coeficiente $\gamma = \frac{\pi f}{Q v_s}$.
-\end{itemize}
+Dado que los sensores sismológicos costeros (SASMEX) transmiten por enlace de radio a la velocidad de la luz $c \approx 3\times 10^5\,\text{km/s} \gg v_s$, el tiempo de oportunidad útil para alertar a una metrópoli ubicada a $D \approx 320\,\text{km}$ (como la Ciudad de México respecto a Guerrero o Michoacán) es:
+\begin{equation}
+  T_{\text{alerta}} \approx \frac{\sqrt{320^2 + 15^2}}{3.5} - t_{\text{proceso}} \approx 91.5\,\text{s} - 3.0\,\text{s} \approx 88.5\,\text{s} \quad (\text{tiempo total desde el origen}).
+\end{equation}
+La población percibe la alerta entre 40 y 60 segundos antes del movimiento fuerte.
 
-El simulador implementa el modelo GMPE formulado para México (Ordaz et al., García et al., Boore-Atkinson):
+\section{Leyes de Atenuación del Movimiento del Suelo (GMPE)}
+
+El parámetro físico principal para ingeniería estructural es la Aceleración Pico del Terreno (\emph{Peak Ground Acceleration}, $PGA$). El simulador implementa el modelo regional adaptado a México (Ordaz, García, Boore-Atkinson):
 \begin{equation}
   \ln(PGA) = c_1 + c_2 M_w - c_3 \ln(R) - c_4 R + S_{\text{sitio}},
   \label{eq:gmpe}
 \end{equation}
-donde $PGA$ está en unidades de aceleración de la gravedad $g$ ($1\,g \approx 981\,\text{cm/s}^2$), y los coeficientes calibrados para la zona de subducción e intraplaca mexicana son:
+donde $PGA$ está expresado en fracciones de la gravedad terrestre ($g$), con $1\,g = 980.665\,\text{cm/s}^2$ (Gals).
+
+\subsection{Coeficientes según Mecanismo Sismotectónico}
+
 \begin{itemize}
-  \item $c_1 = -1.85$ (constante de fuente)
-  \item $c_2 = 0.92$ (escalamiento con la magnitud)
-  \item $c_3 = 1.15$ (atenuación geométrica corporal)
-  \item $c_4 = 0.0032\,\text{km}^{-1}$ (amortiguamiento inelástico)
-  \item $S_{\text{sitio}}$: factor de amplificación de sitio dependiente de la velocidad de onda de corte en los primeros 30 metros ($V_{s30}$).
+  \item \textbf{Subducción Interplaca (Trinchera Mesoamericana):}
+    $c_1 = -1.85$, $c_2 = 0.92$, $c_3 = 1.15$, $c_4 = 0.0032\,\text{km}^{-1}$.
+  \item \textbf{Intraplaca en Placa de Cocos Subducida (Sismos Profundos):}
+    $c_1 = -1.55$, $c_2 = 0.96$, $c_3 = 1.25$, $c_4 = 0.0040\,\text{km}^{-1}$ (mayor contenido de alta frecuencia y menor atenuación por profundidad focal de 40 a 70 km).
+  \item \textbf{Cortical Somero (Fallas Locales):}
+    $c_1 = -1.95$, $c_2 = 0.88$, $c_3 = 1.05$, $c_4 = 0.0028\,\text{km}^{-1}$.
 \end{itemize}
 
-\subsection{Efecto de Sitio y Amplificación por Suelo Blando}
+\subsection{Efecto de Sitio y Clasificación $V_{s30}$}
 
-La velocidad promedio de onda de corte $V_{s30}$ clasifica el terreno según el estándar NEHRP/Eurocódigo 8:
+La amplificación estratigráfica $S_{\text{sitio}}$ depende de la velocidad promedio de onda de corte en los primeros 30 metros de estrato:
 \begin{equation}
-  S_{\text{sitio}} = b_{\text{site}} \ln\left(\frac{V_{s30}}{V_{\text{ref}}}\right), \quad V_{\text{ref}} = 760\,\text{m/s} \text{ (Roca tipo B/C)},
+  S_{\text{sitio}} = b_{\text{site}} \ln\left( \frac{V_{s30}}{V_{\text{ref}}} \right), \quad V_{\text{ref}} = 760\,\text{m/s}, \quad b_{\text{site}} = -0.45.
 \end{equation}
-con $b_{\text{site}} \approx -0.45$. En arcillas blandas lacustres de alta plasticidad (como la Zona del Lago en Ciudad de México, donde $V_{s30} \approx 60-120\,\text{m/s}$), el fenómeno de resonancia estratigráfica amplifica el movimiento hasta 3 o 4 veces respecto a roca firme.
 
-\section{Escala de Intensidad Mercalli Modificada ($MMI$)}
+\begin{itemize}
+  \item \textbf{Roca Firme ($V_{s30} \ge 760\,\text{m/s}$):} $S_{\text{sitio}} \approx 0.0$.
+  \item \textbf{Suelo Firme / Depósitos Aluviales ($V_{s30} \approx 450\,\text{m/s}$):} Amplificación moderada ($\sim 1.3\times$).
+  \item \textbf{Suelo Blando Lacustre ($V_{s30} \approx 100\,\text{m/s}$, Zona de Lago de la CDMX):} $S_{\text{sitio}} \approx 0.91$, lo que cuadruplica el valor de aceleración espectral debido al fenómeno de resonancia por bajo contraste de impedancias.
+\end{itemize}
 
-La correlación entre la aceleración física $PGA$ (en $\text{cm/s}^2$) y la percepción de daños en la escala Mercalli Modificada ($MMI$) sigue la regresión empírica de Worden et al. y Wald et al.:
+\section{Escala de Intensidad Mercalli Modificada (\texorpdfstring{$MMI$}{MMI})}
+
+Para traducir la aceleración cuantitativa a impacto perceptual y daños estructurales, se aplica la correlación de Worden et al. y Wald et al.:
 \begin{equation}
-  MMI(PGA) =
+  MMI(PGA_{\text{cgs}}) =
   \begin{cases}
-    2.20 \log_{10}(PGA) + 1.00, & \text{si } PGA \le 4.22\,\text{cm/s}^2 \quad (\text{Nivel leve/moderado}) \\
-    3.66 \log_{10}(PGA) - 1.66, & \text{si } PGA > 4.22\,\text{cm/s}^2 \quad (\text{Nivel fuerte/destructivo})
+    2.20 \log_{10}(PGA_{\text{cgs}}) + 1.00, & \text{si } PGA_{\text{cgs}} \le 4.22\,\text{cm/s}^2 \\[6pt]
+    3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66, & \text{si } PGA_{\text{cgs}} > 4.22\,\text{cm/s}^2
   \end{cases}
   \label{eq:mmi}
 \end{equation}
-acotando los resultados en el intervalo físico $1 \le MMI \le 10+$.
+donde $PGA_{\text{cgs}} = PGA_g \times 980.665$.
 
-\section{Zonificación de Riesgo Sísmico en el Simulador}
+\section{Zonificación de Riesgo Sísmico y Algoritmo de Bisección}
 
-A partir de la función $PGA(R)$ y $MMI(R)$, el simulador determina cuantitativamente 4 radios concéntricos de isosisma que delimitan las áreas de afectación:
+El simulador define 4 categorías operativas de riesgo sísmico:
 
-\begin{table}[h!]
+\begin{table}[ht!]
 \centering
-\begin{tabular}{@{}llccp{6.5cm}@{}}
+\small
+\begin{tabular}{@{}llccp{6.8cm}@{}}
 \toprule
-\textbf{Nivel de Riesgo} & \textbf{Color UI} & \textbf{Intensidad $MMI$} & \textbf{$PGA$ Umbral} & \textbf{Efectos Estructurales y Poblacionales} \\
+\textbf{Nivel de Riesgo} & \textbf{Color UI} & \textbf{Intensidad $MMI$} & \textbf{Umbral $PGA$} & \textbf{Efectos Estructurales y Poblacionales} \\
 \midrule
-\textbf{Zona Destructiva} & Rojo (\#ef4444) & $\ge \text{VIII}$ & $\ge 0.34\,g$ & Daño severo a colapso en edificaciones de mampostería; fractura de tuberías subterráneas y pánico generalizado. \\
-\textbf{Zona de Daño Severo} & Naranja (\#f97316) & $\text{VI - VII}$ & $0.12 - 0.34\,g$ & Daño moderado en estructuras convencionales; caída de muros, cornisas y objetos pesados. \\
-\textbf{Zona Moderada} & Ámbar (\#f59e0b) & $\text{IV - V}$ & $0.03 - 0.12\,g$ & Sentido ampliamente por la población; vibración como el paso de camión pesado; alarma general sin daño grave. \\
-\textbf{Zona de Percepción} & Azul (\#3b82f6) & $\text{II - III}$ & $0.005 - 0.03\,g$ & Sentido únicamente por personas en reposo o pisos altos; sin daños materiales. \\
+\textbf{Zona Destructiva} & Rojo (\#ef4444) & $\ge \text{VIII}$ & $\ge 0.34\,g$ & Daño severo y colapso de edificios; rotura masiva de redes hidráulicas y gasoductos; pánico total. \\
+\textbf{Zona de Daño Severo} & Naranja (\#f97316) & $\text{VI - VII}$ & $0.12 - 0.34\,g$ & Daño moderado en muros y cornisas; fisuras estructurales; objetos pesados desplazados. \\
+\textbf{Zona Moderada} & Ámbar (\#f59e0b) & $\text{IV - V}$ & $0.03 - 0.12\,g$ & Sentido ampliamente por toda la población; balanceo de lámparas y vajillas; sin daño estructural. \\
+\textbf{Zona de Percepción} & Azul (\#3b82f6) & $\text{II - III}$ & $0.005 - 0.03\,g$ & Sentido únicamente por personas en reposo o edificios elevados; límite instrumental. \\
 \bottomrule
 \end{tabular}
-\caption{Criterios de zonificación de riesgo sísmico empleados en TerraPulse AI.}
+\caption{Criterios cuantitativos de zonificación de riesgo sísmico en TerraPulse AI.}
 \label{tab:riesgo}
 \end{table}
 
-Invirtiendo numéricamente la ecuación~\eqref{eq:gmpe} para cada $PGA_{\text{umbral}}$, el radio de riesgo $R_{\text{zona}}$ satisface:
+Para cada umbral $PGA_{\text{umbral}}$, el radio de afectación $R_{\text{zona}}$ se calcula numéricamente mediante el método de bisección en el intervalo $[0, 1500\,\text{km}]$ con 30 iteraciones (precisión $< 0.01\,\text{km}$):
 \begin{equation}
-  R_{\text{zona}} = \left\{ R \in \mathbb{R}^+ \;:\; PGA(R, M_w, h, S_{\text{sitio}}) = PGA_{\text{umbral}} \right\},
+  f(R) = PGA(R, M_w, h, \dots) - PGA_{\text{umbral}} = 0.
 \end{equation}
-el cual se proyecta en el mapa como anillos geodésicos georreferenciados sobre MapLibre GL.
 
-\section{Formulación Analítica del Sismograma Sintético y Paquetes de Onda}
+A partir de $R_{\text{zona}}$, se genera un anillo geodésico sobre la esfera terrestre evaluando 64 vértices mediante trigonometría esférica de punto directo:
+\begin{align}
+  \phi_i &= \arcsin\left( \sin\phi_e \cos\delta + \cos\phi_e \sin\delta \cos\theta_i \right), \\
+  \lambda_i &= \lambda_e + \text{atan2}\left( \sin\theta_i \sin\delta \cos\phi_e, \; \cos\delta - \sin\phi_e \sin\phi_i \right),
+\end{align}
+donde $\delta = R_{\text{zona}} / R_T$ y $\theta_i = \frac{2\pi i}{64}$.
 
-Para que el usuario pueda visualizar la forma de onda que viaja desde el epicentro hasta cualquier estación receptora a distancia epicentral $D$, el simulador genera numéricamente la serie temporal de aceleración del terreno $a(t, D)$ en unidades de $g$ y $\text{cm/s}^2$ (Gals).
+\section{Formulación Analítica del Sismograma Sintético \texorpdfstring{$a(t, D)$}{a(t, D)}}
 
-La aceleración total registrada en la estación receptora se modela como la superposición de ruido ambiental basal, el paquete de onda compresional $P$, el paquete de onda de corte $S$ (con el pico $PGA$) y la cola de ondas superficiales y coda sísmica:
+Para reproducir fielmente la señal oscilatoria que registra una estación sísmica a distancia epicentral $D$, el simulador genera la serie temporal:
 \begin{equation}
   a(t, D) = a_{\text{ruido}}(t) + a_P(t, D) + a_S(t, D).
-  \label{eq:sismograma_total}
+  \label{eq:sismograma}
 \end{equation}
 
-\subsection{Arribo de Onda Primaria ($P$)}
-
-El tiempo de primer arribo de la onda compresional $P$ viaja a través del hipocentro $R = \sqrt{D^2 + h^2}$:
+\subsection{Paquete de Onda Primaria (\texorpdfstring{$P$}{P})}
+Arriba en $t_P = \sqrt{D^2 + h^2} / 6.0$. Posee una vibración compresional de alta frecuencia ($f_P = 4.5\,\text{Hz}$) y baja amplitud ($\sim 22\%$ de $PGA$):
 \begin{equation}
-  t_P = \frac{\sqrt{D^2 + h^2}}{v_P}, \quad \text{con } v_P = 6.0\,\text{km/s}.
+  a_P(t, D) = 0.22 \cdot PGA(D) \cdot \sin(2\pi f_P (t - t_P)) \cdot \cos(0.3\pi f_P (t - t_P)) \cdot \exp\left(-\frac{t - t_P}{3.2}\right) \cdot \mathcal{H}(t - t_P).
 \end{equation}
 
-Para $t \ge t_P$, el paquete compresional $a_P(t, D)$ se modula como una señal de alta frecuencia amortiguada exponencialmente:
+\subsection{Paquete de Onda Secundaria (\texorpdfstring{$S$}{S}) y Ondas Superficiales}
+Arriba en $t_S = \sqrt{D^2 + h^2} / 3.5$. Concentra el 80\% de la energía cinética destructiva, alcanzando el valor pico $PGA(D)$:
 \begin{equation}
-  a_P(t, D) = A_P(D) \cdot \sin\big(2\pi f_P (t - t_P)\big) \cdot \cos\big(0.3\pi f_P (t - t_P)\big) \cdot \exp\left(-\frac{t - t_P}{\tau_P}\right) \cdot \mathcal{H}(t - t_P),
-  \label{eq:onda_p}
+  a_S(t, D) = PGA(D) \cdot E_S(t - t_S) \cdot \Big[ 0.82 \sin(2\pi f_S (t - t_S)) + 0.18 \sin(4\pi f_S (t - t_S) + 0.6) \Big] \cdot \mathcal{H}(t - t_S),
 \end{equation}
-donde:
-\begin{itemize}
-  \item $A_P(D) \approx 0.22 \cdot PGA(D)$: amplitud pico de la onda $P$ (típicamente entre 20\% y 25\% del $PGA$ total de la onda $S$).
-  \item $f_P = 4.5\,\text{Hz}$: frecuencia dominante de la fase compresional en corteza continental.
-  \item $\tau_P \approx 3.2\,\text{s}$: parámetro de decaimiento del paquete de onda $P$.
-  \item $\mathcal{H}(t - t_P)$ es la función escalón unitario de Heaviside.
-\end{itemize}
-
-\subsection{Ventana Operativa de Alerta Sísmica Temprana ($\Delta t$)}
-
-Durante el intervalo $t_P \le t < t_S$, el terreno solo experimenta vibración leve no destructiva producida por la onda $P$. La diferencia temporal antes de la llegada de la onda transversal $S$ destructiva constituye la ventana de oportunidad de alerta temprana:
-\begin{equation}
-  \Delta t(D) = t_S - t_P = \sqrt{D^2 + h^2} \left(\frac{1}{v_S} - \frac{1}{v_P}\right) \approx 0.119 \cdot \sqrt{D^2 + h^2} \quad \text{(segundos)}.
-  \label{eq:delta_t}
-\end{equation}
-
-Dado que los sensores costeros transmiten la alarma mediante radiofrecuencia a la velocidad de la luz $c \approx 3 \times 10^5\,\text{km/s} \gg v_S$, una urbe como la Ciudad de México ($D \approx 320\,\text{km}$) dispone de una ventana de aviso $\Delta t \approx 38 - 60\,\text{segundos}$ antes del inicio de las sacudidas destructivas.
-
-\subsection{Arribo de Onda Secundaria Destructiva ($S$) y Ondas Superficiales}
-
-El tiempo de arribo del frente cortante $S$ es:
-\begin{equation}
-  t_S = \frac{\sqrt{D^2 + h^2}}{v_S}, \quad \text{con } v_S = 3.5\,\text{km/s}.
-\end{equation}
-
-A partir de $t = t_S$, la aceleración experimenta una súbita amplificación correspondiente al arribo de las componentes de cizalla y ondas superficiales acopladas (Rayleigh y Love):
-\begin{equation}
-  a_S(t, D) = PGA(D) \cdot E_S(t - t_S) \cdot \Big[ 0.82 \sin\big(2\pi f_S (t - t_S)\big) + 0.18 \sin\big(4\pi f_S (t - t_S) + 0.6\big) \Big] \cdot \mathcal{H}(t - t_S),
-  \label{eq:onda_s}
-\end{equation}
-donde la función de envolvente de amplitud $E_S(\tau)$ posee un tiempo de subida $\tau_{\text{rise}} = 1.8\,\text{s}$ y una relajación exponencial de coda $\tau_{\text{coda}}$:
+con la envolvente $E_S(\tau)$:
 \begin{equation}
   E_S(\tau) =
   \begin{cases}
-    \dfrac{\tau}{\tau_{\text{rise}}}, & 0 \le \tau \le \tau_{\text{rise}} \\[8pt]
-    \exp\left(-\dfrac{\tau - \tau_{\text{rise}}}{\tau_{\text{coda}}}\right), & \tau > \tau_{\text{rise}}.
+    \dfrac{\tau}{1.8}, & 0 \le \tau \le 1.8\,\text{s} \\[8pt]
+    \exp\left(-\dfrac{\tau - 1.8}{\tau_{\text{coda}}}\right), & \tau > 1.8\,\text{s}.
   \end{cases}
-  \label{eq:envolvente}
 \end{equation}
 
-\subsection{Efecto de Sitio y Modulación Espectral de la Coda}
+\subsection{Efecto de Resonancia en Cuenca Lacustre (CDMX)}
+En depósitos lacustres blandos ($V_{s30} < 180\,\text{m/s}$), el contraste de impedancia acústica entre el basamento rocoso y las arcillas de alta compresibilidad atrapa las ondas sísmicas. En el simulador, esto se modela reduciendo la frecuencia fundamental a $f_S = 0.52\,\text{Hz}$ (período característico $T_0 \approx 1.9 - 2.0\,\text{s}$) y elevando el tiempo de decaimiento a $\tau_{\text{coda}} = 28.0\,\text{s}$. Esto reproduce fielmente las sacudidas armónicas de gran persistencia observadas en 1985 y 2017.
 
-Los parámetros dinámicos de la onda $S$ ($f_S$ y $\tau_{\text{coda}}$) varían sustancialmente según la geología del estrato superior ($V_{s30}$):
+\section{Presets Históricos Mexicanos Precalibrados}
+
+El sistema incluye 6 escenarios históricos calibrados para validación analítica:
 \begin{enumerate}
-  \item \textbf{Roca Firme ($V_{s30} > 760\,\text{m/s}$):}
-    $f_S \approx 2.2\,\text{Hz}$, $\tau_{\text{coda}} \approx 9.0\,\text{s}$. Respuesta de alta frecuencia con rápida disipación inelástica.
-  \item \textbf{Suelo Intermedio / Aluvial ($360 \le V_{s30} \le 760\,\text{m/s}$):}
-    $f_S \approx 1.3\,\text{Hz}$, $\tau_{\text{coda}} \approx 14.0\,\text{s}$.
-  \item \textbf{Suelo Blando Lacustre ($V_{s30} < 180\,\text{m/s}$, cuenca lacustre de la CDMX):}
-    $f_S \approx 0.52\,\text{Hz}$ (período fundamental del suelo $T_0 \approx 1.9 - 2.0\,\text{s}$), $\tau_{\text{coda}} \approx 28.0\,\text{s}$.
-    El atrapamiento de energía por contraste de impedancias acústicas y reverberación en la cuenca genera ondas monocromáticas sostenidas que causan resonancia con edificaciones de 6 a 20 pisos, replicando fielmente lo observado en los sismos de 1985 ($M_w 8.1$) y 2017 ($M_w 7.1$).
+  \item \textbf{1985 -- Michoacán / Costa del Pacífico ($M_w 8.1$, $h=15\,\text{km}$):} Ruptura de subducción en la Trinchera Mesoamericana. Generó severa resonancia y colapso estructural en la Ciudad de México a 350 km de distancia.
+  \item \textbf{2017 -- Puebla / Morelos ($M_w 7.1$, $h=57\,\text{km}$):} Falla normal intraplaca profunda en el slab de Cocos. Altas aceleraciones destructivas de alta frecuencia en Morelos, Puebla y el Valle de México.
+  \item \textbf{2017 -- Golfo de Tehuantepec ($M_w 8.2$, $h=45\,\text{km}$):} El sismo de mayor magnitud registrado en México en un siglo. Falla normal intraplaca con extensa zona de ruptura en Oaxaca y Chiapas.
+  \item \textbf{2021 -- Acapulco / Guerrero ($M_w 7.1$, $h=10\,\text{km}$):} Subducción somera en la brecha de Guerrero con fuerte aceleración en la costa y activación de alerta temprana en CDMX.
+  \item \textbf{2022 -- Coalcomán / Michoacán ($M_w 7.7$, $h=15\,\text{km}$):} Ruptura interplaca con afectaciones en Colima, Michoacán y alerta sísmica en la zona centro.
+  \item \textbf{2010 -- Mexicali / Baja California ($M_w 7.2$, $h=10\,\text{km}$):} Falla cortical de rumbo lateral (sistema Laguna Salada / San Andrés).
 \end{enumerate}
 
-\subsection{Ruido Microtrepidante de Fondo}
+\section{Mapeo Sinóptico entre Ecuaciones y Funciones del Código}
 
-Para mantener un realismo geofísico en la serie temporal previa al arribo de la onda $P$ ($t < t_P$), se introduce una señal microtrepidante ambiental:
-\begin{equation}
-  a_{\text{ruido}}(t) = PGA(D) \cdot \Big[ 0.0012 \sin(11.2 t + 0.3) + 0.0006 \cos(23.7 t) \Big].
-\end{equation}
-
-\section{Resumen Sinóptico de Ecuaciones Ejecutadas por el Simulador}
-
-\begin{table}[h!]
+\begin{table}[ht!]
 \centering
 \small
 \begin{tabular}{@{}lllp{5.5cm}@{}}
 \toprule
-\textbf{Magnitud Física} & \textbf{Símbolo / Ecuación} & \textbf{Unidad} & \textbf{Función en el Código TypeScript} \\
+\textbf{Magnitud Física} & \textbf{Símbolo / Ecuación} & \textbf{Unidad} & \textbf{Función en TypeScript (\texttt{seismic.ts})} \\
 \midrule
-Distancia Epicentral & $D = 2 R_T \arcsin(\dots)$ & km & Trigonométrica de gran círculo Haversine \\
-Distancia Hipocentral & $R = \sqrt{D^2 + h^2}$ & km & `Math.sqrt(dist*dist + depthKm*depthKm)` \\
-Aceleración Pico & $\ln(PGA) = c_1 + c_2 M_w - c_3 \ln R - c_4 R + S_{\text{sitio}}$ & $g$ & `computePga_g(...)` \\
-Aceleración en CGS & $PGA_{\text{cgs}} = PGA_g \times 980.665$ & $\text{cm/s}^2$ & `pga_g * 980.665` \\
-Escala Mercalli & $MMI = 3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66$ & I a X+ & `pgaToMmi(pga_g)` \\
-Tiempo de Onda P & $t_P = R / 6.0$ & s & `tP = hypoDist / 6.0` \\
-Tiempo de Onda S & $t_S = R / 3.5$ & s & `tS = hypoDist / 3.5` \\
-Ventana Alerta SASMEX & $\Delta t = t_S - t_P$ & s & `Math.max(0, tS - tP)` \\
-Sismograma $a(t)$ & $a(t) = a_{\text{ruido}} + a_P(t) + a_S(t)$ & $g$, Gal & `generateSyntheticSeismogram(...)` \\
-Radios de Afectación & $\text{Bisección: } PGA(R_{\text{zona}}) = PGA_{\text{umbral}}$ & km & `solveDistanceForPga(...)` \\
-Polígono Isosisma & Proyección geodésica $64$ nodos & LngLat[] & `generateGeodesicCircle(epicenter, rKm, 64)` \\
+Distancia Epicentral & $D = 2 R_T \arcsin(\dots)$ & km & Trigonometría esférica Haversine \\
+Distancia Hipocentral & $R = \sqrt{D^2 + h^2}$ & km & \texttt{Math.sqrt(dist*dist + depthKm*depthKm)} \\
+Aceleración Pico & $\ln(PGA) = c_1 + c_2 M_w - c_3 \ln R - c_4 R + S$ & $g$ & \texttt{computePga\_g(...)} \\
+Aceleración en CGS & $PGA_{\text{cgs}} = PGA_g \times 980.665$ & $\text{cm/s}^2$ & \texttt{pga\_g * 980.665} \\
+Escala Mercalli & $MMI = 3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66$ & I a X+ & \texttt{pgaToMmi(pga\_g)} \\
+Tiempo de Onda P & $t_P = R / 6.0$ & s & \texttt{tP = hypoDist / 6.0} \\
+Tiempo de Onda S & $t_S = R / 3.5$ & s & \texttt{tS = hypoDist / 3.5} \\
+Ventana Alerta SASMEX & $\Delta t = t_S - t_P$ & s & \texttt{Math.max(0, tS - tP)} \\
+Sismograma $a(t)$ & $a(t) = a_{\text{ruido}} + a_P(t) + a_S(t)$ & $g$, Gal & \texttt{generateSyntheticSeismogram(...)} \\
+Radios de Afectación & $\text{Bisección: } PGA(R_{\text{zona}}) = PGA_{\text{umbral}}$ & km & \texttt{solveDistanceForPga(...)} \\
+Polígono Isosisma & Proyección geodésica $64$ nodos & LngLat[] & \texttt{generateGeodesicCircle(center, rKm, 64)} \\
 \bottomrule
 \end{tabular}
-\caption{Mapeo exacto entre la formulación matemática analítica y las rutinas de cómputo del simulador.}
-\label{tab:resumen_ecuaciones}
+\caption{Correspondencia exacta entre el modelo físico analítico y las rutinas de cálculo del código fuente.}
+\label{tab:mapeo}
 \end{table}
+
+\section{Conclusiones}
+
+La integración de la elastodinámica continua con las leyes regionales de atenuación GMPE y la resonancia estratigráfica permite que el Simulador de Terremotos de TerraPulse AI proporcione una herramienta analítica confiable, científicamente rigurosa y visualmente accesible en tiempo real tanto en cartografía vectorial como en análisis de series temporales.
 
 \end{document}

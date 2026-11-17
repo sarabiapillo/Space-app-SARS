@@ -40,5 +40,13 @@ web/build/
 .DS_Store
 Thumbs.db
 
+# --- LaTeX auxiliares ---
+*.aux
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
 # --- Salidas de herramientas ---
 graphify-out/
