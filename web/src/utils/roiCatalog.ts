@@ -1,5 +1,6 @@
 import type { LngLat } from '../types/workspace'
 import type { EffectiveRoiMetadata, RoiGeometry } from './roi'
+import type { SeismicMechanism, SoilType } from './seismic'
 
 export type RiskCategory =
   | 'Inundaciones Costeras'
@@ -21,7 +22,7 @@ export interface CatalogRoiPreset {
   bbox: [number, number, number, number] // [west, south, east, north]
   description: string
   riskCategory: RiskCategory
-  recommendedSimulation: 'both' | 'flood' | 'solar'
+  recommendedSimulation: 'both' | 'flood' | 'solar' | 'seismic' | 'all'
 }
 
 export const PRESET_ROI_CATALOG: readonly CatalogRoiPreset[] = [
@@ -827,3 +828,131 @@ export function getCatalogGrouped(): CatalogGroupedCountry[] {
 
   return result
 }
+
+export interface RecommendedSeismicSettings {
+  soilType: SoilType
+  mechanism: SeismicMechanism
+  soilLabelEs: string
+  soilLabelEn: string
+  mechanismLabelEs: string
+  mechanismLabelEn: string
+  geologicalDescriptionEs: string
+  geologicalDescriptionEn: string
+}
+
+/**
+ * Deduce el tipo de suelo físico (Vs30) y el mecanismo tectónico predominante
+ * según el Estado o zona geológica del ROI en México.
+ */
+export function getRecommendedSeismicSettings(state: string, roiName?: string): RecommendedSeismicSettings {
+  const normState = (state || '').toLowerCase()
+  const normName = (roiName || '').toLowerCase()
+
+  // 1. Ciudad de México y Cuenca del Valle de México (Zona de Lago)
+  if (normState.includes('ciudad de méxico') || normState.includes('cdmx') || normState.includes('distrito federal')) {
+    return {
+      soilType: 'soft_lacustrine',
+      mechanism: 'intraplate',
+      soilLabelEs: 'Suelo Blando Lacustre (< 180 m/s, CDMX)',
+      soilLabelEn: 'Soft Lacustrine Soil (< 180 m/s, CDMX)',
+      mechanismLabelEs: 'Receptor de Subducción / Intraplaca Profundo',
+      mechanismLabelEn: 'Subduction / Deep Intraplate Receiver',
+      geologicalDescriptionEs: 'Arcillas blandas de cuenca lacustre (antiguo Lago de Texcoco) de muy baja rigidez. Fuerte resonancia estratigráfica con períodos de 1.8 a 2.5s.',
+      geologicalDescriptionEn: 'High-plasticity soft lacustrine clays (Texcoco lakebed). Extreme resonant amplification with 1.8 to 2.5s periods.',
+    }
+  }
+
+  // 2. Estado de México (zonas lacustres vs valles piroclásticos)
+  if (normState.includes('méxico') || normState.includes('edomex')) {
+    const isLakebed = normName.includes('chalco') || normName.includes('texcoco') || normName.includes('neza') || normName.includes('ecatepec') || normName.includes('chimalhuacán')
+    return {
+      soilType: isLakebed ? 'soft_lacustrine' : 'intermediate',
+      mechanism: 'intraplate',
+      soilLabelEs: isLakebed ? 'Suelo Blando Lacustre (< 180 m/s)' : 'Suelo Firme / Depósitos Volcánicos (360-760 m/s)',
+      soilLabelEn: isLakebed ? 'Soft Lacustrine (< 180 m/s)' : 'Stiff Soil / Volcanic Deposits (360-760 m/s)',
+      mechanismLabelEs: 'Intraplaca Profundo (Slab de Cocos)',
+      mechanismLabelEn: 'Deep Intraplate (Cocos Slab)',
+      geologicalDescriptionEs: isLakebed
+        ? 'Transición lacustre de arcillas blandas en el oriente del Valle de México.'
+        : 'Suelos aluviales y tobas del Eje Neovolcánico Transmexicano.',
+      geologicalDescriptionEn: isLakebed ? 'Soft lakebed transition in the eastern valley.' : 'Alluvial and volcanic tuff soils of the Trans-Mexican Volcanic Belt.',
+    }
+  }
+
+  // 3. Pacífico Sur / Zona de Subducción (Guerrero, Oaxaca, Michoacán, Chiapas, Colima, Jalisco)
+  if (
+    normState.includes('guerrero') ||
+    normState.includes('oaxaca') ||
+    normState.includes('michoacán') ||
+    normState.includes('chiapas') ||
+    normState.includes('colima') ||
+    normState.includes('jalisco')
+  ) {
+    const isCoast = normName.includes('acapulco') || normName.includes('costa') || normName.includes('puerto') || normName.includes('huatulco') || normName.includes('tehuantepec') || normName.includes('zihuatanejo') || normName.includes('manzanillo') || normName.includes('vallarta') || normName.includes('salina cruz')
+    return {
+      soilType: isCoast ? 'intermediate' : 'rock',
+      mechanism: 'subduction',
+      soilLabelEs: isCoast ? 'Suelo Firme Costero / Aluvial (360-760 m/s)' : 'Roca Firme / Basamento Metamórfico (> 760 m/s)',
+      soilLabelEn: isCoast ? 'Coastal Stiff / Alluvial Soil (360-760 m/s)' : 'Hard Rock / Metamorphic Basement (> 760 m/s)',
+      mechanismLabelEs: 'Subducción Interplaca (Trinchera Mesoamericana)',
+      mechanismLabelEn: 'Interplate Subduction (Middle America Trench)',
+      geologicalDescriptionEs: 'Zona de interacción convergente entre la Placa de Cocos y la Placa Norteamericana (Brecha Sísmica de Guerrero y Trinchera). Alta recurrencia sísmica.',
+      geologicalDescriptionEn: 'Convergent boundary between Cocos and North American plates (Guerrero Seismic Gap & Trench). High seismic recurrence.',
+    }
+  }
+
+  // 4. Centro / Puebla y Morelos (Intraplaca profunda)
+  if (normState.includes('puebla') || normState.includes('morelos') || normState.includes('tlaxcala')) {
+    return {
+      soilType: 'rock',
+      mechanism: 'intraplate',
+      soilLabelEs: 'Roca Firme / Suelo Volcánico Consolidado (> 600 m/s)',
+      soilLabelEn: 'Hard Rock / Consolidated Volcanic Soil (> 600 m/s)',
+      mechanismLabelEs: 'Intraplaca Profundo (Falla Normal en Cocos)',
+      mechanismLabelEn: 'Deep Intraplate (Normal faulting in Cocos)',
+      geologicalDescriptionEs: 'Sismicidad intraplaca profunda (40-65 km) en la placa de Cocos subducida, con aceleraciones de alta frecuencia.',
+      geologicalDescriptionEn: 'Deep intraplate seismicity (40-65 km) in the subducted Cocos plate, producing high-frequency ground motion.',
+    }
+  }
+
+  // 5. Península de Baja California y Noroeste (Falla cortical / Sistema San Andrés / Cerro Prieto)
+  if (normState.includes('baja california') || normState.includes('sonora')) {
+    return {
+      soilType: 'rock',
+      mechanism: 'crustal',
+      soilLabelEs: 'Roca Firme / Aluvión Desértico (> 550 m/s)',
+      soilLabelEn: 'Hard Rock / Desert Alluvium (> 550 m/s)',
+      mechanismLabelEs: 'Cortical Somero (Fallas de Rumbo / San Andrés)',
+      mechanismLabelEn: 'Shallow Crustal (Strike-slip / San Andreas fault system)',
+      geologicalDescriptionEs: 'Límite transformante entre placas del Pacífico y Norteamérica. Sismos corticales someros (5-15 km).',
+      geologicalDescriptionEn: 'Transform plate boundary between Pacific and North American plates. Shallow crustal earthquakes (5-15 km).',
+    }
+  }
+
+  // 6. Planicies costeras del Golfo y humedales (Tabasco, Veracruz, Campeche, etc.)
+  if (normState.includes('tabasco') || normState.includes('veracruz') || normState.includes('campeche') || normState.includes('yucatán') || normState.includes('quintana roo')) {
+    return {
+      soilType: 'intermediate',
+      mechanism: 'subduction',
+      soilLabelEs: 'Suelo Aluvial / Sedimentos Fluviales (300-500 m/s)',
+      soilLabelEn: 'Alluvial / Fluvial Sediments (300-500 m/s)',
+      mechanismLabelEs: 'Receptor de Subducción Regional',
+      mechanismLabelEn: 'Regional Subduction Receiver',
+      geologicalDescriptionEs: 'Llanuras aluviales deltaicas con atenuación y filtrado de frecuencias.',
+      geologicalDescriptionEn: 'Deltaic alluvial plains with attenuation and frequency filtering.',
+    }
+  }
+
+  // 7. Altiplano norte y centro (Suelo firme de sierra)
+  return {
+    soilType: 'rock',
+    mechanism: 'subduction',
+    soilLabelEs: 'Roca Firme (> 760 m/s)',
+    soilLabelEn: 'Hard Rock (> 760 m/s)',
+    mechanismLabelEs: 'Subducción Regional / Basamento',
+    mechanismLabelEn: 'Regional Subduction / Basement',
+    geologicalDescriptionEs: 'Basamento volcánico o sedimentario rígido de la Sierra Madre con baja amplificación de sitio.',
+    geologicalDescriptionEn: 'Rigid volcanic or sedimentary basement of the Sierra Madre with low site amplification.',
+  }
+}
+

@@ -50,7 +50,7 @@ interface SidebarProps {
   confirmedROI: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
-  onOpenSimulation?: (mode: 'flood' | 'solar') => void
+  onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
 }
 
 const SIDEBAR_DEFAULT_WIDTH = 360

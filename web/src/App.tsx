@@ -34,7 +34,7 @@ import type {
 import { type ScientificColormapId } from './utils/colormapLut'
 import { newId } from './utils/id'
 import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
-import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, type CatalogRoiPreset } from './utils/roiCatalog'
+import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, getRecommendedSeismicSettings, type CatalogRoiPreset } from './utils/roiCatalog'
 
 function baseName(nombre: string): string {
   return nombre.replace(/^(Copia \d+|Mapa General)\s*-\s*/i, '').trim() || nombre
@@ -250,35 +250,6 @@ function App() {
     notify('success', t(`ROI activada: ${preset.name} (${preset.state}).`, `ROI activated: ${preset.name} (${preset.state}).`))
   }, [activeCopy, current.escena, updateMap, addMap, notify, t])
 
-  const handleOpenSimulation = useCallback((mode: 'flood' | 'solar') => {
-    if (mode === 'flood') {
-      handleDockTabChange('rain-dg2')
-    } else {
-      handleSolarChange({ ...current.solar, enabled: true })
-    }
-  }, [handleDockTabChange, current.solar])
-
-  const handleCropRegionChange = (polygon: LngLat[] | null) => {
-    if (!activeCopy) return
-    const changed = JSON.stringify(activeCopy.croppedRegion ?? null) !== JSON.stringify(polygon ?? null) || Boolean(activeCopy.effectiveRoi)
-    if (changed) {
-      setGcovFootprint(null)
-      setLocationPreview(null)
-    }
-    const previousFlood = activeCopy.flood
-    updateMap(activeCopy.id, {
-      croppedRegion: polygon,
-      effectiveRoi: null,
-      effectiveRoiMetadata: null,
-      ...(changed ? { solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null } } : {}),
-      ...(changed && previousFlood ? {
-        flood: { ...previousFlood, enabled: false, rasterUrl: null, rasterBounds: null,
-          stats: null, charts: null, resultRoiKey: undefined, compareMode: false },
-      } : {}),
-      fechaModificacion: new Date().toISOString(),
-    })
-  }
-
   const handleSolarChange = (nextSolar: SolarSimulationState) => {
     if (isEditing && activeCopy) {
       updateMap(activeCopy.id, {
@@ -310,6 +281,60 @@ function App() {
     } else {
       setGeneralSeismic(nextSeismic)
     }
+  }
+
+  const handleOpenSimulation = useCallback(
+    (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => {
+      if (mode === 'flood') {
+        handleDockTabChange('rain-dg2')
+      } else if (mode === 'solar') {
+        handleSolarChange({ ...current.solar, enabled: true })
+      } else if (mode === 'seismic') {
+        handleDockTabChange('seismic')
+        if (preset) {
+          const geoSettings = getRecommendedSeismicSettings(preset.state, preset.name)
+          const baseSeismic = current.seismic || DEFAULT_SEISMIC
+          handleSeismicChange({
+            ...baseSeismic,
+            enabled: true,
+            epicenter: preset.center,
+            name: `Sismo - ${preset.name}`,
+            soilType: geoSettings.soilType,
+            mechanism: geoSettings.mechanism,
+          })
+          cameraRef.current = { centro: preset.center, zoom: Math.max(7, preset.zoom - 2) }
+          notify(
+            'success',
+            t(
+              `Simulador Sísmico vinculado a ${preset.name} (${preset.state}). Suelo: ${geoSettings.soilLabelEs}.`,
+              `Seismic Simulator linked to ${preset.name} (${preset.state}). Soil: ${geoSettings.soilLabelEn}.`
+            )
+          )
+        }
+      }
+    },
+    [handleDockTabChange, current.solar, current.seismic, notify, t]
+  )
+
+  const handleCropRegionChange = (polygon: LngLat[] | null) => {
+    if (!activeCopy) return
+    const changed = JSON.stringify(activeCopy.croppedRegion ?? null) !== JSON.stringify(polygon ?? null) || Boolean(activeCopy.effectiveRoi)
+    if (changed) {
+      setGcovFootprint(null)
+      setLocationPreview(null)
+    }
+    const previousFlood = activeCopy.flood
+    updateMap(activeCopy.id, {
+      croppedRegion: polygon,
+      effectiveRoi: null,
+      effectiveRoiMetadata: null,
+      ...(changed ? { solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null } } : {}),
+      ...(changed && previousFlood ? {
+        flood: { ...previousFlood, enabled: false, rasterUrl: null, rasterBounds: null,
+          stats: null, charts: null, resultRoiKey: undefined, compareMode: false },
+      } : {}),
+      fechaModificacion: new Date().toISOString(),
+    })
   }
 
   const handleConfirmDuplicate = (nombre: string, carpeta: Carpeta) => {

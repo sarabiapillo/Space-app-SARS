@@ -11,6 +11,8 @@ import {
   Maximize2,
   Minimize2,
   Layers,
+  Sparkles,
+  Compass,
 } from 'lucide-react'
 import type { LngLat, SeismicSimulationState } from '../types/workspace'
 import {
@@ -18,8 +20,16 @@ import {
   runSeismicSimulation,
   type SeismicMechanism,
   type SoilType,
+  computePga_g,
+  pgaToMmi,
   mmiToRoman,
 } from '../utils/seismic'
+import { getPolygonBoundsAndCentroid, distanceKm } from '../utils/geojson'
+import {
+  PRESET_ROI_CATALOG,
+  getRecommendedSeismicSettings,
+  type CatalogRoiPreset,
+} from '../utils/roiCatalog'
 import { Seismic2DChart } from './Seismic2DChart'
 import { useTranslation } from '../i18n/useTranslation'
 
@@ -28,6 +38,8 @@ interface SeismicSimulatorPanelProps {
   onSeismicChange: (next: SeismicSimulationState) => void
   onFlyToEpicenter?: (coord: LngLat) => void
   onClose: () => void
+  croppedRegion?: LngLat[] | null
+  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
 }
 
 export function SeismicSimulatorPanel({
@@ -35,6 +47,8 @@ export function SeismicSimulatorPanel({
   onSeismicChange,
   onFlyToEpicenter,
   onClose,
+  croppedRegion,
+  onSelectPresetROI,
 }: SeismicSimulatorPanelProps) {
   const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
@@ -51,6 +65,53 @@ export function SeismicSimulatorPanel({
       soilType: seismic.soilType,
     })
   }, [seismic])
+
+  // Datos geológicos y de propagación vinculados al ROI en el visor
+  const activeRoiData = useMemo(() => {
+    if (!croppedRegion || croppedRegion.length < 3) return null
+    const bounds = getPolygonBoundsAndCentroid(croppedRegion)
+    const centroid = bounds.centroid
+    const distToEpicenter = Math.round(distanceKm(seismic.epicenter, centroid) * 10) / 10
+
+    // Buscar ROI más cercana en el catálogo para inferir Estado y Geología
+    let closestPreset: CatalogRoiPreset | null = null
+    let minDist = Infinity
+    for (const p of PRESET_ROI_CATALOG) {
+      const d = distanceKm(centroid, p.center)
+      if (d < minDist) {
+        minDist = d
+        closestPreset = p
+      }
+    }
+
+    const state = closestPreset && minDist < 160 ? closestPreset.state : 'México'
+    const name = closestPreset && minDist < 60 ? closestPreset.name : t('Región Delimitada', 'Bounded Region')
+    const geoSettings = getRecommendedSeismicSettings(state, name)
+
+    // Afectación local en el ROI causada por el sismo
+    const pgaAtRoi_g = computePga_g(distToEpicenter, seismic.magnitude, seismic.depthKm, seismic.mechanism, seismic.soilType)
+    const pgaAtRoi_cgs = pgaAtRoi_g * 980.665
+    const mmiAtRoi = pgaToMmi(pgaAtRoi_g)
+    const hypoDist = Math.sqrt(distToEpicenter * distToEpicenter + seismic.depthKm * seismic.depthKm)
+    const tP = Math.round((hypoDist / 6.0) * 10) / 10
+    const tS = Math.round((hypoDist / 3.5) * 10) / 10
+    const warningTime = Math.max(0, Math.round((tS - tP) * 10) / 10)
+
+    return {
+      centroid,
+      distToEpicenter,
+      closestPreset,
+      state,
+      name,
+      geoSettings,
+      pgaAtRoi_g,
+      pgaAtRoi_cgs,
+      mmiAtRoi,
+      tP,
+      tS,
+      warningTime,
+    }
+  }, [croppedRegion, seismic, t])
 
   const handleSelectPreset = (presetId: string) => {
     const preset = HISTORICAL_SEISMIC_PRESETS.find((p) => p.id === presetId)
@@ -124,6 +185,153 @@ export function SeismicSimulatorPanel({
 
       {!isCollapsed && (
         <div className="seismic-panel__body">
+          {/* SECCIÓN ROI: VINCULACIÓN CON REGIÓN DE INTERÉS (ROI) Y SUELO REAL */}
+          <div className="seismic-control-group seismic-roi-section">
+            <div className="seismic-roi-header">
+              <Compass size={13} className="seismic-icon-red" />
+              <span>{t('Región de Interés (ROI) & Geología Real:', 'Region of Interest (ROI) & Real Geology:')}</span>
+            </div>
+
+            {/* Selector de ROI de México */}
+            <select
+              className="seismic-select"
+              defaultValue=""
+              onChange={(e) => {
+                const preset = PRESET_ROI_CATALOG.find((p) => p.id === e.target.value)
+                if (preset) {
+                  onSelectPresetROI?.(preset)
+                  const geo = getRecommendedSeismicSettings(preset.state, preset.name)
+                  onSeismicChange({
+                    ...seismic,
+                    epicenter: preset.center,
+                    name: `Sismo - ${preset.name}`,
+                    soilType: geo.soilType,
+                    mechanism: geo.mechanism,
+                  })
+                  onFlyToEpicenter?.(preset.center)
+                }
+              }}
+            >
+              <option value="">{t('— Cargar ROI de México con su geología real —', '— Load Mexico ROI with real geology —')}</option>
+              <optgroup label="🇲🇽 Guerrero (Brecha Sísmica / Trinchera)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Guerrero').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Ciudad de México (Suelo Blando Lacustre / Resonancia)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Ciudad de México').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Oaxaca (Trinchera / Istmo Tehuantepec)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Oaxaca').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Chiapas (Subducción / Intraplaca Profundo)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Chiapas').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Puebla & Morelos (Intraplaca en Cocos)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Puebla' || p.state === 'Morelos').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.state})</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Michoacán & Jalisco (Costa Pacífico)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Michoacán' || p.state === 'Jalisco').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.state})</option>
+                ))}
+              </optgroup>
+              <optgroup label="🇲🇽 Baja California (Fallas Corticales / San Andrés)">
+                {PRESET_ROI_CATALOG.filter((p) => p.state === 'Baja California').map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            </select>
+
+            {/* Tarjeta de integración activa cuando hay un ROI seleccionado */}
+            {activeRoiData && (
+              <div className="seismic-roi-card">
+                <div className="seismic-roi-card__head">
+                  <div className="seismic-roi-card__title">
+                    <MapPin size={12} className="seismic-icon-red" />
+                    <strong>{activeRoiData.name} ({activeRoiData.state})</strong>
+                  </div>
+                  <span className="seismic-roi-dist-badge">
+                    {activeRoiData.distToEpicenter <= 0.5
+                      ? t('Epicentro en ROI', 'Epicenter in ROI')
+                      : `${activeRoiData.distToEpicenter} km ${t('del epicentro', 'from epicenter')}`}
+                  </span>
+                </div>
+
+                <div className="seismic-roi-card__geo">
+                  <span className="seismic-roi-geo-title">
+                    <Sparkles size={11} className="seismic-icon-amber" />
+                    <strong>{t('Geología y Suelo Real:', 'Real Soil & Geology:')}</strong> {activeRoiData.geoSettings.soilLabelEs} · {activeRoiData.geoSettings.mechanismLabelEs}
+                  </span>
+                  <p className="seismic-roi-geo-desc">{activeRoiData.geoSettings.geologicalDescriptionEs}</p>
+                </div>
+
+                <div className="seismic-roi-actions">
+                  <button
+                    type="button"
+                    className="seismic-roi-action-btn is-primary"
+                    onClick={() => {
+                      onSeismicChange({
+                        ...seismic,
+                        epicenter: activeRoiData.centroid,
+                        name: `Sismo en ${activeRoiData.name}`,
+                        soilType: activeRoiData.geoSettings.soilType,
+                        mechanism: activeRoiData.geoSettings.mechanism,
+                      })
+                      onFlyToEpicenter?.(activeRoiData.centroid)
+                    }}
+                    title={t('Fijar el epicentro de la simulación en el centroide de esta ROI', 'Set simulation epicenter at centroid of this ROI')}
+                  >
+                    📍 {t('Fijar Epicentro en ROI', 'Set Epicenter in ROI')}
+                  </button>
+                  <button
+                    type="button"
+                    className="seismic-roi-action-btn is-secondary"
+                    onClick={() => {
+                      onSeismicChange({
+                        ...seismic,
+                        soilType: activeRoiData.geoSettings.soilType,
+                        mechanism: activeRoiData.geoSettings.mechanism,
+                      })
+                    }}
+                    title={t('Aplicar el tipo de suelo Vs30 y mecanismo de esta región', 'Apply Vs30 soil and mechanism of this region')}
+                  >
+                    ⚙️ {t('Aplicar Suelo Real', 'Apply Real Soil')}
+                  </button>
+                </div>
+
+                {/* Si el ROI no es el epicentro, mostrar la afectación pronosticada en este ROI */}
+                {activeRoiData.distToEpicenter > 0.5 && (
+                  <div className="seismic-roi-metrics">
+                    <div className="seismic-roi-metric-item">
+                      <span>{t('Alerta SASMEX:', 'SASMEX Warning:')}</span>
+                      <strong style={{ color: '#ea580c' }}>{activeRoiData.warningTime}s</strong>
+                    </div>
+                    <div className="seismic-roi-metric-item">
+                      <span>{t('Arribo Onda S:', 'S-Wave Arrival:')}</span>
+                      <strong>{activeRoiData.tS}s</strong>
+                    </div>
+                    <div className="seismic-roi-metric-item">
+                      <span>{t('PGA en ROI:', 'PGA at ROI:')}</span>
+                      <strong>{activeRoiData.pgaAtRoi_g.toFixed(3)}g</strong>
+                    </div>
+                    <div className="seismic-roi-metric-item">
+                      <span>{t('Intensidad:', 'Intensity:')}</span>
+                      <strong>MMI {mmiToRoman(activeRoiData.mmiAtRoi)}</strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Selector de Casos Históricos de Terremotos */}
           <div className="seismic-control-group">
             <label className="seismic-label" htmlFor="seismic-preset-select">

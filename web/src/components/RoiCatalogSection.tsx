@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CloudRain,
   Sun,
+  Activity,
   Search,
   Sparkles,
   Filter,
@@ -20,7 +21,7 @@ import { useTranslation } from '../i18n/useTranslation'
 interface RoiCatalogSectionProps {
   activePresetId?: string | null
   onSelectPreset: (preset: CatalogRoiPreset) => void
-  onOpenSimulation?: (mode: 'flood' | 'solar') => void
+  onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
 }
 
 const CATEGORY_FILTERS: { id: RiskCategory | 'ALL'; labelEs: string; labelEn: string }[] = [
@@ -276,7 +277,7 @@ function RoiPresetCard({
   preset: CatalogRoiPreset
   isActive: boolean
   onSelect: () => void
-  onOpenSimulation?: (mode: 'flood' | 'solar') => void
+  onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
   showStateBadge?: boolean
 }) {
   const { t } = useTranslation()
@@ -314,27 +315,38 @@ function RoiPresetCard({
 
         {onOpenSimulation && (
           <div className="roi-card__quick-sims">
-            {(preset.recommendedSimulation === 'both' || preset.recommendedSimulation === 'flood') && (
+            <button
+              type="button"
+              className="roi-card__sim-btn roi-card__sim-btn--seismic"
+              title={t('Simular terremoto / sismo en esta zona con suelo geológico real', 'Simulate earthquake in this zone with real geological soil')}
+              onClick={() => {
+                onSelect()
+                onOpenSimulation('seismic', preset)
+              }}
+            >
+              <Activity size={12} /> {t('Sismo', 'Seismic')}
+            </button>
+            {(preset.recommendedSimulation === 'all' || preset.recommendedSimulation === 'both' || preset.recommendedSimulation === 'flood') && (
               <button
                 type="button"
                 className="roi-card__sim-btn roi-card__sim-btn--flood"
                 title={t('Simular inundación / lluvia en esta zona', 'Simulate flood / rainfall in this zone')}
                 onClick={() => {
                   onSelect()
-                  onOpenSimulation('flood')
+                  onOpenSimulation('flood', preset)
                 }}
               >
                 <CloudRain size={12} /> {t('Lluvia', 'Rain')}
               </button>
             )}
-            {(preset.recommendedSimulation === 'both' || preset.recommendedSimulation === 'solar') && (
+            {(preset.recommendedSimulation === 'all' || preset.recommendedSimulation === 'both' || preset.recommendedSimulation === 'solar') && (
               <button
                 type="button"
                 className="roi-card__sim-btn roi-card__sim-btn--solar"
                 title={t('Calcular radiación solar en esta zona', 'Calculate solar radiation in this zone')}
                 onClick={() => {
                   onSelect()
-                  onOpenSimulation('solar')
+                  onOpenSimulation('solar', preset)
                 }}
               >
                 <Sun size={12} /> {t('Solar', 'Solar')}

@@ -3180,6 +3180,8 @@ export function MapCanvas({
           <SeismicSimulatorPanel
             seismic={seismic || DEFAULT_SEISMIC}
             onSeismicChange={onSeismicChange || (() => {})}
+            croppedRegion={croppedRegion}
+            onSelectPresetROI={onSelectPresetROI}
             onFlyToEpicenter={(coord) => {
               if (mapRef.current) {
                 mapRef.current.flyTo({ center: coord, zoom: 7.5, duration: 1200 })
