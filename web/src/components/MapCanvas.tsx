@@ -1425,6 +1425,7 @@ export function MapCanvas({
             paint: {
               'raster-opacity': opacity,
               'raster-fade-duration': 150,
+              'raster-resampling': 'linear',
             },
           },
           map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,

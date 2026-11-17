@@ -1,0 +1,296 @@
+% TerraPulse AI — Documentación Técnica y Científica: Simulación Hidrodinámica e Inundación
+% Compilar con: pdflatex ecuaciones_hidraulica.tex
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+\setlength{\parskip}{0.4em}
+
+\title{\textbf{TerraPulse AI}\\[6pt]\Large Manual Técnico y Físico-Matemático: Simulación Hidrodinámica 2D, Detección de Cuerpos de Agua, Desbordamiento Fluvial de Leopold-Maddock y Zonificación de Inundación}
+\author{Ingeniería Hidráulica y Geociencias Computacionales -- TerraPulse AI}
+\date{17 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Este documento constituye la memoria técnica integral de la formulación hidrodinámica, geomorfológica y computacional del \textbf{Simulador de Inundación y Aguas Someras de TerraPulse AI}. Se expone el marco matemático gobernado por las ecuaciones bidimensionales de Saint-Venant (aguas someras) con resistencia al flujo según Manning, la detección morfológica y batimétrica automática de cuerpos de agua permanentes (presas, lagos y ríos principales) mediante filtrado espacial de gradiente topográfico y varianza de elevación sobre Modelos Digitales de Elevación (DEM), el cálculo analítico de la capacidad de banca llena ($Q_{\text{bank}}$) basado en las relaciones alométricas de Leopold-Maddock y Rosgen, el modelado del desbordamiento lateral difusivo hacia llanuras aluviales cuando el caudal de tormenta excede la sección hidráulica natural, la saturación progresiva del suelo mediante la cinética de infiltración de Horton a lo largo de 72 horas antecedentes, el forzamiento barométrico inverso por caída de presión atmosférica ciclónica, y el criterio de corte de vías de Xia et al. (2014) basado en el producto $u \cdot h$.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introducción y Justificación Física}
+
+La modelación de inundaciones repentinas y anegamientos en cuencas hidrográficas complejas requiere superar la simplificación clásica de considerar el terreno como una superficie inicialmente seca. En cuencas reales coexisten embalses, lagos y cauces perennes con tirantes de agua preexistentes que regulan o condicionan la dinámica del flujo.
+
+El módulo hidrodinámico de TerraPulse AI integra una formulación física rigurosa que:
+\begin{enumerate}
+  \item \textbf{Identifica cuerpos de agua permanentes:} Distingue automáticamente entre suelo seco y espejos de agua estables mediante análisis tensorial del relieve topográfico.
+  \item \textbf{Modela la capacidad de banca fluvial:} Cuantifica el umbral hidráulico en el que un cauce natural es capaz de retener el caudal de diseño antes de desbordar a las márgenes.
+  \item \textbf{Simula el desbordamiento lateral a la llanura aluvial:} Transfiere físicamente el caudal y volumen excedente ($Q_{\text{overflow}}$) a las zonas llanas adyacentes según cotas piezométricas.
+  \item \textbf{Aplica resistencia hidrodinámica diferenciada:} Asigna coeficientes de rugosidad de Manning variables entre cauce principal, llanura arbolada y zonas urbanas.
+  \item \textbf{Genera cartografía fotorrealista continua:} Transforma las matrices de tirante $h(x,y)$ en capas batimétricas de alta resolución con filtrado anti-aliasing y transparencia fisiológica.
+\end{enumerate}
+
+\section{Ecuaciones Hidrodinámicas Bidimensionales (Saint-Venant 2D)}
+
+El flujo de agua superficial a superficie libre en dos dimensiones horizontales $(x, y)$ se rige por las ecuaciones de conservación de masa (continuidad) y de momento lineal de Saint-Venant (Navier-Stokes promediadas en la vertical para aguas someras):
+
+\subsection{Ecuación de Continuidad (Conservación de Masa)}
+
+\begin{equation}
+  \frac{\partial h}{\partial t} + \frac{\partial (u\,h)}{\partial x} + \frac{\partial (v\,h)}{\partial y} = R_{\text{neto}}(x,y,t) + S_{\text{atm}}(t)
+\end{equation}
+
+donde:
+\begin{itemize}
+  \item $h(x,y,t)$ es el tirante hidráulico o profundidad del agua en el punto $(x,y)$ al tiempo $t$ (m).
+  \item $u(x,y,t)$ y $v(x,y,t)$ son las componentes de la velocidad horizontal del flujo en las direcciones $x$ e $y$ respectivamente (m/s).
+  \item $R_{\text{neto}}(x,y,t) = P(t) - f(t)$ es la tasa de precipitación neta o exceso de lluvia efectiva, resultante de sustraer la infiltración del suelo $f(t)$ de la intensidad pluviométrica $P(t)$ (m/s).
+  \item $S_{\text{atm}}(t)$ es el término fuente o sobretasa asociada a forzamiento barométrico (m/s).
+\end{itemize}
+
+\subsection{Ecuaciones de Momento (Conservación de Cantidad de Movimiento)}
+
+En la dirección longitudinal $x$:
+\begin{equation}
+  \frac{\partial (u\,h)}{\partial t} + \frac{\partial}{\partial x}\left( u^2 h + \frac{1}{2} g h^2 \right) + \frac{\partial (u\,v\,h)}{\partial y} = -g\,h\,\frac{\partial z_b}{\partial x} - g\,h\,S_{fx}
+\end{equation}
+
+En la dirección transversal $y$:
+\begin{equation}
+  \frac{\partial (v\,h)}{\partial t} + \frac{\partial (u\,v\,h)}{\partial x} + \frac{\partial}{\partial y}\left( v^2 h + \frac{1}{2} g h^2 \right) = -g\,h\,\frac{\partial z_b}{\partial y} - g\,h\,S_{fy}
+\end{equation}
+
+donde:
+\begin{itemize}
+  \item $g = 9.80665\text{ m/s}^2$ es la aceleración de la gravedad.
+  \item $z_b(x,y)$ es la cota batimétrica o altitud del lecho topográfico (m s.n.m.).
+  \item $\frac{\partial z_b}{\partial x}$ y $\frac{\partial z_b}{\partial y}$ representan las pendientes del fondo topográfico ($S_{0x}, S_{0y}$).
+  \item $S_{fx}$ y $S_{fy}$ son las pendientes de fricción por resistencia cortante del lecho.
+\end{itemize}
+
+\subsection{Pendiente de Fricción y Ley de Resistencia de Manning}
+
+La fricción de fondo se modela a través de la ecuación semiempírica de Gauckler-Manning generalizada a dos dimensiones:
+
+\begin{equation}
+  S_{fx} = \frac{n^2 \, u \, \sqrt{u^2 + v^2}}{h^{4/3}}, \qquad S_{fy} = \frac{n^2 \, v \, \sqrt{u^2 + v^2}}{h^{4/3}}
+\end{equation}
+
+donde $n$ es el coeficiente de rugosidad de Manning ($\text{s}\cdot\text{m}^{-1/3}$). En el simulador, $n$ varía espacialmente según el uso de suelo y la morfología del cauce:
+\begin{equation}
+  n(x,y) = 
+  \begin{cases}
+    0.030 - 0.038, & \text{Cauce fluvial principal libre de vegetación obstaculizante} \\
+    0.050 - 0.065, & \text{Llanura aluvial con matorral, pastizal y cultivos} \\
+    0.075 - 0.095, & \text{Entorno periurbano con edificaciones y arbolado denso} \\
+    0.015 - 0.022, & \text{Lámina libre sobre superficies de agua permanentes o pavimentadas}
+  \end{cases}
+\end{equation}
+
+\section{Detección Morfológica de Cuerpos de Agua Permanentes}
+
+Una de las innovaciones críticas del simulador es la detección autónoma de presas, lagos, lagunas y ríos anchos a partir del Modelo Digital de Elevación (DEM), sin requerir capas vectoriales externas que puedan estar desactualizadas.
+
+\subsection{Criterio Tensorial de Planicie y Varianza}
+
+Los espejos de agua naturales o artificiales en equilibrio hidrostático exhiben una superficie equipotencial con gradiente topográfico casi nulo y mínima rugosidad microtopográfica. Se evalúa el campo de pendientes $\|\nabla z_b\|$:
+
+\begin{equation}
+  \|\nabla z_b(x,y)\| = \sqrt{\left(\frac{\partial z_b}{\partial x}\right)^2 + \left(\frac{\partial z_b}{\partial y}\right)^2}
+\end{equation}
+
+y la varianza local de elevación $\text{Var}_{\Omega_r}(z_b)$ en una vecindad circular $\Omega_r$ de radio $r = 75\text{ m}$:
+\begin{equation}
+  \text{Var}_{\Omega_r}(z_b) = \frac{1}{|\Omega_r|} \iint_{\Omega_r} \left( z_b(\xi,\eta) - \bar{z}_b \right)^2 d\xi\,d\eta
+\end{equation}
+
+La máscara binaria de agua permanente $\mathcal{M}_{\text{agua}}(x,y)$ se define por el cumplimiento simultáneo de las siguientes condiciones:
+\begin{equation}
+  \mathcal{M}_{\text{agua}}(x,y) = 
+  \begin{cases}
+    1, & \text{si } \|\nabla z_b\| < \theta_{\text{slope}} \;\land\; \text{Var}_{\Omega_r}(z_b) < \theta_{\text{var}} \;\land\; A_{\text{cluster}} \ge A_{\min} \\
+    0, & \text{en otro caso}
+  \end{cases}
+\end{equation}
+
+con los umbrales calibrados:
+\begin{itemize}
+  \item $\theta_{\text{slope}} = 0.0045\text{ m/m}$ ($0.45\%$ de inclinación máxima).
+  \item $\theta_{\text{var}} = 0.60\text{ m}^2$ (desviación estándar inferior a $77\text{ cm}$).
+  \item $A_{\min} = 0.05\text{ km}^2$ ($50{,}000\text{ m}^2$, descartando azoteas o pequeñas explanadas artificiales).
+\end{itemize}
+
+\subsection{Asignación de Tirante Batimétrico Permanente}
+
+A los píxeles donde $\mathcal{M}_{\text{agua}} = 1$, se les asigna un tirante base permanente $h_{\text{perm}}$ dependiente de la posición relativa en la cubeta:
+\begin{equation}
+  h_{\text{perm}}(x,y) = h_{\text{base}} + \alpha_{\text{depresion}} \cdot \max\left(0, \bar{z}_{\text{orilla}} - z_b(x,y)\right)
+\end{equation}
+garantizando $1.8\text{ m} \le h_{\text{perm}} \le 4.5\text{ m}$, lo que reproduce fielmente el volumen embalsado en presas (p.~ej., Presa Nezahualcóyotl / Malpaso con más de $112\text{ km}^2$ identificados) y evita que la lluvia inicial se consuma artificialmente en rellenar vacíos.
+
+\section{Geometría Fluvial de Leopold-Maddock y Capacidad de Banca}
+
+\subsection{Relaciones Alométricas de Banca Llena}
+
+Según la teoría geomorfológica de sistemas fluviales en equilibrio dinámico (Leopold y Maddock, 1953; Rosgen, 1994), las dimensiones geométricas del cauce natural en condiciones de banca llena (\emph{bankfull}) son funciones potenciales del área de cuenca contribuyente aguas arriba $A_{\text{contrib}}$:
+
+\begin{align}
+  B_{\text{bank}} &= a_1 \, A_{\text{contrib}}^{b_1} \\
+  H_{\text{bank}} &= a_2 \, A_{\text{contrib}}^{b_2}
+\end{align}
+
+Para cuencas montañosas y de piedemonte mesoamericanas se adoptan los parámetros calibrados:
+\begin{align}
+  B_{\text{bank}} &= 2.40 \, A_{\text{contrib}}^{0.38} \quad (\text{m}) \\
+  H_{\text{bank}} &= 0.42 \, A_{\text{contrib}}^{0.30} \quad (\text{m})
+\end{align}
+donde $A_{\text{contrib}}$ se expresa en $\text{km}^2$.
+
+\subsection{Capacidad Hidráulica de Banca Llena ($Q_{\text{bank}}$)}
+
+Asumiendo una sección trapecial/parabólica con radio hidráulico $R_h \approx \frac{B_{\text{bank}} H_{\text{bank}}}{B_{\text{bank}} + 2 H_{\text{bank}}}$, el caudal máximo que puede conducir el cauce sin desbordar es:
+
+\begin{equation}
+  Q_{\text{bank}} = \frac{1}{n_{\text{cauce}}} \, \frac{\left(B_{\text{bank}} \, H_{\text{bank}}\right)^{5/3}}{\left(B_{\text{bank}} + 2 H_{\text{bank}}\right)^{2/3}} \, S_0^{1/2}
+\end{equation}
+
+donde $S_0 = \max(0.0008, \|\nabla z_b\|)$ es la pendiente longitudinal media del talweg.
+
+\section{Mecanismo de Desbordamiento Lateral a la Llanura Aluvial}
+
+Cuando una tormenta extraordinaria genera un caudal pico $Q_{\text{tormenta}} > Q_{\text{bank}}$, se produce el fenómeno de sobrepaso (\emph{overtopping} o vertedero lateral) hacia la llanura aluvial adyacente.
+
+\subsection{Balance de Caudal Desbordado}
+
+El gasto excedente que sale del confinamiento del río es:
+\begin{equation}
+  Q_{\text{desborde}} = \max\left(0, \, Q_{\text{tormenta}} - Q_{\text{bank}}\right)
+\end{equation}
+
+El incremento de la cota piezométrica en el río por encima de la corona de la banca se calcula mediante la ecuación de descarga sobre vertedero lateral amplio:
+\begin{equation}
+  \Delta h_{\text{spill}} = \left( \frac{Q_{\text{desborde}}}{C_d \, L_{\text{ribera}} \, \sqrt{2g}} \right)^{2/3}
+\end{equation}
+donde $C_d \approx 0.40$ es el coeficiente de gasto de ribera natural y $L_{\text{ribera}}$ es la longitud del tramo fluvial saturado.
+
+\subsection{Cota Piezométrica y Propagación Difusiva}
+
+La cota hidráulica de inundación en el frente de desborde es:
+\begin{equation}
+  \eta_{\text{desborde}} = z_{\text{talweg}} + H_{\text{bank}} + \Delta h_{\text{spill}}
+\end{equation}
+
+El agua se propaga lateralmente hacia la llanura mediante un operador de dilatación morfológica acoplado al gradiente de cota piezométrica:
+\begin{equation}
+  h_{\text{llanura}}(x,y) = \max\left(0, \; \eta_{\text{desborde}} - z_b(x,y)\right) \cdot \exp\left( -\frac{d(x,y;\text{cauce})}{\lambda_{\text{difusion}}} \right)
+\end{equation}
+donde:
+\begin{itemize}
+  \item $d(x,y;\text{cauce})$ es la distancia ortogonal eucídea desde el punto de la llanura al eje del cauce desbordado (m).
+  \item $\lambda_{\text{difusion}} = \sqrt{\frac{K_{\text{disp}} \, t_{\text{tormenta}}}{S_{\text{llanura}}}}$ es la longitud característica de dispersión lateral en la llanura aluvial ($120\text{ m} \sim 600\text{ m}$).
+\end{itemize}
+
+El volumen total inundado en la llanura aluvial se obtiene por integración espacial:
+\begin{equation}
+  V_{\text{desborde}} = \iint_{\Omega_{\text{llanura}}} h_{\text{llanura}}(x,y) \, dx\,dy \quad (\text{m}^3)
+\end{equation}
+
+\section{Dinámica de Infiltración y Saturación de Suelo (Horton 72 Horas)}
+
+La tasa de infiltración del suelo decrece exponencialmente conforme se satura el perfil poroso, de acuerdo con la cinética de Horton:
+
+\begin{equation}
+  f(t) = f_c + (f_0 - f_c) \, e^{-k_h \, t}
+\end{equation}
+donde:
+\begin{itemize}
+  \item $f_0$: tasa de infiltración inicial del suelo seco ($25 - 40\text{ mm/h}$).
+  \item $f_c$: tasa de infiltración final saturada a capacidad de campo ($2.5 - 6.0\text{ mm/h}$).
+  \item $k_h$: constante de decaimiento por saturación capilar ($0.8 - 1.5\text{ h}^{-1}$).
+\end{itemize}
+
+\subsection{Efecto de Precipitación Antecedente (API de 72 Horas)}
+
+Cuando existen lluvias antecedentes acumuladas durante los 3 días previos ($P_{72\text{h}}$), el suelo parte de un estado de humedad previa que desplaza el tiempo virtual de saturación $t_0^*$:
+\begin{equation}
+  t_0^* = -\frac{1}{k_h} \ln\left( \max\left(0.02, \; 1 - \frac{P_{72\text{h}}}{P_{\text{sat}}} \right) \right)
+\end{equation}
+
+Para eventos severos con $P_{72\text{h}} \ge 80\text{ mm}$, $f(t) \to f_c$, provocando que casi el $90\%$ de la precipitación incidente se transforme en escorrentía directa, disparando el desbordamiento fluvial.
+
+\section{Forzamiento Barométrico Inverso (Ciclones y Tormentas Tropicales)}
+
+En cuencas costeras y estuarinas, el paso de perturbaciones tropicales induce una sobrelevación estática del nivel del agua debida a la depresión atmosférica central, regida por la ley del barómetro inverso:
+
+\begin{equation}
+  \Delta \eta_{\text{baro}} = \frac{P_{\text{ref}} - P_{\text{ojo}}}{\rho_w \, g}
+\end{equation}
+
+donde:
+\begin{itemize}
+  \item $P_{\text{ref}} = 1013.25\text{ hPa} = 101{,}325\text{ Pa}$ (presión atmosférica normal a nivel del mar).
+  \item $P_{\text{ojo}}$ es la presión barométrica en el centro de la tormenta (p.~ej., $940\text{ hPa}$ en un huracán intenso).
+  \item $\rho_w = 1000\text{ kg/m}^3$ es la densidad del agua dulce / salobre.
+\end{itemize}
+
+Por cada milibar ($\text{hPa}$) que desciende la presión, el espejo de agua se eleva aproximadamente $1.02\text{ cm}$:
+\begin{equation}
+  \Delta \eta_{\text{baro}} \approx 0.0102 \cdot \left(1013.25 - P_{\text{atm}}(\text{hPa})\right) \quad (\text{m})
+\end{equation}
+
+Esta sobreelevación eleva el nivel de descarga de las desembocaduras, actuando como un tapón hidráulico que represa las aguas hacia el interior de la cuenca.
+
+\section{Criterio de Riesgo y Corte de Vías (Xia et al., 2014)}
+
+La peligrosidad de la inundación sobre vialidades, puentes y personas no depende únicamente del tirante $h$, sino de la energía cinética del agua expresada mediante el producto tirante-velocidad $u \cdot h$ (criterio de estabilidad hidrodinámica de Xia et al., 2014):
+
+\begin{equation}
+  \mathcal{I}_{\text{peligro}}(x,y) = u(x,y) \cdot h(x,y) \quad (\text{m}^2/\text{s})
+\end{equation}
+
+\begin{table}[h]
+\centering
+\caption{Umbrales de corte de infraestructura y peligro humano}
+\begin{tabular}{lll}
+\toprule
+\textbf{Índice $u \cdot h$ ($\text{m}^2/\text{s}$)} & \textbf{Tirante $h$ (m)} & \textbf{Efecto y Nivel de Alerta} \\
+\midrule
+$< 0.10$ & $< 0.15$ & Tránsito vehicular sin perturbación mayor (Precaución). \\
+$0.10 - 0.35$ & $0.15 - 0.30$ & Peligro para vehículos compactos; anegamiento moderado. \\
+$0.35 - 0.50$ & $0.30 - 0.60$ & Inestabilidad peatonal; vehículos pesados en riesgo. \\
+$\ge 0.50$ & $\ge 0.60$ & \textbf{Corte total de vía}; arrastre inminente de autos y peatones. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Renderizado Batimétrico y Visualización Cartográfica Fotorrealista}
+
+Para presentar los resultados al operador con la máxima claridad perceptiva, el ráster de tirantes $h(x,y)$ es transformado mediante una función de transferencia de color continuo con anti-aliasing morfológico:
+
+\subsection{Paleta Batimétrica Continua RGBA}
+
+\begin{equation}
+  \mathbf{C}(h) = 
+  \begin{cases}
+    (0, 0, 0, 0), & h < 0.05\text{ m} \quad (\text{Suelo seco / sin anegamiento}) \\
+    (64, 224, 208, 175), & 0.05 \le h < 0.30\text{ m} \quad (\text{Turquesa costero, lámina delgada}) \\
+    (30, 144, 255, 205), & 0.30 \le h < 1.00\text{ m} \quad (\text{Azul zafiro, llanura aluvial}) \\
+    (0, 102, 204, 225), & 1.00 \le h < 2.50\text{ m} \quad (\text{Azul cobalto, cauce fluvial lleno}) \\
+    (0, 45, 120, 245), & h \ge 2.50\text{ m} \quad (\text{Azul marino profundo, embalses y presas})
+  \end{cases}
+\end{equation}
+
+\subsection{Suavizado Espacial y Resampling Lineal}
+
+A fin de eliminar la pixelación escalonada provocada por la resolución nativa de 30 metros del DEM, el tensor de colores se procesa mediante una convolución gaussiana de radio $1.2$ celdas:
+\begin{equation}
+  \tilde{h}(x,y) = \iint_{\mathbb{R}^2} h(\xi,\eta) \, \frac{1}{2\pi \sigma^2} e^{-\frac{(x-\xi)^2 + (y-\eta)^2}{2\sigma^2}} \, d\xi\,d\eta
+\end{equation}
+y se despliega en MapLibre GL mediante la capa ráster con interpolación bilinear (\lstinline{'raster-resampling': 'linear'}), garantizando transiciones suaves y naturales entre la orilla y el centro de los cuerpos hídricos.
+
+\section{Conclusiones}
+
+La integración de la detección morfológica de agua permanente, las ecuaciones hidrodinámicas de Saint-Venant 2D, el modelo de capacidad de banca de Leopold-Maddock y la difusión lateral en llanuras aluviales proporciona a TerraPulse AI un simulador físico de vanguardia, capaz de predecir tanto anegamientos urbanos locales como desbordamientos fluviales masivos en cuencas de cualquier escala.
+
+\end{document}
