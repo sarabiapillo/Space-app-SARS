@@ -150,4 +150,112 @@ Invirtiendo numéricamente la ecuación~\eqref{eq:gmpe} para cada $PGA_{\text{um
 \end{equation}
 el cual se proyecta en el mapa como anillos geodésicos georreferenciados sobre MapLibre GL.
 
+\section{Formulación Analítica del Sismograma Sintético y Paquetes de Onda}
+
+Para que el usuario pueda visualizar la forma de onda que viaja desde el epicentro hasta cualquier estación receptora a distancia epicentral $D$, el simulador genera numéricamente la serie temporal de aceleración del terreno $a(t, D)$ en unidades de $g$ y $\text{cm/s}^2$ (Gals).
+
+La aceleración total registrada en la estación receptora se modela como la superposición de ruido ambiental basal, el paquete de onda compresional $P$, el paquete de onda de corte $S$ (con el pico $PGA$) y la cola de ondas superficiales y coda sísmica:
+\begin{equation}
+  a(t, D) = a_{\text{ruido}}(t) + a_P(t, D) + a_S(t, D).
+  \label{eq:sismograma_total}
+\end{equation}
+
+\subsection{Arribo de Onda Primaria ($P$)}
+
+El tiempo de primer arribo de la onda compresional $P$ viaja a través del hipocentro $R = \sqrt{D^2 + h^2}$:
+\begin{equation}
+  t_P = \frac{\sqrt{D^2 + h^2}}{v_P}, \quad \text{con } v_P = 6.0\,\text{km/s}.
+\end{equation}
+
+Para $t \ge t_P$, el paquete compresional $a_P(t, D)$ se modula como una señal de alta frecuencia amortiguada exponencialmente:
+\begin{equation}
+  a_P(t, D) = A_P(D) \cdot \sin\big(2\pi f_P (t - t_P)\big) \cdot \cos\big(0.3\pi f_P (t - t_P)\big) \cdot \exp\left(-\frac{t - t_P}{\tau_P}\right) \cdot \mathcal{H}(t - t_P),
+  \label{eq:onda_p}
+\end{equation}
+donde:
+\begin{itemize}
+  \item $A_P(D) \approx 0.22 \cdot PGA(D)$: amplitud pico de la onda $P$ (típicamente entre 20\% y 25\% del $PGA$ total de la onda $S$).
+  \item $f_P = 4.5\,\text{Hz}$: frecuencia dominante de la fase compresional en corteza continental.
+  \item $\tau_P \approx 3.2\,\text{s}$: parámetro de decaimiento del paquete de onda $P$.
+  \item $\mathcal{H}(t - t_P)$ es la función escalón unitario de Heaviside.
+\end{itemize}
+
+\subsection{Ventana Operativa de Alerta Sísmica Temprana ($\Delta t$)}
+
+Durante el intervalo $t_P \le t < t_S$, el terreno solo experimenta vibración leve no destructiva producida por la onda $P$. La diferencia temporal antes de la llegada de la onda transversal $S$ destructiva constituye la ventana de oportunidad de alerta temprana:
+\begin{equation}
+  \Delta t(D) = t_S - t_P = \sqrt{D^2 + h^2} \left(\frac{1}{v_S} - \frac{1}{v_P}\right) \approx 0.119 \cdot \sqrt{D^2 + h^2} \quad \text{(segundos)}.
+  \label{eq:delta_t}
+\end{equation}
+
+Dado que los sensores costeros transmiten la alarma mediante radiofrecuencia a la velocidad de la luz $c \approx 3 \times 10^5\,\text{km/s} \gg v_S$, una urbe como la Ciudad de México ($D \approx 320\,\text{km}$) dispone de una ventana de aviso $\Delta t \approx 38 - 60\,\text{segundos}$ antes del inicio de las sacudidas destructivas.
+
+\subsection{Arribo de Onda Secundaria Destructiva ($S$) y Ondas Superficiales}
+
+El tiempo de arribo del frente cortante $S$ es:
+\begin{equation}
+  t_S = \frac{\sqrt{D^2 + h^2}}{v_S}, \quad \text{con } v_S = 3.5\,\text{km/s}.
+\end{equation}
+
+A partir de $t = t_S$, la aceleración experimenta una súbita amplificación correspondiente al arribo de las componentes de cizalla y ondas superficiales acopladas (Rayleigh y Love):
+\begin{equation}
+  a_S(t, D) = PGA(D) \cdot E_S(t - t_S) \cdot \Big[ 0.82 \sin\big(2\pi f_S (t - t_S)\big) + 0.18 \sin\big(4\pi f_S (t - t_S) + 0.6\big) \Big] \cdot \mathcal{H}(t - t_S),
+  \label{eq:onda_s}
+\end{equation}
+donde la función de envolvente de amplitud $E_S(\tau)$ posee un tiempo de subida $\tau_{\text{rise}} = 1.8\,\text{s}$ y una relajación exponencial de coda $\tau_{\text{coda}}$:
+\begin{equation}
+  E_S(\tau) =
+  \begin{cases}
+    \dfrac{\tau}{\tau_{\text{rise}}}, & 0 \le \tau \le \tau_{\text{rise}} \\[8pt]
+    \exp\left(-\dfrac{\tau - \tau_{\text{rise}}}{\tau_{\text{coda}}}\right), & \tau > \tau_{\text{rise}}.
+  \end{cases}
+  \label{eq:envolvente}
+\end{equation}
+
+\subsection{Efecto de Sitio y Modulación Espectral de la Coda}
+
+Los parámetros dinámicos de la onda $S$ ($f_S$ y $\tau_{\text{coda}}$) varían sustancialmente según la geología del estrato superior ($V_{s30}$):
+\begin{enumerate}
+  \item \textbf{Roca Firme ($V_{s30} > 760\,\text{m/s}$):}
+    $f_S \approx 2.2\,\text{Hz}$, $\tau_{\text{coda}} \approx 9.0\,\text{s}$. Respuesta de alta frecuencia con rápida disipación inelástica.
+  \item \textbf{Suelo Intermedio / Aluvial ($360 \le V_{s30} \le 760\,\text{m/s}$):}
+    $f_S \approx 1.3\,\text{Hz}$, $\tau_{\text{coda}} \approx 14.0\,\text{s}$.
+  \item \textbf{Suelo Blando Lacustre ($V_{s30} < 180\,\text{m/s}$, cuenca lacustre de la CDMX):}
+    $f_S \approx 0.52\,\text{Hz}$ (período fundamental del suelo $T_0 \approx 1.9 - 2.0\,\text{s}$), $\tau_{\text{coda}} \approx 28.0\,\text{s}$.
+    El atrapamiento de energía por contraste de impedancias acústicas y reverberación en la cuenca genera ondas monocromáticas sostenidas que causan resonancia con edificaciones de 6 a 20 pisos, replicando fielmente lo observado en los sismos de 1985 ($M_w 8.1$) y 2017 ($M_w 7.1$).
+\end{enumerate}
+
+\subsection{Ruido Microtrepidante de Fondo}
+
+Para mantener un realismo geofísico en la serie temporal previa al arribo de la onda $P$ ($t < t_P$), se introduce una señal microtrepidante ambiental:
+\begin{equation}
+  a_{\text{ruido}}(t) = PGA(D) \cdot \Big[ 0.0012 \sin(11.2 t + 0.3) + 0.0006 \cos(23.7 t) \Big].
+\end{equation}
+
+\section{Resumen Sinóptico de Ecuaciones Ejecutadas por el Simulador}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lllp{5.5cm}@{}}
+\toprule
+\textbf{Magnitud Física} & \textbf{Símbolo / Ecuación} & \textbf{Unidad} & \textbf{Función en el Código TypeScript} \\
+\midrule
+Distancia Epicentral & $D = 2 R_T \arcsin(\dots)$ & km & Trigonométrica de gran círculo Haversine \\
+Distancia Hipocentral & $R = \sqrt{D^2 + h^2}$ & km & `Math.sqrt(dist*dist + depthKm*depthKm)` \\
+Aceleración Pico & $\ln(PGA) = c_1 + c_2 M_w - c_3 \ln R - c_4 R + S_{\text{sitio}}$ & $g$ & `computePga_g(...)` \\
+Aceleración en CGS & $PGA_{\text{cgs}} = PGA_g \times 980.665$ & $\text{cm/s}^2$ & `pga_g * 980.665` \\
+Escala Mercalli & $MMI = 3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66$ & I a X+ & `pgaToMmi(pga_g)` \\
+Tiempo de Onda P & $t_P = R / 6.0$ & s & `tP = hypoDist / 6.0` \\
+Tiempo de Onda S & $t_S = R / 3.5$ & s & `tS = hypoDist / 3.5` \\
+Ventana Alerta SASMEX & $\Delta t = t_S - t_P$ & s & `Math.max(0, tS - tP)` \\
+Sismograma $a(t)$ & $a(t) = a_{\text{ruido}} + a_P(t) + a_S(t)$ & $g$, Gal & `generateSyntheticSeismogram(...)` \\
+Radios de Afectación & $\text{Bisección: } PGA(R_{\text{zona}}) = PGA_{\text{umbral}}$ & km & `solveDistanceForPga(...)` \\
+Polígono Isosisma & Proyección geodésica $64$ nodos & LngLat[] & `generateGeodesicCircle(epicenter, rKm, 64)` \\
+\bottomrule
+\end{tabular}
+\caption{Mapeo exacto entre la formulación matemática analítica y las rutinas de cómputo del simulador.}
+\label{tab:resumen_ecuaciones}
+\end{table}
+
 \end{document}

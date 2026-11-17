@@ -24,6 +24,26 @@ export interface IsoseismalRing {
   polygon: LngLat[]
 }
 
+export interface SyntheticSeismogramPoint {
+  timeSec: number
+  acceleration_g: number
+  acceleration_cgs: number // gal (cm/s²)
+  phase: 'ambient' | 'p_wave' | 'warning' | 's_wave' | 'coda'
+}
+
+export interface SyntheticSeismogram {
+  stationDistKm: number
+  hypocentralDistKm: number
+  tP_sec: number
+  tS_sec: number
+  warningTimeSec: number
+  peakPga_g: number
+  peakPga_cgs: number
+  stationMmi: number
+  durationSec: number
+  points: SyntheticSeismogramPoint[]
+}
+
 export interface SeismicSimulationResults {
   source: SeismicSource
   epicentralPga_g: number
@@ -378,3 +398,114 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
     attenuationCurve,
   }
 }
+
+/**
+ * Genera la serie temporal de aceleración del terreno a(t) [Sismograma Sintético / Paquetes de Onda]
+ * para una estación receptora a distancia epicentral `stationDistKm`.
+ * Modela analíticamente el arribo de la onda P compresional, el intervalo de alerta previa,
+ * la llegada destructiva de la onda S de corte y la coda con amortiguamiento inelástico.
+ */
+export function generateSyntheticSeismogram(
+  source: SeismicSource,
+  stationDistKm: number,
+  numSamples = 220
+): SyntheticSeismogram {
+  const { magnitude, depthKm, mechanism, soilType } = source
+  const vp = 6.0 // km/s
+  const vs = 3.5 // km/s
+  const hypoDist = Math.sqrt(stationDistKm * stationDistKm + depthKm * depthKm)
+  const tP = Math.round((hypoDist / vp) * 10) / 10
+  const tS = Math.round((hypoDist / vs) * 10) / 10
+  const warningTime = Math.max(0, Math.round((tS - tP) * 10) / 10)
+
+  const pga_g = computePga_g(stationDistKm, magnitude, depthKm, mechanism, soilType)
+  const pga_cgs = pga_g * 980.665
+  const stationMmi = pgaToMmi(pga_g)
+
+  // Duración total de la ventana temporal del sismograma
+  const durationSec = Math.max(45, Math.ceil(tS + (soilType === 'soft_lacustrine' ? 45 : 30)))
+  const dt = durationSec / numSamples
+
+  // Frecuencias características del paquete de ondas según tipo de suelo
+  const fp = 4.5 // Hz (Onda P, compresión rápida)
+  let fs = 1.3 // Hz (Onda S estándar)
+  let tau_s = 14.0 // Decaimiento de coda (s)
+  if (soilType === 'soft_lacustrine') {
+    fs = 0.52 // Resonancia de período largo típica del Valle de México (~2s)
+    tau_s = 28.0 // Coda muy prolongada por atrapamiento de ondas en cuenca
+  } else if (soilType === 'rock') {
+    fs = 2.2
+    tau_s = 9.0
+  }
+
+  const points: SyntheticSeismogramPoint[] = []
+
+  for (let i = 0; i <= numSamples; i++) {
+    const t = Math.round(i * dt * 10) / 10
+
+    // Microtremores de ruido de fondo ambiental
+    const noise = 0.0012 * pga_g * Math.sin(11.2 * t + 0.3) + 0.0006 * pga_g * Math.cos(23.7 * t)
+
+    let a_p = 0
+    let a_s = 0
+    let phase: SyntheticSeismogramPoint['phase'] = 'ambient'
+
+    if (t < tP) {
+      phase = 'ambient'
+    } else if (t >= tP && t < tS) {
+      const dtP = t - tP
+      if (dtP <= 3.5) {
+        phase = 'p_wave'
+      } else {
+        phase = 'warning'
+      }
+      // Paquete de onda P: alta frecuencia, menor amplitud (aprox 20-25% de PGA)
+      const envP = Math.exp(-dtP / 3.2)
+      a_p = 0.22 * pga_g * Math.sin(2 * Math.PI * fp * dtP) * Math.cos(0.3 * Math.PI * fp * dtP) * envP
+    } else {
+      // t >= tS: Arribo de onda S de corte y ondas superficiales
+      const dtS = t - tS
+      const riseTime = 1.8
+      let envS = 0
+      if (dtS <= riseTime) {
+        envS = dtS / riseTime
+      } else {
+        envS = Math.exp(-(dtS - riseTime) / tau_s)
+      }
+
+      if (dtS <= 10.0) {
+        phase = 's_wave'
+      } else {
+        phase = 'coda'
+      }
+
+      // Paquete de onda S: combinación fundamental + armónico secundario + resonancia de suelo
+      const waveS = 0.82 * Math.sin(2 * Math.PI * fs * dtS) + 0.18 * Math.sin(4 * Math.PI * fs * dtS + 0.6)
+      a_s = pga_g * waveS * envS
+    }
+
+    const totalAccel_g = noise + a_p + a_s
+    const totalAccel_cgs = totalAccel_g * 980.665
+
+    points.push({
+      timeSec: t,
+      acceleration_g: Math.round(totalAccel_g * 10000) / 10000,
+      acceleration_cgs: Math.round(totalAccel_cgs * 100) / 100,
+      phase,
+    })
+  }
+
+  return {
+    stationDistKm,
+    hypocentralDistKm: Math.round(hypoDist * 10) / 10,
+    tP_sec: tP,
+    tS_sec: tS,
+    warningTimeSec: warningTime,
+    peakPga_g: Math.round(pga_g * 1000) / 1000,
+    peakPga_cgs: Math.round(pga_cgs * 10) / 10,
+    stationMmi: Math.round(stationMmi * 10) / 10,
+    durationSec,
+    points,
+  }
+}
+
