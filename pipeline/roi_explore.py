@@ -5,6 +5,8 @@ import hashlib
 import json
 import math
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -86,6 +88,7 @@ def prepare(run_dir):
     progress('Consultando escenas GCOV disponibles en ASF…')
     timings = {}
     total_started = time.monotonic()
+    deadline = total_started + 1500  # 25 min desde el inicio; reserva 5 min del límite del proceso padre.
     phase_started = time.monotonic()
     scenes = get_source('asf').search(wkt, 'GCOV')
     timings['search_asf_seconds'] = float(time.monotonic() - phase_started)
@@ -101,22 +104,34 @@ def prepare(run_dir):
     config.write_text(yaml.safe_dump({'roi': {'wkt': wkt}, 'source': 'asf'}), encoding='utf-8')
     manifests, charts = [], []
     scene_timings = []
-    for index, scene in enumerate(selected):
-        phase_started = time.monotonic()
-        progress(f'Leyendo bloques HTTPS del H5 y preparando capas ({index + 1}/{len(selected)})…')
+    progress(f'Leyendo y preparando {len(selected)} escena(s)…')
+    if len(selected) == 1:
+        scene = selected[0]
+        started = time.monotonic()
         out = inspect_scene([scene.scene_id, '--catalogo', str(catalog), '--config', str(config),
                              '--salida', str(run_dir / 'layers'), '--sin-vista', '--sin-figuras',
                              '--escala-web', '-22', '0'])
         manifest = json.loads((out / 'web' / 'capas.json').read_text(encoding='utf-8'))
-        if not any(layer['pct_pixeles_validos'] > 0 for layer in manifest['capas']):
-            raise RoiPreparationError('La escena intersecta la ROI, pero no contiene píxeles válidos en ella.')
         manifests.append(manifest)
         charts_file = out / 'graficas.json'
         if charts_file.is_file():
             charts.append({'granuleId': manifest['escena']['granuleId'],
                            'fecha': str(manifest['escena'].get('fecha_inicio', ''))[:10],
                            'manifest': json.loads(charts_file.read_text(encoding='utf-8'))})
-        scene_timings.append(float(time.monotonic() - phase_started))
+        scene_timings.append(float(time.monotonic() - started))
+    else:
+        try:
+            results = _run_scene_children(run_dir, selected, deadline)
+            for data in results:
+                manifests.append(data['manifest'])
+                scene_timings.append(data['seconds'])
+                if data['charts'] is not None:
+                    charts.append(data['charts'])
+        except (OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
+            raise RoiPreparationError('No se pudo preparar una escena; puedes reintentar.') from exc
+    for manifest in manifests:
+        if not any(layer['pct_pixeles_validos'] > 0 for layer in manifest['capas']):
+            raise RoiPreparationError('La escena intersecta la ROI, pero no contiene píxeles válidos en ella.')
     timings['scene_processing_seconds'] = scene_timings
     phase_started = time.monotonic()
     comparable = False
@@ -140,6 +155,43 @@ def prepare(run_dir):
         'message': 'Capas listas. Inspección exploratoria; no identifica causas.' if comparable else
         'Capas listas. No hay un par con malla comparable; deslizador deshabilitado.'})
     write_json(run_dir / 'status.json', {'status': 'ready', 'message': 'Capas listas.'})
+
+
+def _run_scene_children(run_dir, selected, deadline):
+    children = []
+    try:
+        for index, scene in enumerate(selected):
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired('scene preparation', max(0, deadline - time.monotonic()))
+            children.append(subprocess.Popen(
+                [sys.executable, '-m', 'pipeline.roi_explore', '--scene-worker', str(run_dir), scene.scene_id, str(index)],
+                cwd=Path(__file__).resolve().parents[1], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        while True:
+            states = [child.poll() for child in children]
+            for child, code in zip(children, states):
+                if code not in (None, 0):
+                    raise subprocess.CalledProcessError(code, child.args)
+            if all(code == 0 for code in states):
+                for child in children:
+                    child.wait()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired('scene preparation', 1500)
+            time.sleep(min(0.1, remaining))
+        return [json.loads((Path(run_dir) / f'scene-result-{i}.json').read_text(encoding='utf-8'))
+                for i in range(len(selected))]
+    except BaseException:
+        for child in children:
+            if child.poll() is None:
+                child.terminate()
+        for child in children:
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        raise
 
 
 def save_chart_copy(run_dir, wkt, scene_dirs):
@@ -169,8 +221,35 @@ def save_chart_copy(run_dir, wkt, scene_dirs):
     return resolved.relative_to(root).as_posix() if resolved.is_relative_to(root) else resolved.as_posix()
 
 
+def _scene_worker(run_dir, scene_id, index):
+    from .etapa1 import main as inspect_scene
+
+    run_dir = Path(run_dir)
+    catalog = run_dir / 'catalog.json'
+    scenes = json.loads(catalog.read_text(encoding='utf-8'))['scenes']
+    from .sources.base import SceneMeta
+    match = next((item for item in scenes if item['scene_id'] == scene_id), None)
+    if match is None:
+        raise ValueError('Escena seleccionada ausente del catálogo de trabajo.')
+    scene = SceneMeta.from_dict(match)
+    started = time.monotonic()
+    entrada = scene.extra.get('local_h5') or scene.scene_id
+    out = inspect_scene([entrada, '--catalogo', str(catalog), '--config', str(run_dir / 'config.yaml'),
+                         '--salida', str(run_dir / 'layers'), '--sin-vista', '--sin-figuras',
+                         '--escala-web', '-22', '0'])
+    manifest = json.loads((out / 'web' / 'capas.json').read_text(encoding='utf-8'))
+    charts_file = out / 'graficas.json'
+    charts = ({'granuleId': manifest['escena']['granuleId'],
+               'fecha': str(manifest['escena'].get('fecha_inicio', ''))[:10],
+               'manifest': json.loads(charts_file.read_text(encoding='utf-8'))} if charts_file.is_file() else None)
+    write_json(run_dir / f'scene-result-{index}.json', {
+        'manifest': manifest, 'charts': charts, 'seconds': float(time.monotonic() - started)})
+
+
 if __name__ == '__main__':
-    import sys
+    if len(sys.argv) == 5 and sys.argv[1] == '--scene-worker':
+        _scene_worker(sys.argv[2], sys.argv[3], int(sys.argv[4]))
+        sys.exit(0)
     try:
         prepare(sys.argv[1])
     except Exception as exc:
