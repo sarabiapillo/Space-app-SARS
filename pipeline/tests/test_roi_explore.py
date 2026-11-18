@@ -65,6 +65,7 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     result = json.loads((run / 'result.json').read_text(encoding='utf-8'))
     assert len(result['manifests']) == 1
     assert result['comparable'] is False
+    assert result['change'] is None          # una sola fecha: no hay mapa de cambio
     assert result['manifests'][0]['procedencia']['identidad_verificada_contra_catalogo']
     assert all(c['escala']['vmin_dB'] == -22 for c in result['manifests'][0]['capas'])
     assert remote.opened[0][1]['cache_type'] == 'blockcache'
@@ -173,6 +174,38 @@ def test_prepare_pair_uses_two_local_h5_children_in_selected_order(tmp_path, mon
         assert json.loads((scene_dir / 'metadatos.json').read_text())['identificacion']['granuleId'] == sid
     assert not (run / 'layers' / 'UNSELECTED').exists()
 
+    # Mapa de cambio t2 − t1 sobre la misma ROI dibujada (comparable → se calcula).
+    change = result['change']
+    assert change['tipo'] == 'mapa_de_cambio'
+    assert change['t1'] == 'PAIR_EARLY' and change['t2'] == 'PAIR_LATE'
+    assert {c['capa'] for c in change['capas']} == {'HHHH', 'HVHV'}
+    # Por defecto: multilook 5×5 desde la potencia lineal del producto y umbral de 3 dB.
+    default = run / 'layers' / 'cambio' / 'ml5_u3'
+    assert change['multilook'] == 5 and change['umbral_dB'] == 3.0
+    assert change['opciones'] == {'multilook': [2, 5, 10], 'umbral_dB': [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0]}
+    for layer in change['capas']:
+        assert layer['escala']['colormap'] == 'rdbu'
+        assert (layer['escala']['vmin_dB'], layer['escala']['vmax_dB']) == (-6.0, 6.0)
+        png = default / 'web' / f"{layer['id']}.png"
+        assert png.is_file() and layer['png'].endswith(f"layers/cambio/ml5_u3/web/{layer['id']}.png")
+    assert set(change['metricas']) == {'HH', 'HV'}
+    assert {'ruido_dB', 'pct_abs_z_mayor_3', 'umbral_cerca_del_ruido'} <= set(change['metricas']['HH'])
+    assert (default / 'change.json').is_file()
+
+    # Recalcular con otra combinación: carpeta propia, sin tocar las fechas ni volver a ASF.
+    other = roi_explore.recompute_change(run, 2, 1.5)
+    assert other['multilook'] == 2 and other['umbral_dB'] == 1.5
+    assert other['opciones'] == change['opciones']
+    assert all('layers/cambio/ml2_u1.5/web/' in c['png'] for c in other['capas'])
+    assert other['pixel_m'] == change['pixel_m'] * 2 / 5
+    stamp = (run / 'layers' / 'cambio' / 'ml2_u1.5' / 'change.json').stat().st_mtime_ns
+    assert roi_explore.recompute_change(run, 2, '1.5') == other           # caché por combinación
+    assert (run / 'layers' / 'cambio' / 'ml2_u1.5' / 'change.json').stat().st_mtime_ns == stamp
+    assert roi_explore.recompute_change(run, 5, 3) == change               # la de por defecto ya existe
+    for looks, threshold in ((1, 3), (5, 3.3), (True, 3), ('x', 3), (5, float('nan'))):
+        with pytest.raises(ValueError):
+            roi_explore.recompute_change(run, looks, threshold)
+
 
 def test_scene_children_keep_selected_order_and_reap_both(tmp_path, monkeypatch):
     import json
@@ -259,3 +292,27 @@ def test_slow_search_expiring_deadline_launches_no_scene_children(tmp_path, monk
     with pytest.raises(roi_explore.RoiPreparationError, match='reintentar'):
         roi_explore.prepare(run)
     assert not list(run.glob('scene-result-*.json'))
+
+
+def test_recompute_change_requires_comparable_ready_job(tmp_path):
+    from pipeline import roi_explore
+    run = tmp_path / 'run'
+    run.mkdir()
+    with pytest.raises(ValueError, match='lista'):
+        roi_explore.recompute_change(run, 5, 3)
+    roi_explore.write_json(run / 'result.json', {'manifests': [{}], 'comparable': False, 'change': None})
+    with pytest.raises(ValueError, match='comparable'):
+        roi_explore.recompute_change(run, 5, 3)
+
+
+def test_prune_change_cache_keeps_default_and_newest(tmp_path):
+    import os
+    from pipeline import roi_explore
+    base = tmp_path / 'cambio'
+    names = ['ml5_u3', 'ml2_u1.5', 'ml2_u2', 'ml10_u3', 'ml2_u3', 'ml10_u6']
+    for i, name in enumerate(names):
+        (base / name).mkdir(parents=True)
+        os.utime(base / name, (1000 + i, 1000 + i))
+    os.utime(base / 'ml5_u3', (1, 1))                                     # la más antigua, pero es la de defecto
+    roi_explore.prune_change_cache(base, keep=3)
+    assert sorted(d.name for d in base.iterdir()) == sorted(['ml5_u3', 'ml10_u6', 'ml2_u3', 'ml10_u3'])

@@ -50,3 +50,6 @@ Thumbs.db
 
 # --- Salidas de herramientas ---
 graphify-out/
+
+# Marca de Windows en archivos descargados (aparece como archivo al copiar a WSL)
+*:Zone.Identifier

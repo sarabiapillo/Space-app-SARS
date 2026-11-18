@@ -497,7 +497,7 @@ function App() {
         onOpacityChange={handleOpacityChange}
         exploreLayerId={exploreLayerId}
         onExploreLayerChange={setExploreLayerId}
-        dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
+        dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 'change' && !roiLayers.change) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
         onDateViewModeChange={setDateViewMode}
         colormapId={colormapId}
         onColormapChange={setColormapId}
@@ -592,7 +592,7 @@ function App() {
           solar={current.solar}
           flood={current.flood || generalFlood}
           exploreLayerId={exploreLayerId}
-          dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
+          dateViewMode={confirmedROI && ((dateViewMode === 'swipe' && !roiLayers.comparable) || (dateViewMode === 'change' && !roiLayers.change) || (dateViewMode === 't2' && !roiLayers.manifests[1])) ? 't1' : dateViewMode}
           colormapId={colormapId}
           activeTool={activeTool}
           onSelectTool={setActiveTool}

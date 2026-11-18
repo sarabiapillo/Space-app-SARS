@@ -64,6 +64,33 @@ def test_ready_assets_rewritten_without_exposing_files(tmp_path):
         download.close()
 
 
+def test_ready_change_layers_rewritten_to_assets(tmp_path):
+    key = 'c' * 64
+    path = tmp_path / key
+    image = path / 'layers' / 'cambio' / 'web' / 'delta.png'
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b'delta-png')
+    write_json(path / 'status.json', {'status': 'ready'})
+    write_json(path / 'result.json', {'manifests': [], 'change': {
+        'tipo': 'mapa_de_cambio', 'capas': [{'png': str(image), 'cog': str(image.with_suffix('.tif'))}]}})
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path):
+        data = Client().get(f'/roi-jobs/{key}').json()
+        assert data['change']['capas'][0]['png'] == f'api/roi-jobs/{key}/assets/layers/cambio/web/delta.png'
+        download = Client().get(data['change']['capas'][0]['png'].removeprefix('api'))
+        assert b''.join(download.streaming_content) == b'delta-png'
+        download.close()
+
+
+def test_ready_without_change_keeps_null(tmp_path):
+    key = 'd' * 64
+    path = tmp_path / key
+    path.mkdir()
+    write_json(path / 'status.json', {'status': 'ready'})
+    write_json(path / 'result.json', {'manifests': [], 'change': None})
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path):
+        assert Client().get(f'/roi-jobs/{key}').json()['change'] is None
+
+
 def _make_run_job_fixture(tmp_path):
     key = 'b' * 64
     path = tmp_path / key
@@ -130,3 +157,55 @@ def test_run_job_success_runs_copy_after_reaping_coordinator(tmp_path, monkeypat
 
     assert observed == {'waited': True, 'copied': True}
     assert path.name not in roi_views.ACTIVE
+
+
+def test_recompute_change_endpoint_validates_and_rewrites_assets(tmp_path):
+    from pipeline import roi_explore
+    key = 'e' * 64
+    path = tmp_path / key
+    image = path / 'layers' / 'cambio' / 'ml2_u1.5' / 'web' / 'delta.png'
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b'delta-ml2')
+    write_json(path / 'status.json', {'status': 'ready'})
+    manifest = {'tipo': 'mapa_de_cambio', 'multilook': 2, 'umbral_dB': 1.5,
+                'capas': [{'png': str(image), 'cog': str(image.with_suffix('.tif'))}]}
+    calls = []
+
+    def fake(run_dir, looks, threshold):
+        calls.append((Path(run_dir), looks, threshold))
+        roi_explore.change_params(looks, threshold)
+        return json.loads(json.dumps(manifest))
+
+    url = f'/roi-jobs/{key}/change'
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path), patch.object(roi_views, 'recompute_change', fake):
+        client = Client()
+        response = client.post(url, json.dumps({'multilook': 2, 'umbral_dB': 1.5}), content_type='application/json')
+        assert response.status_code == 200
+        assert calls == [(path, 2, 1.5)]
+        png = response.json()['capas'][0]['png']
+        assert png == f'api/roi-jobs/{key}/assets/layers/cambio/ml2_u1.5/web/delta.png'
+        download = client.get(png.removeprefix('api'))
+        assert b''.join(download.streaming_content) == b'delta-ml2'
+        download.close()
+        for body in ({'multilook': 3, 'umbral_dB': 3}, {'multilook': 5}, [], {'multilook': 5, 'umbral_dB': 'x'}):
+            assert client.post(url, json.dumps(body), content_type='application/json').status_code == 400
+        assert client.post(f'/roi-jobs/{"f" * 64}/change', json.dumps({'multilook': 5, 'umbral_dB': 3}),
+                           content_type='application/json').status_code == 404
+
+
+def test_recompute_change_endpoint_busy_and_not_ready(tmp_path):
+    from pipeline.roi_explore import ChangeBusy
+    key = '1' * 64
+    path = tmp_path / key
+    path.mkdir()
+    write_json(path / 'status.json', {'status': 'running', 'message': 'Procesando'})
+    body = json.dumps({'multilook': 5, 'umbral_dB': 3})
+    url = f'/roi-jobs/{key}/change'
+
+    def busy(*_):
+        raise ChangeBusy('ocupado')
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path), patch.object(roi_views, 'recompute_change', busy):
+        assert Client().post(url, body, content_type='application/json').status_code == 409
+        write_json(path / 'status.json', {'status': 'ready'})
+        response = Client().post(url, body, content_type='application/json')
+        assert response.status_code == 409 and response.json()['detail'] == 'ocupado'

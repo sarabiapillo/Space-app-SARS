@@ -78,17 +78,39 @@ def corners_lonlat(transform, shape) -> list[list[float]]:
     return [[round(lo, 7), round(la, 7)] for lo, la in zip(lons, lats)]
 
 
-def write_png(path: Path, arr: np.ndarray, vmin: float, vmax: float) -> None:
-    """Gris lineal en dB entre vmin y vmax (recortado), alfa 0 donde no hay dato."""
+# Paleta divergente azul–blanco–rojo (ColorBrewer RdBu invertida): negativo azul, 0 blanco, positivo rojo.
+_RDBU = np.array([
+    [5, 48, 97], [33, 102, 172], [67, 147, 195], [146, 197, 222], [209, 229, 240],
+    [255, 255, 255],
+    [253, 219, 199], [244, 165, 130], [214, 96, 77], [178, 24, 43], [103, 0, 31],
+], dtype="float64")
+COLORMAPS = ("gray", "rdbu")
+
+
+def _colorize(t: np.ndarray, colormap: str) -> list[np.ndarray]:
+    if colormap == "gray":
+        g = np.round(t * 255).astype("uint8")
+        return [g, g, g]
+    if colormap == "rdbu":
+        x = np.linspace(0, 1, len(_RDBU))
+        return [np.round(np.interp(t, x, _RDBU[:, i])).astype("uint8") for i in range(3)]
+    raise ValueError(f"colormap {colormap!r}; usar uno de {COLORMAPS}")
+
+
+def write_png(path: Path, arr: np.ndarray, vmin: float, vmax: float, colormap: str = "gray") -> None:
+    """Valor lineal entre vmin y vmax (recortado) con ``colormap``; alfa 0 donde no hay dato.
+
+    ``rdbu`` es divergente: con una escala simétrica (−v, +v), el 0 queda en blanco.
+    """
     ok = np.isfinite(arr)
     t = np.clip((np.where(ok, arr, vmin) - vmin) / (vmax - vmin), 0, 1)
-    gray = np.round(t * 255).astype("uint8")
+    r, g, b = _colorize(t, colormap)
     alpha = np.where(ok, 255, 0).astype("uint8")
     with warnings.catch_warnings(), MemoryFile() as mem:
         # El PNG no lleva georreferencia: su ubicación son las esquinas del manifiesto.
         warnings.simplefilter("ignore", rasterio.errors.NotGeoreferencedWarning)
         with mem.open(driver="GTiff", height=arr.shape[0], width=arr.shape[1], count=4, dtype="uint8") as tmp:
-            tmp.write(np.stack([gray, gray, gray, alpha]))
+            tmp.write(np.stack([r, g, b, alpha]))
         with mem.open() as src:
             rio_shutil.copy(src, path, driver="PNG")
     aux = Path(str(path) + ".aux.xml")          # GDAL a veces deja un .aux.xml; no le sirve a la web
@@ -97,13 +119,13 @@ def write_png(path: Path, arr: np.ndarray, vmin: float, vmax: float) -> None:
 
 
 def export_layer(out_dir: Path, layer_id: str, arr_db: np.ndarray, crs: str, transform, vmin: float, vmax: float,
-                 tags: dict, root: Path) -> dict:
+                 tags: dict, root: Path, colormap: str = "gray") -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     cog = out_dir / f"{layer_id}.tif"
     png = out_dir / f"{layer_id}.png"
     write_cog(cog, arr_db, crs, transform, tags)
     merc, merc_t = to_web_mercator(arr_db, crs, transform)
-    write_png(png, merc, vmin, vmax)
+    write_png(png, merc, vmin, vmax, colormap)
     finite = arr_db[np.isfinite(arr_db)]
     return {
         "id": layer_id,
@@ -115,7 +137,7 @@ def export_layer(out_dir: Path, layer_id: str, arr_db: np.ndarray, crs: str, tra
         "forma_png": list(merc.shape),
         "esquinas_lonlat": corners_lonlat(merc_t, merc.shape),
         "unidades": "dB",
-        "escala": {"vmin_dB": vmin, "vmax_dB": vmax, "colormap": "gray"},
+        "escala": {"vmin_dB": vmin, "vmax_dB": vmax, "colormap": colormap},
         "rango_datos_dB": [float(finite.min()), float(finite.max())] if finite.size else None,
         "pct_pixeles_validos": 100 * float(finite.size) / arr_db.size,
     }

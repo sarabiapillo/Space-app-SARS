@@ -10,6 +10,8 @@ export interface SeismicSource {
   name: string
   mechanism: SeismicMechanism
   soilType: SoilType
+  /** Vs30 (m/s) del sitio. Si falta, el valor representativo de `soilType` (SOIL_VS30). */
+  vs30?: number
 }
 
 export interface IsoseismalRing {
@@ -24,14 +26,14 @@ export interface IsoseismalRing {
   polygon: LngLat[]
 }
 
-export interface SyntheticSeismogramPoint {
-  timeSec: number
-  acceleration_g: number
-  acceleration_cgs: number // gal (cm/s²)
-  phase: 'ambient' | 'p_wave' | 'warning' | 's_wave' | 'coda'
-}
-
-export interface SyntheticSeismogram {
+/**
+ * Serie de aceleración sintética a(t) a una frecuencia de muestreo fija (ver `synthesizeSeismogram`).
+ * `accel_g[i]` corresponde a t = i / sampleRateHz desde el origen de la ruptura.
+ */
+export interface SeismogramSignal {
+  sampleRateHz: number
+  dtSec: number
+  durationSec: number
   stationDistKm: number
   hypocentralDistKm: number
   tP_sec: number
@@ -40,8 +42,16 @@ export interface SyntheticSeismogram {
   peakPga_g: number
   peakPga_cgs: number
   stationMmi: number
-  durationSec: number
-  points: SyntheticSeismogramPoint[]
+  /** Vs30 (m/s) de la estación usado para PGA y frecuencias. */
+  stationVs30: number
+  /** Ec. 10: tS − t_proceso (s desde el origen). */
+  alertTimeSec: number
+  /** Frecuencia del paquete P (Hz). Por la ec. 16 su energía queda en 0.85·fP y 1.15·fP. */
+  fp_Hz: number
+  /** Frecuencia fundamental del paquete S según el suelo (Hz). */
+  fs_Hz: number
+  tauCoda_sec: number
+  accel_g: Float64Array
 }
 
 export interface SeismicSimulationResults {
@@ -52,6 +62,10 @@ export interface SeismicSimulationResults {
   rings: IsoseismalRing[]
   pWaveSpeedKmS: number
   sWaveSpeedKmS: number
+  /** Momento sísmico escalar M0 (dyn·cm), ec. 1. */
+  seismicMoment_dyncm: number
+  /** Vs30 (m/s) usado para el efecto de sitio en todo el escenario. */
+  vs30: number
   /** Datos para gráfica 2D de Atenuación (PGA vs Distancia) */
   attenuationCurve: {
     distanceKm: number
@@ -61,6 +75,8 @@ export interface SeismicSimulationResults {
     tP_sec: number
     tS_sec: number
     warningTimeSec: number
+    /** Ec. 10: tS − t_proceso. */
+    alertTimeSec: number
   }[]
 }
 
@@ -164,57 +180,93 @@ export function haversineDistanceKm(coord1: LngLat, coord2: LngLat): number {
   return R * c
 }
 
+export const VP_KM_S = 6.0
+export const VS_KM_S = 3.5
+/** t_proceso de la ec. 10 (detección y difusión de la alerta). */
+export const SASMEX_PROCESS_SEC = 3.0
+export const VS30_REF = 760
+export const B_SITE = -0.45
+
+/** Coeficientes de la ec. 11 por mecanismo (manual §5.1). */
+export const GMPE_COEFFICIENTS: Readonly<Record<SeismicMechanism, { c1: number; c2: number; c3: number; c4: number }>> = Object.freeze({
+  subduction: { c1: -1.85, c2: 0.92, c3: 1.15, c4: 0.0032 },
+  intraplate: { c1: -1.55, c2: 0.96, c3: 1.25, c4: 0.0040 },
+  crustal: { c1: -1.95, c2: 0.88, c3: 1.05, c4: 0.0028 },
+})
+
+/** Vs30 representativo de cada clase de suelo (manual §5.2). */
+export const SOIL_VS30: Readonly<Record<SoilType, number>> = Object.freeze({
+  rock: 760,
+  intermediate: 450,
+  soft_lacustrine: 100,
+})
+
+export function effectiveVs30(soilType: SoilType, vs30?: number | null): number {
+  return vs30 && vs30 > 0 ? vs30 : SOIL_VS30[soilType]
+}
+
+/** S_sitio = b·ln(Vs30/Vref), ec. 12. En roca firme (Vs30 ≥ 760 m/s) S = 0. */
+export function siteAmplification(vs30: number): number {
+  return vs30 >= VS30_REF ? 0 : B_SITE * Math.log(vs30 / VS30_REF)
+}
+
+/** M0 = 10^(3/2·(Mw + 10.7)) en dyn·cm, ec. 1 (1 dyn·cm = 1e-7 N·m). */
+export function seismicMomentDynCm(magnitude: number): number {
+  return 10 ** (1.5 * (magnitude + 10.7))
+}
+
+/** Ec. 10: T_alerta ≈ tS − t_proceso (s desde el origen), con tS = √(D² + h²)/vs. */
+export function sasmexAlertTimeSec(distanceEpicentralKm: number, depthKm: number): number {
+  return Math.max(0, Math.hypot(distanceEpicentralKm, depthKm) / VS_KM_S - SASMEX_PROCESS_SEC)
+}
+
 /**
- * Predice la aceleración pico del suelo (PGA en g) con el modelo GMPE calibrado para México.
- * ln(PGA) = c1 + c2*Mw - c3*ln(R) - c4*R + S_sitio
+ * Término de saturación de campo cercano (km) de Yenier y Atkinson (2015, BSSA 105(4)):
+ * h_sat = 10^(−0.405 + 0.235·Mw). Representa la extensión finita de la ruptura: cerca de la falla
+ * la distancia efectiva no baja de h_sat. Se adopta aquí como aproximación (fue calibrado con
+ * otro modelo de atenuación); ver docs/latex/ecuaciones_sismo.tex.
+ */
+export function nearSourceSaturationKm(magnitude: number): number {
+  return 10 ** (-0.405 + 0.235 * magnitude)
+}
+
+/**
+ * Aceleración pico del suelo (PGA en g), ec. 11 con saturación de campo cercano:
+ * ln(PGA) = c1 + c2·Mw − c3·ln(R_ef) − c4·R_ef + S_sitio, con R_ef = √(D² + h² + h_sat(Mw)²).
+ * Aun con saturación, los coeficientes del manual dan más de 2.5 g junto a la fuente en sismos
+ * grandes; se acota a [0.0001, 2.5] g como salvaguarda (documentado).
  */
 export function computePga_g(
   distanceEpicentralKm: number,
   magnitude: number,
   depthKm: number,
   mechanism: SeismicMechanism = 'subduction',
-  soilType: SoilType = 'intermediate'
+  soilType: SoilType = 'intermediate',
+  vs30?: number | null
 ): number {
-  const R = Math.sqrt(distanceEpicentralKm * distanceEpicentralKm + depthKm * depthKm)
-
-  let c1 = -1.85
-  let c2 = 0.92
-  let c3 = 1.15
-  const c4 = 0.0032
-
-  if (mechanism === 'intraplate') {
-    c1 += 0.18 // Mayor caída de esfuerzos en intraplaca
-  } else if (mechanism === 'crustal') {
-    c3 = 1.25 // Mayor atenuación geométrica en corteza somera
-  }
-
-  let siteFactor = 0.0
-  if (soilType === 'rock') {
-    siteFactor = -0.15
-  } else if (soilType === 'intermediate') {
-    siteFactor = 0.18
-  } else if (soilType === 'soft_lacustrine') {
-    siteFactor = 0.85 // Amplificación por resonancia en arcillas lacustres
-  }
-
-  const lnPga = c1 + c2 * magnitude - c3 * Math.log(R) - c4 * R + siteFactor
-  const pga = Math.exp(lnPga)
-  return Math.max(0.0001, Math.min(2.5, pga))
+  const hSat = nearSourceSaturationKm(magnitude)
+  const R = Math.sqrt(distanceEpicentralKm * distanceEpicentralKm + depthKm * depthKm + hSat * hSat)
+  const { c1, c2, c3, c4 } = GMPE_COEFFICIENTS[mechanism]
+  const lnPga = c1 + c2 * magnitude - c3 * Math.log(R) - c4 * R + siteAmplification(effectiveVs30(soilType, vs30))
+  return Math.max(0.0001, Math.min(2.5, Math.exp(lnPga)))
 }
 
 /**
- * Convierte aceleración pico del terreno a escala de Intensidad Mercalli Modificada (MMI).
- * Relación empírica Worden & Wald:
- * PGA en cm/s² = pga_g * 980.665
+ * PGA (cm/s²) donde se cruzan las dos rectas de Wald et al. (1999): 2.20·x + 1.00 = 3.66·x − 1.66,
+ * x = log10(PGA) = 2.66/1.46 → ≈ 66.4 gal (MMI ≈ V). El manual ponía el corte en 4.22 gal, lo que
+ * hacía la escala discontinua (MMI 2.4 → 1.0 al cruzarlo).
+ */
+export const MMI_BREAKPOINT_GAL = 10 ** (2.66 / 1.46)
+
+/**
+ * PGA → intensidad Mercalli Modificada con las relaciones de Wald et al. (1999):
+ * MMI = 2.20·log10(PGA) + 1.00 bajo el corte; MMI = 3.66·log10(PGA) − 1.66 sobre él (PGA en cm/s²).
+ * Resultado acotado a [1, 10.5].
  */
 export function pgaToMmi(pga_g: number): number {
-  const pga_cgs = pga_g * 980.665 // cm/s²
-  let mmi: number
-  if (pga_cgs <= 4.22) {
-    mmi = 2.2 * Math.log10(pga_cgs) + 1.0
-  } else {
-    mmi = 3.66 * Math.log10(pga_cgs) - 1.66
-  }
+  const pga_cgs = pga_g * 980.665
+  const x = Math.log10(pga_cgs)
+  const mmi = pga_cgs <= MMI_BREAKPOINT_GAL ? 2.2 * x + 1.0 : 3.66 * x - 1.66
   return Math.max(1.0, Math.min(10.5, mmi))
 }
 
@@ -267,9 +319,10 @@ function solveDistanceForPga(
   magnitude: number,
   depthKm: number,
   mechanism: SeismicMechanism,
-  soilType: SoilType
+  soilType: SoilType,
+  vs30?: number
 ): number {
-  const pgaAtEpicenter = computePga_g(0, magnitude, depthKm, mechanism, soilType)
+  const pgaAtEpicenter = computePga_g(0, magnitude, depthKm, mechanism, soilType, vs30)
   if (pgaAtEpicenter < targetPga_g) {
     return 0 // El sismo ni siquiera alcanza este umbral en el epicentro
   }
@@ -278,7 +331,7 @@ function solveDistanceForPga(
   let high = 1500 // km máx de búsqueda
   for (let i = 0; i < 30; i++) {
     const mid = (low + high) / 2
-    const pgaMid = computePga_g(mid, magnitude, depthKm, mechanism, soilType)
+    const pgaMid = computePga_g(mid, magnitude, depthKm, mechanism, soilType, vs30)
     if (pgaMid > targetPga_g) {
       low = mid
     } else {
@@ -293,13 +346,14 @@ function solveDistanceForPga(
  */
 export function runSeismicSimulation(source: SeismicSource): SeismicSimulationResults {
   const { epicenter, magnitude, depthKm, mechanism, soilType } = source
+  const vs30 = effectiveVs30(soilType, source.vs30)
 
-  const epicentralPga_g = computePga_g(0, magnitude, depthKm, mechanism, soilType)
+  const epicentralPga_g = computePga_g(0, magnitude, depthKm, mechanism, soilType, vs30)
   const epicentralPga_cgs = epicentralPga_g * 980.665
   const epicentralMmi = pgaToMmi(epicentralPga_g)
 
-  const vp = 6.0 // km/s (Onda P)
-  const vs = 3.5 // km/s (Onda S)
+  const vp = VP_KM_S
+  const vs = VS_KM_S
 
   // Umbrales de zonificación sísmica (Worden et al. / USGS ShakeMap)
   const RING_SPECS: {
@@ -351,7 +405,7 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
 
   const rings: IsoseismalRing[] = []
   for (const spec of RING_SPECS) {
-    const rKm = solveDistanceForPga(spec.pgaThreshold_g, magnitude, depthKm, mechanism, soilType)
+    const rKm = solveDistanceForPga(spec.pgaThreshold_g, magnitude, depthKm, mechanism, soilType, vs30)
     if (rKm > 0) {
       const polygon = generateGeodesicCircle(epicenter, rKm, 64)
       rings.push({
@@ -368,7 +422,7 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
   const steps = 60
   for (let i = 0; i <= steps; i++) {
     const dist = (i / steps) * maxPlotDist
-    const pga = computePga_g(dist, magnitude, depthKm, mechanism, soilType)
+    const pga = computePga_g(dist, magnitude, depthKm, mechanism, soilType, vs30)
     const pga_cgs = pga * 980.665
     const mmi = pgaToMmi(pga)
     const hypoDist = Math.sqrt(dist * dist + depthKm * depthKm)
@@ -384,6 +438,7 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
       tP_sec: Math.round(tP * 10) / 10,
       tS_sec: Math.round(tS * 10) / 10,
       warningTimeSec: Math.round(warningTime * 10) / 10,
+      alertTimeSec: Math.round(sasmexAlertTimeSec(dist, depthKm) * 10) / 10,
     })
   }
 
@@ -395,117 +450,82 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
     rings,
     pWaveSpeedKmS: vp,
     sWaveSpeedKmS: vs,
+    seismicMoment_dyncm: seismicMomentDynCm(magnitude),
+    vs30,
     attenuationCurve,
   }
 }
 
 /**
- * Genera la serie temporal de aceleración del terreno a(t) [Sismograma Sintético / Paquetes de Onda]
- * para una estación receptora a distancia epicentral `stationDistKm`.
- * Modela analíticamente el arribo de la onda P compresional, el intervalo de alerta previa,
- * la llegada destructiva de la onda S de corte y la coda con amortiguamiento inelástico.
+ * Frecuencia fundamental de la onda S y decaimiento de coda según Vs30 de la estación: < 180 m/s
+ * es cuenca lacustre (manual §8.3: 0.52 Hz, τ = 28 s). Los valores de roca (≥ 760 m/s) y suelo firme
+ * son los del código original; el manual no los especifica.
  */
-export function generateSyntheticSeismogram(
+export function siteWaveParams(vs30: number): { fs_Hz: number; tauCoda_sec: number } {
+  if (vs30 < 180) return { fs_Hz: 0.52, tauCoda_sec: 28.0 }
+  if (vs30 >= VS30_REF) return { fs_Hz: 2.2, tauCoda_sec: 9.0 }
+  return { fs_Hz: 1.3, tauCoda_sec: 14.0 }
+}
+
+/**
+ * Sismograma sintético a(t, D) = a_ruido + a_P + a_S (manual §8) para una estación a distancia
+ * epicentral `stationDistKm`, muestreado a `sampleRateHz` (50 Hz por defecto: Nyquist 25 Hz, por
+ * encima de la onda P de 3.8–5.2 Hz; con 240 muestras en ≥ 45 s la onda P quedaba submuestreada).
+ * Es un modelo analítico ilustrativo, no un registro.
+ */
+export function synthesizeSeismogram(
   source: SeismicSource,
   stationDistKm: number,
-  numSamples = 220
-): SyntheticSeismogram {
+  options: { sampleRateHz?: number; stationVs30?: number | null } = {}
+): SeismogramSignal {
   const { magnitude, depthKm, mechanism, soilType } = source
-  const vp = 6.0 // km/s
-  const vs = 3.5 // km/s
+  const sampleRateHz = options.sampleRateHz ?? 50
+  const stationVs30 = options.stationVs30 && options.stationVs30 > 0 ? options.stationVs30 : effectiveVs30(soilType, source.vs30)
+  const vp = VP_KM_S
+  const vs = VS_KM_S
   const hypoDist = Math.sqrt(stationDistKm * stationDistKm + depthKm * depthKm)
-  const tP = Math.round((hypoDist / vp) * 10) / 10
-  const tS = Math.round((hypoDist / vs) * 10) / 10
-  const warningTime = Math.max(0, Math.round((tS - tP) * 10) / 10)
+  const tP = hypoDist / vp
+  const tS = hypoDist / vs
+  const pga_g = computePga_g(stationDistKm, magnitude, depthKm, mechanism, soilType, stationVs30)
+  const { fs_Hz: fs, tauCoda_sec: tauS } = siteWaveParams(stationVs30)
+  const fp = 4.5 // Hz (onda P)
+  const riseTime = 1.8
+  const durationSec = Math.max(45, Math.ceil(tS + (stationVs30 < 180 ? 45 : 30)))
+  const n = Math.round(durationSec * sampleRateHz) + 1
+  const accel = new Float64Array(n)
 
-  const pga_g = computePga_g(stationDistKm, magnitude, depthKm, mechanism, soilType)
-  const pga_cgs = pga_g * 980.665
-  const stationMmi = pgaToMmi(pga_g)
-
-  // Duración total de la ventana temporal del sismograma
-  const durationSec = Math.max(45, Math.ceil(tS + (soilType === 'soft_lacustrine' ? 45 : 30)))
-  const dt = durationSec / numSamples
-
-  // Frecuencias características del paquete de ondas según tipo de suelo
-  const fp = 4.5 // Hz (Onda P, compresión rápida)
-  let fs = 1.3 // Hz (Onda S estándar)
-  let tau_s = 14.0 // Decaimiento de coda (s)
-  if (soilType === 'soft_lacustrine') {
-    fs = 0.52 // Resonancia de período largo típica del Valle de México (~2s)
-    tau_s = 28.0 // Coda muy prolongada por atrapamiento de ondas en cuenca
-  } else if (soilType === 'rock') {
-    fs = 2.2
-    tau_s = 9.0
-  }
-
-  const points: SyntheticSeismogramPoint[] = []
-
-  for (let i = 0; i <= numSamples; i++) {
-    const t = Math.round(i * dt * 10) / 10
-
-    // Microtremores de ruido de fondo ambiental
-    const noise = 0.0012 * pga_g * Math.sin(11.2 * t + 0.3) + 0.0006 * pga_g * Math.cos(23.7 * t)
-
-    let a_p = 0
-    let a_s = 0
-    let phase: SyntheticSeismogramPoint['phase'] = 'ambient'
-
-    if (t < tP) {
-      phase = 'ambient'
-    } else if (t >= tP && t < tS) {
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRateHz
+    // Microtremores de fondo (amplitud despreciable frente al PGA)
+    let a = 0.0012 * pga_g * Math.sin(11.2 * t + 0.3) + 0.0006 * pga_g * Math.cos(23.7 * t)
+    if (t >= tP && t < tS) {
       const dtP = t - tP
-      if (dtP <= 3.5) {
-        phase = 'p_wave'
-      } else {
-        phase = 'warning'
-      }
-      // Paquete de onda P: alta frecuencia, menor amplitud (aprox 20-25% de PGA)
-      const envP = Math.exp(-dtP / 3.2)
-      a_p = 0.22 * pga_g * Math.sin(2 * Math.PI * fp * dtP) * Math.cos(0.3 * Math.PI * fp * dtP) * envP
-    } else {
-      // t >= tS: Arribo de onda S de corte y ondas superficiales
+      a += 0.22 * pga_g * Math.sin(2 * Math.PI * fp * dtP) * Math.cos(0.3 * Math.PI * fp * dtP) * Math.exp(-dtP / 3.2)
+    } else if (t >= tS) {
       const dtS = t - tS
-      const riseTime = 1.8
-      let envS = 0
-      if (dtS <= riseTime) {
-        envS = dtS / riseTime
-      } else {
-        envS = Math.exp(-(dtS - riseTime) / tau_s)
-      }
-
-      if (dtS <= 10.0) {
-        phase = 's_wave'
-      } else {
-        phase = 'coda'
-      }
-
-      // Paquete de onda S: combinación fundamental + armónico secundario + resonancia de suelo
-      const waveS = 0.82 * Math.sin(2 * Math.PI * fs * dtS) + 0.18 * Math.sin(4 * Math.PI * fs * dtS + 0.6)
-      a_s = pga_g * waveS * envS
+      const env = dtS <= riseTime ? dtS / riseTime : Math.exp(-(dtS - riseTime) / tauS)
+      a += pga_g * env * (0.82 * Math.sin(2 * Math.PI * fs * dtS) + 0.18 * Math.sin(4 * Math.PI * fs * dtS + 0.6))
     }
-
-    const totalAccel_g = noise + a_p + a_s
-    const totalAccel_cgs = totalAccel_g * 980.665
-
-    points.push({
-      timeSec: t,
-      acceleration_g: Math.round(totalAccel_g * 10000) / 10000,
-      acceleration_cgs: Math.round(totalAccel_cgs * 100) / 100,
-      phase,
-    })
+    accel[i] = a
   }
 
   return {
+    sampleRateHz,
+    dtSec: 1 / sampleRateHz,
+    durationSec,
     stationDistKm,
     hypocentralDistKm: Math.round(hypoDist * 10) / 10,
     tP_sec: tP,
     tS_sec: tS,
-    warningTimeSec: warningTime,
-    peakPga_g: Math.round(pga_g * 1000) / 1000,
-    peakPga_cgs: Math.round(pga_cgs * 10) / 10,
-    stationMmi: Math.round(stationMmi * 10) / 10,
-    durationSec,
-    points,
+    warningTimeSec: Math.max(0, tS - tP),
+    peakPga_g: pga_g,
+    peakPga_cgs: pga_g * 980.665,
+    stationMmi: pgaToMmi(pga_g),
+    stationVs30,
+    alertTimeSec: sasmexAlertTimeSec(stationDistKm, depthKm),
+    fp_Hz: fp,
+    fs_Hz: fs,
+    tauCoda_sec: tauS,
+    accel_g: accel,
   }
 }
-

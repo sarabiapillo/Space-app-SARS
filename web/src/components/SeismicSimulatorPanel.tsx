@@ -23,6 +23,9 @@ import {
   computePga_g,
   pgaToMmi,
   mmiToRoman,
+  SOIL_VS30,
+  sasmexAlertTimeSec,
+  siteAmplification,
 } from '../utils/seismic'
 import { getPolygonBoundsAndCentroid, distanceKm } from '../utils/geojson'
 import {
@@ -40,6 +43,13 @@ interface SeismicSimulatorPanelProps {
   onClose: () => void
   croppedRegion?: LngLat[] | null
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+}
+
+/** 1.26e+28 → "1.26×10²⁸" para el momento sísmico. */
+function formatMoment(m0: number): string {
+  const exp = Math.floor(Math.log10(m0))
+  const sup = String(exp).split('').map((d) => '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(d)]).join('')
+  return `${(m0 / 10 ** exp).toFixed(2)}×10${sup}`
 }
 
 export function SeismicSimulatorPanel({
@@ -63,6 +73,7 @@ export function SeismicSimulatorPanel({
       name: seismic.name,
       mechanism: seismic.mechanism,
       soilType: seismic.soilType,
+      vs30: seismic.vs30,
     })
   }, [seismic])
 
@@ -89,13 +100,14 @@ export function SeismicSimulatorPanel({
     const geoSettings = getRecommendedSeismicSettings(state, name)
 
     // Afectación local en el ROI causada por el sismo
-    const pgaAtRoi_g = computePga_g(distToEpicenter, seismic.magnitude, seismic.depthKm, seismic.mechanism, seismic.soilType)
+    const pgaAtRoi_g = computePga_g(distToEpicenter, seismic.magnitude, seismic.depthKm, seismic.mechanism, seismic.soilType, seismic.vs30)
     const pgaAtRoi_cgs = pgaAtRoi_g * 980.665
     const mmiAtRoi = pgaToMmi(pgaAtRoi_g)
     const hypoDist = Math.sqrt(distToEpicenter * distToEpicenter + seismic.depthKm * seismic.depthKm)
     const tP = Math.round((hypoDist / 6.0) * 10) / 10
     const tS = Math.round((hypoDist / 3.5) * 10) / 10
     const warningTime = Math.max(0, Math.round((tS - tP) * 10) / 10)
+    const alertTime = Math.round(sasmexAlertTimeSec(distToEpicenter, seismic.depthKm) * 10) / 10
 
     return {
       centroid,
@@ -110,6 +122,7 @@ export function SeismicSimulatorPanel({
       tP,
       tS,
       warningTime,
+      alertTime,
     }
   }, [croppedRegion, seismic, t])
 
@@ -125,6 +138,7 @@ export function SeismicSimulatorPanel({
       epicenter: preset.epicenter,
       mechanism: preset.mechanism,
       soilType: preset.soilType,
+      vs30: SOIL_VS30[preset.soilType],
     })
     onFlyToEpicenter?.(preset.epicenter)
   }
@@ -283,6 +297,7 @@ export function SeismicSimulatorPanel({
                         epicenter: activeRoiData.centroid,
                         name: `Sismo en ${activeRoiData.name}`,
                         soilType: activeRoiData.geoSettings.soilType,
+                        vs30: SOIL_VS30[activeRoiData.geoSettings.soilType],
                         mechanism: activeRoiData.geoSettings.mechanism,
                       })
                       onFlyToEpicenter?.(activeRoiData.centroid)
@@ -298,6 +313,7 @@ export function SeismicSimulatorPanel({
                       onSeismicChange({
                         ...seismic,
                         soilType: activeRoiData.geoSettings.soilType,
+                        vs30: SOIL_VS30[activeRoiData.geoSettings.soilType],
                         mechanism: activeRoiData.geoSettings.mechanism,
                       })
                     }}
@@ -311,8 +327,12 @@ export function SeismicSimulatorPanel({
                 {activeRoiData.distToEpicenter > 0.5 && (
                   <div className="seismic-roi-metrics">
                     <div className="seismic-roi-metric-item">
-                      <span>{t('Alerta SASMEX:', 'SASMEX Warning:')}</span>
-                      <strong style={{ color: '#ea580c' }}>{activeRoiData.warningTime}s</strong>
+                      <span title={t('Ec. 10: tS − 3 s de proceso, contado desde el origen del sismo', 'Eq. 10: tS − 3 s processing, counted from origin time')}>{t('Alerta SASMEX:', 'SASMEX Warning:')}</span>
+                      <strong style={{ color: '#ea580c' }}>{activeRoiData.alertTime}s</strong>
+                    </div>
+                    <div className="seismic-roi-metric-item">
+                      <span>{t('Ventana P–S (Δt):', 'P–S window (Δt):')}</span>
+                      <strong>{activeRoiData.warningTime}s</strong>
                     </div>
                     <div className="seismic-roi-metric-item">
                       <span>{t('Arribo Onda S:', 'S-Wave Arrival:')}</span>
@@ -454,14 +474,34 @@ export function SeismicSimulatorPanel({
                 id="seismic-soil"
                 className="seismic-select"
                 value={seismic.soilType}
-                onChange={(e) =>
-                  onSeismicChange({ ...seismic, soilType: e.target.value as SoilType })
-                }
+                onChange={(e) => {
+                  const soilType = e.target.value as SoilType
+                  onSeismicChange({ ...seismic, soilType, vs30: SOIL_VS30[soilType] })
+                }}
               >
                 <option value="rock">{t('Roca Firme (Vs30 > 760 m/s)', 'Hard Rock (Vs30 > 760 m/s)')}</option>
                 <option value="intermediate">{t('Suelo Firme/Aluvial (360-760 m/s)', 'Stiff Soil/Alluvial (360-760 m/s)')}</option>
                 <option value="soft_lacustrine">{t('Suelo Blando Lacustre (< 180 m/s, CDMX)', 'Soft Lacustrine (< 180 m/s, CDMX)')}</option>
               </select>
+              <label className="seismic-sublabel seismic-vs30-row" htmlFor="seismic-vs30">
+                <span>Vs30 [m/s]</span>
+                <input
+                  id="seismic-vs30"
+                  type="number"
+                  min="80"
+                  max="1500"
+                  step="10"
+                  className="seismic-vs30-input"
+                  value={simulationResults.vs30}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    if (v >= 80 && v <= 1500) onSeismicChange({ ...seismic, vs30: v })
+                  }}
+                />
+                <span className="seismic-vs30-site" title={t('S_sitio = −0.45·ln(Vs30/760); 0 en roca (Vs30 ≥ 760)', 'S_site = −0.45·ln(Vs30/760); 0 on rock (Vs30 ≥ 760)')}>
+                  S = {siteAmplification(simulationResults.vs30).toFixed(2)} (×{Math.exp(siteAmplification(simulationResults.vs30)).toFixed(2)})
+                </span>
+              </label>
             </div>
           </div>
 
@@ -474,6 +514,9 @@ export function SeismicSimulatorPanel({
               </strong>
               <span className="seismic-kpi-sub">
                 {simulationResults.epicentralPga_cgs.toFixed(1)} cm/s²
+              </span>
+              <span className="seismic-kpi-sub" title={t('Momento sísmico escalar, ec. 1: M0 = 10^(1.5·(Mw + 10.7))', 'Scalar seismic moment, eq. 1: M0 = 10^(1.5·(Mw + 10.7))')}>
+                M0 = {formatMoment(simulationResults.seismicMoment_dyncm)} dyn·cm
               </span>
             </div>
 
@@ -514,7 +557,7 @@ export function SeismicSimulatorPanel({
               <Layers size={13} />
               <span>{t('Gráfica 2D: Propagación de Ondas y Atenuación en Suelo', '2D Plot: Wave Propagation & Soil Attenuation')}</span>
             </div>
-            <Seismic2DChart results={simulationResults} />
+            <Seismic2DChart results={simulationResults} seismic={seismic} onSeismicChange={onSeismicChange} />
           </div>
 
           {/* Desglose de Radios de Afectación Concéntricos */}

@@ -8,6 +8,7 @@ import {
   CloudRain,
   Columns,
   Download,
+  Diff,
   Droplets,
   Flame,
   Layers,
@@ -581,6 +582,21 @@ export function Header({
             >
               <Columns size={14} />
               <span>{t('Comparador Swipe', 'Swipe comparison')}</span>
+            </button>
+            <button
+              type="button"
+              disabled={!roiLayers?.change}
+              className={`ws-ribbon__btn ws-ribbon__btn--swipe ${dateViewMode === 'change' ? 'is-active' : ''}`}
+              onClick={() => {
+                onDockTabChange('map')
+                onDateViewModeChange('change')
+              }}
+              title={roiLayers?.change
+                ? t('Mapa de cambio t2 − t1 en dB (azul: baja la señal; rojo: sube). No identifica la causa.', 'Change map t2 − t1 in dB (blue: signal decreases; red: increases). It does not identify the cause.')
+                : t('Requiere un par comparable en la ROI', 'Requires a comparable pair in the ROI')}
+            >
+              <Diff size={14} />
+              <span>{t('Cambio Δ', 'Change Δ')}</span>
             </button>
           </div>
           <span className="ws-ribbon__label">{t('Comparador Temporal t1/t2', 'Temporal comparison t1/t2')}</span>

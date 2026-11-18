@@ -27,10 +27,11 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 - `pipeline/sources/` (fuente intercambiable, hoy ASF), `pipeline/compat.py` y `pipeline/catalog.py` implementados y con pruebas.
 - `pipeline/nisar_h5.py` + `pipeline/etapa1.py`: lectura por ventanas de los `.h5` e inspección de una escena (Etapa 1), desde un `.h5` local o remoto (`scene_id`). Genera también `web/` (COG, PNG en EPSG:3857 y `capas.json`) para la interfaz web (`pipeline/web_export.py`, ver `docs/p1-etapa1-web.md`).
 - `pipeline/sources/subset.py` + `pipeline/download.py`: recorte a la ROI (local o remoto por HTTPS, solo los bloques de la ROI), con verificación de identidad contra el catálogo, cobertura de la ROI y comparación de malla.
-- **Par de trabajo recortado (2026-11-14):** GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, en `data/raw/` (ver §4). Comparable y con malla idéntica. Aún **no** hay mapa de cambio ni validación.
+- **Par de trabajo recortado (2026-11-14):** GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, en `data/raw/` (ver §4). Comparable y con malla idéntica.
+- **Mapa de cambio (2026-11-18):** `pipeline/preprocess.py` + `pipeline/change.py` (`python -m pipeline.change`). γ⁰ dB, máscara del producto + polígono ROI, multilook 5×5 (50 m), Δ = t2 − t1, z robusto y clases con umbral ±3 dB. Salida en `data/processed/cambio_GCOV_T062_F010_P05023_20260618_20261016_gamma0/` (GeoTIFF, `change.json`, `web/capas.json`). **Exploratorio:** sin validación ni máscara de sombra/layover/pendiente. También se calcula para **cualquier ROI dibujada** con par comparable (`roi_explore.build_change` → `result.json → change`) y se ve en la web con el botón **Cambio Δ**. En las ROIs el Δ sale por defecto a 5×5 (50 m) y ±3 dB; la web permite cambiar resolución (20/50/100 m) y umbral (dB fijo) con `POST /api/roi-jobs/{id}/change`, y muestra el ruido medido de cada ROI con un aviso si el umbral está a menos de 3 veces ese ruido (ver `docs/api-roi-jobs.md`).
 - El fenómeno sigue **sin decidir**. Las fuentes auxiliares candidatas están en `docs/metodologia.md`.
 
-**Lo más importante que falta:** `preprocess.py` y `change.py` sobre el par de trabajo (paso 5 del plan) y decidir el fenómeno para elegir la fuente de validación (paso 6).
+**Lo más importante que falta:** decidir el fenómeno para elegir la fuente de validación (paso 6), máscara de sombra/layover/pendiente y mostrar la capa de cambio en la web.
 
 ## 4. Caso de estudio
 
@@ -67,7 +68,7 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 
 Hallazgos que cambian lo que se creía antes:
 
-- **El CRID cambió a P05036 (madurez VALIDATED en el catálogo) a partir del 2026-10-23.** Por eso el par T55 2026-10-16 / 2026-10-28 que se había anotado **no es comparable** (P05023 vs P05036). Por ahora cada pila P05036 tiene una sola fecha.
+- **El CRID cambió a P05036 (madurez VALIDATED en el catálogo) a partir del 2026-10-23.** Por eso el par T55 2026-10-16 / 2026-10-28 que se había anotado **no es comparable** (P05023 vs P05036). Al 2026-11-18, la pila T62/F10 P05036 ya tiene un par comparable (2026-10-28 → 2026-11-09): es el que elige `roi_explore` como "par más reciente" para ROIs cerca de Tuxtla.
 - 2026-07-24 T55 tiene un segundo producto con órbita FOE y sin madurez en el catálogo. Usar el MOE.
 - 2025-10-21 T55 es de cobertura parcial y solo HV.
 - La resolución y la cobertura real de la ROI **no** vienen en el catálogo: verificarlas en el `.h5` antes de analizar (`python -m pipeline.download` lo hace y lo guarda en `scene.json`).
@@ -182,6 +183,7 @@ python -m pipeline.download <scene_id_t1> <scene_id_t2>   # recorta, verifica y 
 python -m pipeline.download <scene_id> --capas HHHH mask  # solo algunas capas
 python -m pipeline.download <scene_id> --h5-local "ruta\archivo.h5"   # desde un .h5 ya descargado
 python -m pipeline.etapa1 <scene_id> --escala-web -22 0  # inspección remota + capas web (misma escala en ambas fechas)
+python -m pipeline.change                                 # mapa de cambio del par de config.yaml (--multilook, --umbral, --magnitud)
 ```
 
 Escribe `data/raw/<scene_id>/<capa>.tif` + `scene.json` (contrato C1) e imprime si el par es `COMPARABLE`. Usa solo **Frequency A** (banda L). El fragmento `gdalwarp` que genera ASF Vertex **no funciona** con el GDAL del entorno (3.12, sin drivers HDF5/NISAR).
@@ -192,7 +194,7 @@ Escribe `data/raw/<scene_id>/<capa>.tif` + `scene.json` (contrato C1) e imprime 
 2. ✅ Crear `.netrc` y probar un recorte.
 3. ✅ Correr `pipeline/catalog.py` y **confirmar un par comparable** sobre la ROI (T62/F10, 2026-11-14).
 4. ✅ Descargar el mismo recorte de ambas fechas a `data/raw/`.
-5. `preprocess.py` y `change.py`: dB, diferencia, z-score, GeoTIFF de cambio con metadatos.
+5. ✅ `preprocess.py` y `change.py`: dB, diferencia, z-score, GeoTIFF de cambio con metadatos (2026-11-18; falta máscara de sombra/layover/pendiente).
 6. `validate.py` con una fuente auxiliar pertinente (candidatas en `docs/metodologia.md`; depende del fenómeno).
 7. Cargar escenas y resultado en Django; endpoints DRF (`/api/scenes`, `/api/changes`).
 8. Frontend (MapLibre: ROI, deslizador antes/después, capa de diferencias, panel de métricas).
