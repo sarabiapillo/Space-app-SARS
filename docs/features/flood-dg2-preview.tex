@@ -1,0 +1,26 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\begin{document}
+\title{Vista previa privada de profundidad ROI DG2}
+\author{TerraPulse AI}
+\date{}
+\maketitle
+\section{Objetivo}
+Presentar profundidades de inundación simuladas en un mapa Web Mercator sin interpretar el COG métrico como imagen geográfica. La imagen es solo visualización; no sustituye al TIFF numérico ni demuestra precisión hidráulica.
+\section{Uso}
+Con sesión autenticada, el propietario de un trabajo exitoso solicita
+\texttt{GET /api/flood-roi-runs/<uuid>/artifacts/<name>/preview/}.
+La respuesta es PNG RGBA EPSG:3857. Las cabeceras
+\texttt{X-Preview-CRS}, \texttt{X-Preview-Bounds}, \texttt{X-Preview-Units} y
+\texttt{X-Preview-Value-Range} indican respectivamente EPSG:3857, límites
+\texttt{west,south,east,north} en EPSG:4326 del raster reproyectado, metros y
+\texttt{0.03,3}. La caché es privada (máximo 3600 segundos); ETag depende del SHA256 del COG y de la versión de paleta.
+\section{Implementación}
+Paleta fija: azul verdoso a 0.03 m y rojo oscuro a 3 m; las profundidades mayores o iguales a 3 m se saturan. Nodata y seco (<0.03 m) son transparentes en el PNG, pero siguen siendo diferentes en TIFF y estadísticas. Se comprueba propietario, estado exitoso, declaración del artefacto, archivo regular sin enlaces simbólicos y SHA256 antes de interpretar el raster.
+\section{Limitaciones}
+Solo archivos de hasta 128 MiB y 8 millones de celdas de origen; salida máxima 2048 píxeles por lado y 4 millones de celdas. Un raster inválido devuelve error 400 acotado; archivo no autorizado o alterado, 404. La reproyección y paleta no generan mediciones nuevas ni validan la simulación. La descarga TIFF original permanece independiente.
+\section{Verificación}
+Ejecutar desde la raíz con entorno conda nisar:
+\texttt{PYTHONPATH=backend:. conda run --no-capture-output -n nisar python backend/manage.py test analyses.test\_roi\_flood\_runs analyses.test\_flood\_preview --verbosity 1}.
+Prueba local: siete pruebas pasaron sin red ni ejecución del solver. No se compiló este documento: no se autorizó compilador LaTeX en esta unidad.
+\end{document}
