@@ -64,6 +64,33 @@ def test_ready_assets_rewritten_without_exposing_files(tmp_path):
         download.close()
 
 
+def test_ready_change_layers_rewritten_to_assets(tmp_path):
+    key = 'c' * 64
+    path = tmp_path / key
+    image = path / 'layers' / 'cambio' / 'web' / 'delta.png'
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b'delta-png')
+    write_json(path / 'status.json', {'status': 'ready'})
+    write_json(path / 'result.json', {'manifests': [], 'change': {
+        'tipo': 'mapa_de_cambio', 'capas': [{'png': str(image), 'cog': str(image.with_suffix('.tif'))}]}})
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path):
+        data = Client().get(f'/roi-jobs/{key}').json()
+        assert data['change']['capas'][0]['png'] == f'api/roi-jobs/{key}/assets/layers/cambio/web/delta.png'
+        download = Client().get(data['change']['capas'][0]['png'].removeprefix('api'))
+        assert b''.join(download.streaming_content) == b'delta-png'
+        download.close()
+
+
+def test_ready_without_change_keeps_null(tmp_path):
+    key = 'd' * 64
+    path = tmp_path / key
+    path.mkdir()
+    write_json(path / 'status.json', {'status': 'ready'})
+    write_json(path / 'result.json', {'manifests': [], 'change': None})
+    with override_settings(ROI_OUTPUT_ROOT=tmp_path):
+        assert Client().get(f'/roi-jobs/{key}').json()['change'] is None
+
+
 def _make_run_job_fixture(tmp_path):
     key = 'b' * 64
     path = tmp_path / key

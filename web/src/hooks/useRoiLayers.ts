@@ -3,6 +3,7 @@ import type { LngLat } from '../types/workspace'
 import type { RoiGeometry } from '../utils/roi'
 import type { ExploreWebManifest } from '../api/client'
 import type { ExploreChartsManifest } from '../mocks/initialWorkspaces'
+import { isChangeManifest, type RoiChangeManifest } from '../utils/changeLayer.ts'
 import { localizeText } from '../i18n/core.ts'
 import { useTranslation } from '../i18n/useTranslation.ts'
 
@@ -27,9 +28,9 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
   useTranslation() // Subscribe for display-only changes; never restart the ROI job on language switch.
   const [state, setState] = useState<{
     key: string; loading: boolean; error: string | null; message: string;
-    manifests: ExploreWebManifest[]; comparable: boolean
+    manifests: ExploreWebManifest[]; comparable: boolean; change: RoiChangeManifest | null
     charts: RoiChartsEntry[]; copia: RoiChartsCopy | null
-  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, charts: [], copia: null })
+  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, change: null, charts: [], copia: null })
   const [attempt, setAttempt] = useState(0)
   const geometry = JSON.stringify(region)
   const key = `${viewKey}:${geometry}:${attempt}`
@@ -40,7 +41,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     const update = (data: Partial<typeof state>) => {
       if (!controller.signal.aborted) setState(previous => ({ ...previous, ...data, key }))
     }
-    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, charts: [], copia: null })
+    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, change: null, charts: [], copia: null })
     async function json(url: string, body?: unknown) {
       const response = await fetch(url, {
         method: body ? 'POST' : 'GET', signal: controller.signal,
@@ -65,14 +66,20 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
             if (result.status === 'ready') {
               // La ventana permanece hasta que las imágenes están disponibles.
               update({ message: 'Cargando imágenes de la ROI…' })
-              await Promise.all(result.manifests.flatMap((m: ExploreWebManifest) => m.capas.map(c =>
+              // Mapa de cambio t2 − t1: solo si el backend lo calculó (par comparable).
+              const change = result.comparable && isChangeManifest(result.change) ? result.change : null
+              const pngLayers: Array<{ png: string }> = [
+                ...result.manifests.flatMap((m: ExploreWebManifest) => m.capas),
+                ...(change ? change.capas : []),
+              ]
+              await Promise.all(pngLayers.map(c =>
                 new Promise<void>((resolve, reject) => {
                   const img = new Image()
                   img.onload = () => resolve()
                   img.onerror = () => reject(new Error('No se pudo cargar una imagen de la ROI.'))
                   img.src = `/${c.png}`
-                }))))
-              update({ loading: false, manifests: result.manifests, comparable: result.comparable, message: result.message,
+                })))
+              update({ loading: false, manifests: result.manifests, comparable: result.comparable, change, message: result.message,
                 charts: Array.isArray(result.charts) ? result.charts : [], copia: result.copia ?? null })
               // La copia en PostGIS se escribe justo después de terminar: consultar una vez más su estado.
               if (result.copia?.base_datos === 'guardando') {
@@ -106,6 +113,6 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
   return { ...state, message: localizeText(state.message),
     loading: Boolean(region) && (!current || state.loading),
     error: current ? localizeText(state.error) : null, manifests: current ? state.manifests : [],
-    comparable: current && state.comparable, charts: current ? state.charts : [],
+    comparable: current && state.comparable, change: current ? state.change : null, charts: current ? state.charts : [],
     copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1) }
 }

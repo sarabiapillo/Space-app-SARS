@@ -52,6 +52,7 @@ import {
 } from '../mocks/initialWorkspaces'
 import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
+import { CHANGE_GRADIENT_VERTICAL, pickChangeLayer, pickChangeMetrics } from '../utils/changeLayer.ts'
 import { useTranslation } from '../i18n/useTranslation.ts'
 import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
 import { geometryBounds, rectangleFromCorners, type AdministrativeGeometry } from '../utils/roi'
@@ -1101,8 +1102,12 @@ export function MapCanvas({
   const layerKey = `${layerT1?.png}|${layerT2?.png}|${colormapId}`
   const imagesReady = colorizedKey === layerKey
 
+  // Mapa de cambio t2 − t1: misma polarización que la capa elegida; PNG ya coloreado (RdBu simétrico).
+  const isChangeView = dateViewMode === 'change'
+  const changeLayer = isChangeView && roiReady ? pickChangeLayer(roiLayers.change, exploreLayerId) : null
+  const changeMetrics = isChangeView && roiReady ? pickChangeMetrics(roiLayers.change, exploreLayerId) : null
   const activeManifest = dateViewMode === 't1' ? manifestT1 : manifestT2
-  const activeLayerEntry = dateViewMode === 't1' ? layerT1 : layerT2
+  const activeLayerEntry = isChangeView ? changeLayer : dateViewMode === 't1' ? layerT1 : layerT2
   useEffect(() => {
     if (!roiReady || activeLayerEntry) return
     const key = `${roiLayers.key}:${dateViewMode}:${exploreLayerId}`
@@ -1135,7 +1140,9 @@ export function MapCanvas({
     }
   }, [layerT1, layerT2, colormapId, layerKey])
 
-  const activeColorizedUrl = dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
+  const activeColorizedUrl = isChangeView
+    ? (changeLayer ? `/${changeLayer.png}` : '')
+    : dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
 
   // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
   useEffect(() => {
@@ -1911,7 +1918,9 @@ export function MapCanvas({
 
       const defaultFormat = 'png'
       const previewUrl = outCanvas.toDataURL('image/png')
-      const dateTag = dateViewMode === 'swipe' ? `${displayScene.t1}_vs_${displayScene.t2}` : dateViewMode === 't1' ? displayScene.t1 : displayScene.t2
+      const dateTag = dateViewMode === 'swipe' ? `${displayScene.t1}_vs_${displayScene.t2}`
+        : dateViewMode === 'change' ? `delta_${displayScene.t2}_menos_${displayScene.t1}`
+        : dateViewMode === 't1' ? displayScene.t1 : displayScene.t2
       setCaptureModal({
         canvas: outCanvas,
         previewUrl,
@@ -2139,9 +2148,11 @@ export function MapCanvas({
           <span className="ws-mono">
             {dateViewMode === 'swipe'
               ? t('Deslizador t1 ({t1}) ↔ t2 ({t2})', 'Swipe t1 ({t1}) ↔ t2 ({t2})', { t1: displayDate(displayScene.t1), t2: displayDate(displayScene.t2) })
-              : dateViewMode === 't1'
-                ? `t1 = ${displayDate(displayScene.t1)}`
-                : `t2 = ${displayDate(displayScene.t2)}`}
+              : dateViewMode === 'change'
+                ? t('Cambio Δ = t2 ({t2}) − t1 ({t1})', 'Change Δ = t2 ({t2}) − t1 ({t1})', { t1: displayDate(displayScene.t1), t2: displayDate(displayScene.t2) })
+                : dateViewMode === 't1'
+                  ? `t1 = ${displayDate(displayScene.t1)}`
+                  : `t2 = ${displayDate(displayScene.t2)}`}
           </span>
           <span>·</span>
           <span className="ws-mono">
@@ -2722,14 +2733,16 @@ export function MapCanvas({
                 {activeLayerEntry ? `${activeLayerEntry.simbolo} ${activeLayerEntry.capa}` : t('Sin datos', 'No data')}
               </span>
               <span className="comsol-colorbar__unit">
-                {activeLayerEntry ? `[${activeLayerEntry.unidades} · ${activeColormapSpec.shortLabel}]` : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
+                {activeLayerEntry
+                  ? `[${activeLayerEntry.unidades} · ${isChangeView ? 'RdBu · t2 − t1' : activeColormapSpec.shortLabel}]`
+                  : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
               </span>
             </div>
 
             <div className="comsol-colorbar__body">
               <div
                 className="comsol-colorbar__gradient"
-                style={{ background: activeColormapSpec.cssGradientVertical }}
+                style={{ background: isChangeView ? CHANGE_GRADIENT_VERTICAL : activeColormapSpec.cssGradientVertical }}
                 role="img"
                 aria-label={t('Rampa vertical {palette} de {min} dB a {max} dB', 'Vertical {palette} ramp from {min} dB to {max} dB', { palette: localizeText(activeColormapSpec.label), min: vmin, max: vmax })}
               />
@@ -2746,7 +2759,18 @@ export function MapCanvas({
             </div>
 
             <div className="comsol-colorbar__footer">
-              {activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}
+              {isChangeView && changeMetrics && roiLayers.change ? (
+                <>
+                  <span title={t('Área donde la señal bajó al menos el umbral (t2 − t1)', 'Area where the signal decreased by at least the threshold (t2 − t1)')}>
+                    ↓ ≥{roiLayers.change.umbral_dB} dB: {changeMetrics.area_disminucion_km2.toFixed(2)} km² ({changeMetrics.pct_disminucion.toFixed(1)} %)
+                  </span>
+                  <span title={t('Área donde la señal subió al menos el umbral (t2 − t1)', 'Area where the signal increased by at least the threshold (t2 − t1)')}>
+                    ↑ ≥{roiLayers.change.umbral_dB} dB: {changeMetrics.area_aumento_km2.toFixed(2)} km² ({changeMetrics.pct_aumento.toFixed(1)} %)
+                  </span>
+                  <span>{t('Mediana', 'Median')}: {changeMetrics.mediana_dB > 0 ? '+' : ''}{changeMetrics.mediana_dB.toFixed(2)} dB</span>
+                  <span>{t('Exploratorio: no identifica la causa', 'Exploratory: does not identify the cause')}</span>
+                </>
+              ) : activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}
             </div>
           </div>
 

@@ -54,7 +54,8 @@ def validate_roi(value):
 
 
 def cache_key(wkt, version):
-    return hashlib.sha256(f'roi-web-1|{version}|{wkt}'.encode()).hexdigest()
+    # roi-web-2: result.json incluye `change` (mapa de cambio); no reutilizar trabajos del formato anterior.
+    return hashlib.sha256(f'roi-web-2|{version}|{wkt}'.encode()).hexdigest()
 
 
 def select_scenes(scenes):
@@ -135,13 +136,47 @@ def prepare(run_dir):
             paths = [next(c['cog'] for c in m['capas'] if c['id'] == layer_id) for m in manifests]
             with rasterio.open(root / paths[0]) as x, rasterio.open(root / paths[1]) as y:
                 comparable &= (x.crs == y.crs and x.transform == y.transform and x.shape == y.shape)
+    change = None
+    if comparable:
+        progress('Calculando el mapa de cambio t2 − t1…')
+        change = build_change(run_dir, manifests, wkt)
     progress('Guardando copia de las gráficas de la ROI…')
     copy_dir = save_chart_copy(run_dir, wkt, [run_dir / 'layers' / m['escena']['granuleId'] for m in manifests])
-    write_json(run_dir / 'result.json', {'manifests': manifests, 'comparable': comparable,
+    write_json(run_dir / 'result.json', {'manifests': manifests, 'comparable': comparable, 'change': change,
         'charts': charts, 'copia_disco': copy_dir,
         'message': 'Capas listas. Inspección exploratoria; no identifica causas.' if comparable else
         'Capas listas. No hay un par con malla comparable; deslizador deshabilitado.'})
     write_json(run_dir / 'status.json', {'status': 'ready', 'message': 'Capas listas.'})
+
+
+CHANGE_MAGNITUDE = 'gamma0'
+CHANGE_THRESHOLD_DB = 3.0
+
+
+def build_change(run_dir, manifests, wkt):
+    """Mapa de cambio t2 − t1 (γ⁰ dB) desde los COG de etapa1 de cada fecha → layers/cambio/.
+
+    Usa las capas ya enmascaradas (mask del producto + ROI) y con multilook de cada escena; solo se
+    llama si las dos fechas son comparables y comparten malla. Devuelve el manifiesto web.
+    """
+    from .change import change_from_db_cogs
+    root = Path(__file__).resolve().parents[1]
+    t1, t2 = manifests
+    pairs, looks = {}, None
+    for layer in t1['capas']:
+        if layer.get('magnitud') != CHANGE_MAGNITUDE:
+            continue
+        other = next((c for c in t2['capas'] if c['id'] == layer['id']), None)
+        if other is None:
+            continue
+        pol = layer['capa'][:2]
+        pairs[pol] = (root / layer['cog'], root / other['cog'])
+        looks = layer.get('multilook')
+    if not pairs:
+        return None
+    return change_from_db_cogs(pairs, Path(run_dir) / 'layers' / 'cambio',
+                               t1_id=t1['escena']['granuleId'], t2_id=t2['escena']['granuleId'],
+                               magnitude=CHANGE_MAGNITUDE, looks=looks, threshold_db=CHANGE_THRESHOLD_DB, roi_wkt=wkt)
 
 
 def _run_scene_children(run_dir, selected, deadline):

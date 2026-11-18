@@ -65,6 +65,7 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     result = json.loads((run / 'result.json').read_text(encoding='utf-8'))
     assert len(result['manifests']) == 1
     assert result['comparable'] is False
+    assert result['change'] is None          # una sola fecha: no hay mapa de cambio
     assert result['manifests'][0]['procedencia']['identidad_verificada_contra_catalogo']
     assert all(c['escala']['vmin_dB'] == -22 for c in result['manifests'][0]['capas'])
     assert remote.opened[0][1]['cache_type'] == 'blockcache'
@@ -172,6 +173,18 @@ def test_prepare_pair_uses_two_local_h5_children_in_selected_order(tmp_path, mon
         assert (scene_dir / 'metadatos.json').is_file()
         assert json.loads((scene_dir / 'metadatos.json').read_text())['identificacion']['granuleId'] == sid
     assert not (run / 'layers' / 'UNSELECTED').exists()
+
+    # Mapa de cambio t2 − t1 sobre la misma ROI dibujada (comparable → se calcula).
+    change = result['change']
+    assert change['tipo'] == 'mapa_de_cambio'
+    assert change['t1'] == 'PAIR_EARLY' and change['t2'] == 'PAIR_LATE'
+    assert {c['capa'] for c in change['capas']} == {'HHHH', 'HVHV'}
+    for layer in change['capas']:
+        assert layer['escala']['colormap'] == 'rdbu'
+        png = run / 'layers' / 'cambio' / 'web' / f"{layer['id']}.png"
+        assert png.is_file() and layer['png'].endswith(f"layers/cambio/web/{layer['id']}.png")
+    assert set(change['metricas']) == {'HH', 'HV'}
+    assert (run / 'layers' / 'cambio' / 'change.json').is_file()
 
 
 def test_scene_children_keep_selected_order_and_reap_both(tmp_path, monkeypatch):

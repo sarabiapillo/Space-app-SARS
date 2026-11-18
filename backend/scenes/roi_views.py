@@ -174,7 +174,8 @@ class RoiStatus(APIView):
             data = {'status': 'error', 'message': 'El trabajo fue interrumpido. Puedes reintentar.'}
         if data['status'] == 'ready':
             result = json.loads((path / 'result.json').read_text(encoding='utf-8'))
-            for manifest in result['manifests']:
+            # Capas de cada fecha y, si hay par comparable, las del mapa de cambio (layers/cambio/).
+            for manifest in [*result['manifests'], *([result['change']] if result.get('change') else [])]:
                 for layer in manifest['capas']:
                     for kind in ('png', 'cog'):
                         relative = (ROOT / layer[kind]).resolve().relative_to(path.resolve()).as_posix()

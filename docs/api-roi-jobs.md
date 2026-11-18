@@ -16,8 +16,9 @@
    3. **Genera las capas:** con una sola escena, conserva el flujo directo de `etapa1`; con un par comparable, inicia dos procesos Python independientes, uno por `scene_id`, para ejecutar ambos `etapa1` en paralelo. Cada proceso lee por HTTPS únicamente los bloques de su escena dentro de la ROI y escribe su manifiesto y gráficas en el índice de escena correspondiente. La selección mantiene el orden del par y el ensamblado respeta ese orden. La búsqueda ASF y la comparación de mallas, copia de gráficas y publicación siguen siendo secuenciales. El límite de 25 minutos empieza antes de buscar en ASF, dejando margen frente al límite de 30 minutos del proceso padre; si vence antes de lanzar procesos, no se inicia ninguno. Un fallo o vencimiento detiene y recoge los procesos activos, y el estado público usa un mensaje controlado.
    4. **Compara las mallas:** si hay dos fechas, verifica que los COG tengan el mismo CRS, la misma transformación y la misma forma. Solo entonces marca `comparable: true` y el frontend habilita el deslizador.
    5. **Gráficas y copia (2026-11-15):** junta el `graficas.json` de cada fecha (ángulo de incidencia, histograma de retrodispersión γ⁰ HH/HV y máscara QA de subfranja, **calculados sobre la ROI dibujada**) en `result.json → charts` y guarda una copia en `data/graficas-roi/<id>/` (§2.1).
+   6. **Mapa de cambio (2026-11-18):** si el par es comparable, `build_change` calcula Δ = t2 − t1 en γ⁰ dB a partir de los COG `gamma0_*_ml2_dB` de cada fecha (ya enmascarados con la `mask` del producto y la ROI). Usa `pipeline/change.py → change_from_db_cogs`: verifica que la malla coincida, escribe `layers/cambio/` (`delta_<pol>_dB.tif`, `zscore_<pol>.tif`, `cambio_<pol>.tif`, `change.json`) y las capas web `layers/cambio/web/delta_gamma0_<pol>_ml2_dB.{tif,png}` con paleta azul–blanco–rojo ±6 dB. Umbral ±3 dB. El resultado va en `result.json → change` (manifiesto con `capas`, `metricas` por polarización, `umbral_dB` y `advertencias`). Con una sola fecha, `change` es `null`.
 4. Al terminar el subproceso, Django carga esa copia en PostGIS con el mismo código que `load_explore` (§2.1).
-5. El frontend consulta el estado cada 1.8 s y, al terminar, superpone los PNG en MapLibre y dibuja las gráficas con Chart.js en el Sidebar ("Gráficas NISAR de la ROI") y en el panel **Simulador Solar & Radiación**.
+5. El frontend consulta el estado cada 1.8 s y, al terminar, superpone los PNG en MapLibre. Si hay `change`, se habilita el botón **Cambio Δ** de la cinta: muestra la capa Δ de la misma polarización elegida (HH o HV), sin pasar por la LUT, y la barra de color indica las áreas que bajan o suben ≥ umbral (`web/src/utils/changeLayer.ts`) y dibuja las gráficas con Chart.js en el Sidebar ("Gráficas NISAR de la ROI") y en el panel **Simulador Solar & Radiación**.
 
 El resultado se describe como **inspección exploratoria**: no es un mapa de cambio ni identifica causas.
 
@@ -35,7 +36,7 @@ El resultado se describe como **inspección exploratoria**: no es un mapa de cam
 - **0.6° por lado como máximo**, medido sobre la caja que la contiene.
 
 **Caché y concurrencia:**
-- El `id` es un SHA-256 de la ROI, la versión del código y la fecha UTC. La misma ROI pedida el mismo día con el mismo código reutiliza el resultado.
+- El `id` es un SHA-256 de la ROI y la versión del código, con el prefijo de formato `roi-web-2` (desde que `result.json` incluye `change`; los trabajos `roi-web-1` no se reutilizan). La misma ROI pedida el mismo día con el mismo código reutiliza el resultado.
 - Un directorio `reservation/` evita duplicar el trabajo entre procesos.
 - Un trabajo sin avance por más de 35 minutos se da por interrumpido.
 
