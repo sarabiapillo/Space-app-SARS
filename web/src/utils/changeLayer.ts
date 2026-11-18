@@ -1,7 +1,8 @@
 /**
  * Mapa de cambio t2 − t1 de una ROI (`result.change` de `/api/roi-jobs/{id}`, generado por
- * `pipeline/change.py → change_from_db_cogs`). Los PNG ya vienen coloreados azul–blanco–rojo
- * con escala simétrica: no se pasan por la LUT de la capa de una fecha.
+ * `pipeline/roi_explore.py → build_change`). Los PNG ya vienen coloreados azul–blanco–rojo
+ * con escala simétrica ±6 dB: no se pasan por la LUT de la capa de una fecha. Se recalcula con
+ * otro multilook o umbral con `POST /api/roi-jobs/{id}/change`.
  */
 import type { ExploreLayerEntry, ExploreLayerId } from '../mocks/initialWorkspaces.ts'
 
@@ -19,6 +20,16 @@ export interface ChangeMetrics {
   pct_disminucion: number
   pct_aumento: number
   pct_estable?: number
+  /** 1.4826·MAD del Δ en la ROI: ruido de referencia para juzgar el umbral. */
+  ruido_dB?: number | null
+  umbral_sobre_ruido?: number | null
+  umbral_cerca_del_ruido?: boolean | null
+  pct_abs_z_mayor_3?: number | null
+}
+
+export interface ChangeOptions {
+  multilook: number[]
+  umbral_dB: number[]
 }
 
 export type ChangeLayerEntry = Omit<ExploreLayerEntry, 'id'> & { id: string }
@@ -28,6 +39,9 @@ export interface RoiChangeManifest {
   t1: string
   t2: string
   umbral_dB: number
+  multilook?: number
+  pixel_m?: number
+  opciones?: ChangeOptions
   capas: ChangeLayerEntry[]
   metricas: Partial<Record<ChangePolarization, ChangeMetrics>>
   advertencias: string[]
@@ -63,4 +77,32 @@ export function pickChangeLayer(change: RoiChangeManifest | null, layerId: Explo
 export function pickChangeMetrics(change: RoiChangeManifest | null, layerId: ExploreLayerId | string): ChangeMetrics | null {
   if (!isChangeManifest(change)) return null
   return change.metricas[changePolarization(layerId)] ?? null
+}
+
+/** Tamaño de píxel (m) que tendría el mapa con `looks`×`looks`, a partir del píxel actual. */
+export function changeResolutionM(change: RoiChangeManifest | null, looks: number): number | null {
+  if (!change?.multilook || !change.pixel_m) return null
+  return Math.round((change.pixel_m / change.multilook) * looks * 100) / 100
+}
+
+export function changeOptions(change: RoiChangeManifest | null): ChangeOptions | null {
+  const o = change?.opciones
+  return o && Array.isArray(o.multilook) && Array.isArray(o.umbral_dB) && o.multilook.length && o.umbral_dB.length ? o : null
+}
+
+export interface NoiseSummary { noiseDb: number; ratio: number | null; nearNoise: boolean; pctAbsZ3: number | null }
+
+/** Ruido de la ROI frente al umbral; null si el servidor no lo calculó. */
+export function noiseSummary(metrics: ChangeMetrics | null): NoiseSummary | null {
+  if (!metrics || typeof metrics.ruido_dB !== 'number') return null
+  return {
+    noiseDb: metrics.ruido_dB,
+    ratio: metrics.umbral_sobre_ruido ?? null,
+    nearNoise: Boolean(metrics.umbral_cerca_del_ruido),
+    pctAbsZ3: metrics.pct_abs_z_mayor_3 ?? null,
+  }
+}
+
+export function sameChangeParams(change: RoiChangeManifest | null, looks: number, threshold: number): boolean {
+  return Boolean(change && change.multilook === looks && Math.abs(change.umbral_dB - threshold) < 1e-9)
 }

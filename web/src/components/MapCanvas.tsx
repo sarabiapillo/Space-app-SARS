@@ -53,6 +53,7 @@ import {
 import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
 import { CHANGE_GRADIENT_VERTICAL, pickChangeLayer, pickChangeMetrics } from '../utils/changeLayer.ts'
+import { ChangeControls } from './ChangeControls'
 import { useTranslation } from '../i18n/useTranslation.ts'
 import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
 import { geometryBounds, rectangleFromCorners, type AdministrativeGeometry } from '../utils/roi'
@@ -441,6 +442,10 @@ export function MapCanvas({
   const annotationsRef = useRef(annotations)
   const croppedRegionRef = useRef(croppedRegion)
   const solarRef = useRef(solar)
+  // Estado sísmico vigente para el clic del mapa (el manejador se registra una sola vez).
+  const seismicRef = useRef(seismic)
+  const isSeismicRef = useRef(isSeismic)
+  const onSeismicChangeRef = useRef(onSeismicChange)
   const draftFreehandRef = useRef<LngLat[]>([])
   const draftCircleRef = useRef<{
     kind: 'peligro' | 'advertencia'
@@ -460,6 +465,9 @@ export function MapCanvas({
     annotationsRef.current = annotations
     croppedRegionRef.current = croppedRegion
     solarRef.current = solar
+    seismicRef.current = seismic
+    isSeismicRef.current = isSeismic
+    onSeismicChangeRef.current = onSeismicChange
     onViewChangeRef.current = onViewChange
     onAnnotationsChangeRef.current = onAnnotationsChange
   })
@@ -642,9 +650,15 @@ export function MapCanvas({
     }
 
     const onMapClick = (e: MapMouseEvent) => {
+      const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
+      // Estación receptora del sismograma (manual sísmico §2, paso 6): un clic la coloca.
+      const currentSeismic = seismicRef.current
+      if (isSeismicRef.current && currentSeismic?.pickingStation) {
+        onSeismicChangeRef.current?.({ ...currentSeismic, station: coord, pickingStation: false })
+        return
+      }
       if (!isEditingRef.current) return
       const tool = activeToolRef.current
-      const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
 
       if (tool === 'mover') {
         setSelectedAnnotationId(null)
@@ -696,9 +710,9 @@ export function MapCanvas({
         }
       }
 
-      if (isSeismic && tool === 'mover') {
-        onSeismicChange?.({
-          ...(seismic || DEFAULT_SEISMIC),
+      if (isSeismicRef.current && tool === 'mover') {
+        onSeismicChangeRef.current?.({
+          ...(seismicRef.current || DEFAULT_SEISMIC),
           enabled: true,
           epicenter: coord,
         })
@@ -945,14 +959,14 @@ export function MapCanvas({
           id: `${SEISMIC_SOURCE}-fill`,
           type: 'fill',
           source: SEISMIC_SOURCE,
-          filter: ['!=', ['get', 'isEpicenter'], true],
+          filter: ['==', ['get', 'isRing'], true],
           paint: { 'fill-color': ['get', 'fillColor'], 'fill-opacity': 0.35 },
         })
         map.addLayer({
           id: `${SEISMIC_SOURCE}-line`,
           type: 'line',
           source: SEISMIC_SOURCE,
-          filter: ['!=', ['get', 'isEpicenter'], true],
+          filter: ['==', ['get', 'isRing'], true],
           paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2] },
         })
         map.addLayer({
@@ -965,6 +979,18 @@ export function MapCanvas({
             'circle-color': 'rgba(239, 68, 68, 0.35)',
             'circle-stroke-width': 1.5,
             'circle-stroke-color': '#ef4444',
+          },
+        })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-station`,
+          type: 'circle',
+          source: SEISMIC_SOURCE,
+          filter: ['==', ['get', 'isStation'], true],
+          paint: {
+            'circle-radius': 6,
+            'circle-color': '#0f766e',
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': '#ffffff',
           },
         })
         map.addLayer({
@@ -1040,6 +1066,7 @@ export function MapCanvas({
         name: activeSeismic.name,
         mechanism: activeSeismic.mechanism,
         soilType: activeSeismic.soilType,
+        vs30: activeSeismic.vs30,
       })
 
       const ringFeatures = results.rings.map((ring) => ({
@@ -1050,6 +1077,7 @@ export function MapCanvas({
         },
         properties: {
           isEpicenter: false,
+          isRing: true,
           level: ring.level,
           color: ring.color,
           fillColor: ring.fillColor,
@@ -1070,9 +1098,17 @@ export function MapCanvas({
         },
       }
 
+      const stationFeatures = activeSeismic.station
+        ? [{
+            type: 'Feature' as const,
+            geometry: { type: 'Point' as const, coordinates: activeSeismic.station },
+            properties: { isStation: true },
+          }]
+        : []
+
       source.setData({
         type: 'FeatureCollection',
-        features: [...ringFeatures, epicenterFeature],
+        features: [...ringFeatures, ...stationFeatures, epicenterFeature],
       })
     } else {
       source.setData({
@@ -2768,6 +2804,13 @@ export function MapCanvas({
                     ↑ ≥{roiLayers.change.umbral_dB} dB: {changeMetrics.area_aumento_km2.toFixed(2)} km² ({changeMetrics.pct_aumento.toFixed(1)} %)
                   </span>
                   <span>{t('Mediana', 'Median')}: {changeMetrics.mediana_dB > 0 ? '+' : ''}{changeMetrics.mediana_dB.toFixed(2)} dB</span>
+                  <ChangeControls
+                    change={roiLayers.change}
+                    metrics={changeMetrics}
+                    busy={roiLayers.changeBusy}
+                    error={roiLayers.changeError}
+                    onRecompute={(multilook, umbralDb) => { void roiLayers.recomputeChange(multilook, umbralDb) }}
+                  />
                   <span>{t('Exploratorio: no identifica la causa', 'Exploratory: does not identify the cause')}</span>
                 </>
               ) : activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}

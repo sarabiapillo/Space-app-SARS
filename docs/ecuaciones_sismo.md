@@ -1,5 +1,7 @@
 # TerraPulse AI — Manual Técnico y Físico-Matemático: Simulación de Terremotos, Propagación de Ondas Elásticas, Atenuación GMPE y Zonificación de Riesgo Sísmico
 
+> ⚠️ **Desactualizado (2026-11-18).** Este texto describe la versión del 17 de noviembre. La documentación vigente del módulo, con las correcciones (MMI continua en ~66 gal, saturación de campo cercano, Vs30, estación en el mapa, sismograma a 50 Hz, espectrograma y comparación con registros reales) y sus limitaciones, está en [`docs/latex/ecuaciones_sismo.tex`](latex/ecuaciones_sismo.tex). `docs/sismo.pdf` también corresponde a la versión anterior hasta que se recompile.
+
 > **Recursos de Documentación:**
 > - 📄 **PDF Compilado y Listo para Descarga/Revisión:** [`ecuaciones_sismo.pdf`](https://terrapulseai.cadenas-m.tech/ecuaciones_sismo.pdf) | [Archivo local](file:///var/www/terrapulseai/App/docs/ecuaciones_sismo.pdf)
 > - 📝 **Código Fuente LaTeX:** [`docs/latex/ecuaciones_sismo.tex`](file:///var/www/terrapulseai/App/docs/latex/ecuaciones_sismo.tex)

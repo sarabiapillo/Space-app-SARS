@@ -14,9 +14,13 @@ import { Line } from 'react-chartjs-2'
 import { Activity, Clock, Waves } from 'lucide-react'
 import {
   type SeismicSimulationResults,
-  generateSyntheticSeismogram,
+  synthesizeSeismogram,
+  haversineDistanceKm,
   mmiToRoman,
 } from '../utils/seismic'
+import type { SeismicSimulationState } from '../types/workspace'
+import { SeismogramSpectrogram } from './SeismogramSpectrogram'
+import { RealRecordCompare } from './RealRecordCompare'
 import { useTranslation } from '../i18n/useTranslation'
 
 ChartJS.register(
@@ -32,9 +36,12 @@ ChartJS.register(
 
 interface Seismic2DChartProps {
   results: SeismicSimulationResults
+  /** Estado del escenario: permite elegir la estación receptora en el mapa. */
+  seismic?: SeismicSimulationState
+  onSeismicChange?: (next: SeismicSimulationState) => void
 }
 
-export function Seismic2DChart({ results }: Seismic2DChartProps) {
+export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DChartProps) {
   const { t } = useTranslation()
   const [chartMode, setChartMode] = useState<'pga' | 'travelTime' | 'waveform'>('pga')
   const [stationDistanceKm, setStationDistanceKm] = useState<number>(120)
@@ -226,89 +233,17 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
     },
   }
 
-  // --- Gráfica 3: Sismograma Sintético / Serie Temporal a(t) ---
-  const seismogram = useMemo(() => {
-    return generateSyntheticSeismogram(results.source, stationDistanceKm, 240)
-  }, [results.source, stationDistanceKm])
-
-  const waveformLabels = seismogram.points.map((p) => `${p.timeSec.toFixed(1)}s`)
-  const waveformValues = seismogram.points.map((p) => p.acceleration_g)
-
-  const waveformChartData = {
-    labels: waveformLabels,
-    datasets: [
-      {
-        label: t('Aceleración a(t) [g]', 'Acceleration a(t) [g]'),
-        data: waveformValues,
-        borderColor: '#dc2626',
-        backgroundColor: 'rgba(220, 38, 38, 0.12)',
-        borderWidth: 1.4,
-        tension: 0.12,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        fill: true,
-      },
-    ],
-  }
-
-  const waveformChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: {
-      mode: 'index' as const,
-      intersect: false,
-    },
-    plugins: {
-      legend: {
-        position: 'top' as const,
-        labels: {
-          boxWidth: 12,
-          font: { size: 10, weight: 'bold' as const },
-        },
-      },
-      tooltip: {
-        callbacks: {
-          label: (ctx: { parsed: { y: number | null }; dataIndex: number }) => {
-            const y = ctx.parsed?.y ?? 0
-            const cgs = y * 980.665
-            const pt = seismogram.points[ctx.dataIndex]
-            let phaseDesc = ''
-            if (pt) {
-              if (pt.phase === 'ambient') phaseDesc = t(' [Ruido Ambiental]', ' [Ambient Noise]')
-              else if (pt.phase === 'p_wave') phaseDesc = t(' [Frente Onda P]', ' [P-Wave Front]')
-              else if (pt.phase === 'warning') phaseDesc = t(' [Ventana Alerta]', ' [Warning Window]')
-              else if (pt.phase === 's_wave') phaseDesc = t(' [Frente Onda S Destructiva]', ' [Destructive S-Wave]')
-              else phaseDesc = t(' [Coda y Superficiales]', ' [Coda & Surface Waves]')
-            }
-            return ` a(t): ${y.toFixed(4)} g (${cgs.toFixed(1)} cm/s²)${phaseDesc}`
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        title: {
-          display: true,
-          text: t('Tiempo desde la Ruptura (s)', 'Time since Rupture (s)'),
-          font: { size: 10 },
-        },
-        ticks: {
-          maxTicksLimit: 8,
-          font: { size: 9 },
-        },
-        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-      },
-      y: {
-        title: {
-          display: true,
-          text: t('Aceleración (g)', 'Acceleration (g)'),
-          font: { size: 10 },
-        },
-        ticks: { font: { size: 9 } },
-        grid: { color: 'rgba(0, 0, 0, 0.06)' },
-      },
-    },
-  }
+  // --- Gráfica 3: Sismograma sintético a(t) a 50 Hz + espectrograma (canvas) ---
+  const station = seismic?.station ?? null
+  const effectiveDistanceKm = station
+    ? Math.round(haversineDistanceKm(results.source.epicenter, station) * 10) / 10
+    : stationDistanceKm
+  const stationVs30 = station ? seismic?.stationVs30 ?? null : null
+  const seismogram = useMemo(
+    () => synthesizeSeismogram(results.source, effectiveDistanceKm, { stationVs30 }),
+    [results.source, effectiveDistanceKm, stationVs30]
+  )
+  const markers = useMemo(() => ({ tP: seismogram.tP_sec, tS: seismogram.tS_sec }), [seismogram])
 
   const STATION_PRESETS = [
     { label: t('Cercana (30 km)', 'Near (30 km)'), dist: 30 },
@@ -344,7 +279,7 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
             onClick={() => setChartMode('waveform')}
           >
             <Waves size={12} />
-            <span>{t('Sismograma Científico a(t)', 'Scientific Seismogram a(t)')}</span>
+            <span>{t('Sismograma y Espectrograma', 'Seismogram & Spectrogram')}</span>
           </button>
         </div>
       </div>
@@ -354,10 +289,11 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
           <div className="seismic-waveform-slider-row">
             <label htmlFor="station-dist-slider">
               {t('Distancia Estación Receptora:', 'Receiver Station Distance:')}{' '}
-              <span className="seismic-waveform-dist-badge">{stationDistanceKm} km</span>
+              <span className="seismic-waveform-dist-badge">{effectiveDistanceKm} km</span>
             </label>
             <input
               id="station-dist-slider"
+              disabled={Boolean(station)}
               type="range"
               min="10"
               max="600"
@@ -368,13 +304,61 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
             />
           </div>
 
+          {seismic && onSeismicChange && (
+            <div className="seismic-station-map-row">
+              <button
+                type="button"
+                className={`seismic-station-btn ${seismic.pickingStation ? 'is-active' : ''}`}
+                onClick={() => onSeismicChange({ ...seismic, pickingStation: !seismic.pickingStation })}
+                title={t('El siguiente clic en el mapa coloca la estación receptora', 'The next map click places the receiver station')}
+              >
+                📍 {seismic.pickingStation
+                  ? t('Haz clic en el mapa… (cancelar)', 'Click on the map… (cancel)')
+                  : station ? t('Mover estación en el mapa', 'Move station on the map') : t('Elegir estación en el mapa', 'Pick station on the map')}
+              </button>
+              {station && (
+                <>
+                  <span className="seismic-waveform-metric-item">
+                    {station[1].toFixed(3)}°, {station[0].toFixed(3)}°
+                  </span>
+                  <label className="seismic-waveform-metric-item">
+                    Vs30 {t('estación', 'station')}
+                    <input
+                      type="number"
+                      min="80"
+                      max="1500"
+                      step="10"
+                      className="seismic-vs30-input"
+                      value={seismogram.stationVs30}
+                      onChange={(e) => {
+                        const v = Number(e.target.value)
+                        if (v >= 80 && v <= 1500) onSeismicChange({ ...seismic, stationVs30: v })
+                      }}
+                    />
+                    m/s
+                  </label>
+                  <button
+                    type="button"
+                    className="seismic-station-btn"
+                    onClick={() => onSeismicChange({ ...seismic, station: null, stationVs30: null, pickingStation: false })}
+                  >
+                    {t('Quitar estación', 'Remove station')}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="seismic-waveform-presets">
             {STATION_PRESETS.map((p) => (
               <button
                 key={p.dist}
                 type="button"
-                className={`seismic-station-btn ${stationDistanceKm === p.dist ? 'is-active' : ''}`}
-                onClick={() => setStationDistanceKm(p.dist)}
+                className={`seismic-station-btn ${!station && stationDistanceKm === p.dist ? 'is-active' : ''}`}
+                onClick={() => {
+                  setStationDistanceKm(p.dist)
+                  if (station && seismic && onSeismicChange) onSeismicChange({ ...seismic, station: null, stationVs30: null, pickingStation: false })
+                }}
               >
                 {p.label}
               </button>
@@ -383,13 +367,16 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
 
           <div className="seismic-waveform-metrics-strip">
             <span className="seismic-waveform-metric-item">
-              🔵 {t('Onda P:', 'P-Wave:')} <strong>{seismogram.tP_sec}s</strong>
+              🔵 {t('Onda P:', 'P-Wave:')} <strong>{seismogram.tP_sec.toFixed(1)}s</strong>
             </span>
             <span className="seismic-waveform-metric-item">
-              ⚡ {t('Alerta SASMEX:', 'SASMEX Warning:')} <strong style={{ color: '#ea580c' }}>{seismogram.warningTimeSec}s</strong>
+              ⏱ {t('Ventana P–S (Δt):', 'P–S window (Δt):')} <strong>{seismogram.warningTimeSec.toFixed(1)}s</strong>
+            </span>
+            <span className="seismic-waveform-metric-item" title={t('Ec. 10: tS − 3 s de proceso, desde el origen del sismo', 'Eq. 10: tS − 3 s processing, from origin time')}>
+              ⚡ {t('Alerta SASMEX:', 'SASMEX Warning:')} <strong style={{ color: '#ea580c' }}>{seismogram.alertTimeSec.toFixed(1)}s</strong>
             </span>
             <span className="seismic-waveform-metric-item">
-              🔴 {t('Onda S Destructiva:', 'Destructive S-Wave:')} <strong>{seismogram.tS_sec}s</strong>
+              🔴 {t('Onda S Destructiva:', 'Destructive S-Wave:')} <strong>{seismogram.tS_sec.toFixed(1)}s</strong>
             </span>
             <span className="seismic-waveform-metric-item">
               📈 {t('PGA en Sitio:', 'Site PGA:')} <strong>{seismogram.peakPga_g.toFixed(3)}g</strong> ({seismogram.peakPga_cgs.toFixed(1)} cm/s²)
@@ -401,15 +388,30 @@ export function Seismic2DChart({ results }: Seismic2DChartProps) {
         </div>
       )}
 
-      <div className="seismic-chart-card__body">
-        {chartMode === 'pga' ? (
-          <Line data={pgaChartData} options={pgaChartOptions} />
-        ) : chartMode === 'travelTime' ? (
-          <Line data={travelTimeChartData} options={travelTimeChartOptions} />
-        ) : (
-          <Line data={waveformChartData} options={waveformChartOptions} />
-        )}
-      </div>
+      {chartMode === 'waveform' ? (
+        <>
+          <SeismogramSpectrogram
+            accel_g={seismogram.accel_g}
+            sampleRateHz={seismogram.sampleRateHz}
+            markers={markers}
+            ariaLabel={t('Sismograma sintético y espectrograma', 'Synthetic seismogram and spectrogram')}
+          />
+          <p className="seismic-chart-footer-note">
+            {t('Espectrograma: potencia de a(t) por frecuencia (ventana de Hann de 5.1 s, inferno, dB bajo el máximo). Onda P ≈ {p1}–{p2} Hz; onda S fundamental {fs} Hz según el suelo. Modelo analítico ilustrativo (50 muestras/s), no un registro.',
+              'Spectrogram: power of a(t) by frequency (5.1 s Hann window, inferno, dB below max). P-wave ≈ {p1}–{p2} Hz; S-wave fundamental {fs} Hz by soil. Illustrative analytic model (50 samples/s), not a record.',
+              { p1: (0.85 * seismogram.fp_Hz).toFixed(1), p2: (1.15 * seismogram.fp_Hz).toFixed(1), fs: seismogram.fs_Hz })}
+          </p>
+          <RealRecordCompare synthetic={seismogram} />
+        </>
+      ) : (
+        <div className="seismic-chart-card__body">
+          {chartMode === 'pga' ? (
+            <Line data={pgaChartData} options={pgaChartOptions} />
+          ) : (
+            <Line data={travelTimeChartData} options={travelTimeChartOptions} />
+          )}
+        </div>
+      )}
 
       {chartMode === 'pga' && (
         <div className="seismic-risk-zones-legend">

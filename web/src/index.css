@@ -2193,6 +2193,49 @@ button:disabled {
   color: var(--color-text-muted);
 }
 
+/* Controles del mapa de cambio (resolución, umbral y ruido de la ROI) dentro de la barra de color. */
+.change-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed var(--color-border);
+  max-width: 190px;
+}
+
+.change-controls__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.change-controls__field select {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  background: #ffffff;
+  color: var(--color-text);
+}
+
+.change-controls__status {
+  color: var(--color-text);
+}
+
+.change-controls__error {
+  color: #b91c1c;
+  white-space: normal;
+}
+
+.change-controls__warning {
+  color: #92400e;
+  white-space: normal;
+  line-height: 1.25;
+}
+
 /* ---------- 5. PANEL INFERIOR COLAPSABLE ("Messages / Progress / Traceability Log") ---------- */
 
 .workstation-log-panel {
@@ -6119,6 +6162,147 @@ button:disabled {
   background: #dc2626;
   border-color: #b91c1c;
   color: #ffffff;
+}
+
+.seismic-vs30-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.seismic-vs30-input {
+  width: 64px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.seismic-vs30-site {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #64748b;
+}
+
+.seismic-station-map-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+
+.seismic-station-map-row .seismic-waveform-metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* Sismograma + espectrograma (canvas) y comparación con registro real */
+.seismo-spectro {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.seismo-spectro canvas {
+  display: block;
+}
+
+.real-record {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.real-record__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.real-record__file input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.real-record__file span {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid #94a3b8;
+  border-radius: 3px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.real-record__file:focus-within span {
+  outline: 2px solid #2563eb;
+}
+
+.real-record__hint {
+  margin: 4px 0;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.real-record__error {
+  margin: 4px 0;
+  color: #b91c1c;
+}
+
+.real-record__header pre {
+  max-height: 120px;
+  overflow: auto;
+  font-size: 10px;
+  background: #ffffff;
+  padding: 4px;
+}
+
+.real-record__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.real-record__controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.real-record__controls input[type="number"] {
+  width: 70px;
+}
+
+.real-record__meta {
+  color: #64748b;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.real-record__table {
+  width: 100%;
+  margin-top: 6px;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.real-record__table th,
+.real-record__table td {
+  padding: 2px 6px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
 }
 
 .seismic-waveform-metrics-strip {

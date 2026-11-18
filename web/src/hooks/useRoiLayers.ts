@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LngLat } from '../types/workspace'
 import type { RoiGeometry } from '../utils/roi'
 import type { ExploreWebManifest } from '../api/client'
@@ -29,11 +29,41 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
   const [state, setState] = useState<{
     key: string; loading: boolean; error: string | null; message: string;
     manifests: ExploreWebManifest[]; comparable: boolean; change: RoiChangeManifest | null
-    charts: RoiChartsEntry[]; copia: RoiChartsCopy | null
-  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, change: null, charts: [], copia: null })
+    charts: RoiChartsEntry[]; copia: RoiChartsCopy | null; jobId: string | null
+  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, change: null, charts: [], copia: null, jobId: null })
   const [attempt, setAttempt] = useState(0)
   const geometry = JSON.stringify(region)
   const key = `${viewKey}:${geometry}:${attempt}`
+  // Recálculo del mapa de cambio (otro multilook/umbral) sobre la ROI ya preparada.
+  const [changeJob, setChangeJob] = useState<{ key: string; busy: boolean; error: string | null }>({ key: '', busy: false, error: null })
+  const changeRequest = useRef(0)
+  const recomputeChange = useCallback(async (multilook: number, umbralDb: number) => {
+    const jobId = state.key === key ? state.jobId : null
+    if (!jobId) return
+    const request = ++changeRequest.current
+    setChangeJob({ key, busy: true, error: null })
+    try {
+      const response = await fetch(`/api/roi-jobs/${jobId}/change`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ multilook, umbral_dB: umbralDb }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(data?.detail || `No se pudo recalcular el mapa de cambio (HTTP ${response.status}).`)
+      if (!isChangeManifest(data)) throw new Error('Respuesta inesperada del servidor.')
+      await Promise.all(data.capas.map(c => new Promise<void>((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('No se pudo cargar una imagen del mapa de cambio.'))
+        img.src = `/${c.png}`
+      })))
+      if (request !== changeRequest.current) return   // llegó una petición más nueva
+      setState(previous => previous.key === key ? { ...previous, change: data } : previous)
+      setChangeJob({ key, busy: false, error: null })
+    } catch (error) {
+      if (request !== changeRequest.current) return
+      setChangeJob({ key, busy: false, error: error instanceof Error ? error.message : 'Error de conexión.' })
+    }
+  }, [key, state.key, state.jobId])
   useEffect(() => {
     if (!region) return
     const controller = new AbortController()
@@ -41,7 +71,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     const update = (data: Partial<typeof state>) => {
       if (!controller.signal.aborted) setState(previous => ({ ...previous, ...data, key }))
     }
-    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, change: null, charts: [], copia: null })
+    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, change: null, charts: [], copia: null, jobId: null })
     async function json(url: string, body?: unknown) {
       const response = await fetch(url, {
         method: body ? 'POST' : 'GET', signal: controller.signal,
@@ -58,6 +88,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
           ? { type: 'Polygon', coordinates: [[...parsed, ...(JSON.stringify(parsed[0]) === JSON.stringify(parsed.at(-1)) ? [] : [parsed[0]])]] }
           : parsed
         const { id } = await json('/api/roi-jobs', { roi })
+        update({ jobId: id })
         const deadline = Date.now() + 35 * 60 * 1000
         async function poll() {
           try {
@@ -114,5 +145,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     loading: Boolean(region) && (!current || state.loading),
     error: current ? localizeText(state.error) : null, manifests: current ? state.manifests : [],
     comparable: current && state.comparable, change: current ? state.change : null, charts: current ? state.charts : [],
-    copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1) }
+    copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1),
+    recomputeChange, changeBusy: changeJob.key === key && changeJob.busy,
+    changeError: changeJob.key === key ? localizeText(changeJob.error) : null }
 }

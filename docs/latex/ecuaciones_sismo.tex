@@ -1,273 +1,497 @@
-% TerraPulse AI — Documentación Técnica y Científica: Simulación de Terremotos y Propagación de Ondas
-% Compilar con: pdflatex ecuaciones_sismo.tex
+% TerraPulse AI — Módulo de simulación sísmica: documentación técnica
+% Compilar con: pdflatex ecuaciones_sismo.tex  (o latexmk -pdf), desde docs/latex/
+% Reemplaza el "Manual Técnico y Físico-Matemático" del 17 de noviembre de 2026 (ver sección "Correcciones").
 \documentclass[11pt,a4paper]{article}
 \input{preambulo}
-\setlength{\parskip}{0.4em}
+\setlength{\parskip}{0.35em}
 
-\title{\textbf{TerraPulse AI}\\[6pt]\Large Manual Técnico y Físico-Matemático: Simulación de Terremotos, Propagación de Ondas Elásticas, Atenuación GMPE y Zonificación de Riesgo Sísmico}
-\author{Ingeniería de Sistemas y Geociencias Computacionales -- TerraPulse AI}
-\date{17 de noviembre de 2026}
+\title{TerraPulse AI\\[2pt]\large Módulo de simulación sísmica:\\ qué hace, ecuaciones, implementación y limitaciones}
+\author{Documentación técnica del proyecto}
+\date{18 de noviembre de 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Este documento constituye la memoria técnica integral de la arquitectura, ecuaciones y funcionamiento del \textbf{Simulador de Terremotos de TerraPulse AI}. Se detalla la formulación física basada en la elastodinámica continua (ecuación de Navier), la determinación de tiempos de viaje para ondas primarias ($P$) y secundarias ($S$), la estimación de la Aceleración Pico del Terreno ($PGA$) mediante Leyes de Predicción de Movimiento del Suelo (\emph{Ground Motion Prediction Equations}, GMPE) calibradas para la zona de subducción e intraplaca de México (Ordaz et al., García et al., Boore-Atkinson), la amplificación estratigráfica por velocidad de onda de corte en 30 metros ($V_{s30}$), la correlación con la escala Mercalli Modificada ($MMI$) de daño estructural, la generación analítica del sismograma sintético $a(t, D)$ con efecto de resonancia de cuenca (Valle de México) y el algoritmo numérico de bisección para la zonificación de 4 anillos concéntricos de isosisma georreferenciados en MapLibre GL.
+El módulo de simulación sísmica de la interfaz web genera \emph{escenarios} de sismo: a partir de un
+epicentro, una magnitud, una profundidad, un mecanismo y un tipo de suelo, estima la aceleración pico
+del terreno (PGA), la intensidad Mercalli, cuatro anillos de afectación sobre el mapa, los tiempos de
+llegada de las ondas $P$ y $S$, un sismograma sintético $a(t)$ con su espectrograma y, si el usuario
+carga un acelerograma real, una comparación de referencia entre ambos. Todo se calcula en el navegador
+(\path{web/src/utils/seismic.ts} y módulos asociados). Este documento describe cada ecuación tal como
+está implementada, las correcciones hechas al manual anterior y las limitaciones conocidas.
+\textbf{Es un modelo analítico ilustrativo}: sirve para explicar y explorar escenarios, no para evaluar
+el peligro sísmico de un sitio ni para sustituir a un registro.
 \end{abstract}
 
 \tableofcontents
-\newpage
 
-\section{Introducción y Visión General del Sistema}
+\section{Qué hace el módulo y qué no}
 
-TerraPulse AI es una plataforma de análisis geoespacial y computación de riesgos naturales. Su módulo de simulación de terremotos permite a analistas de protección civil, investigadores y tomadores de decisiones simular en tiempo real escenarios de ruptura sísmica, evaluar el impacto destructivo del movimiento del suelo y estimar con precisión el tiempo disponible de alerta temprana.
+\textbf{Hace:}
+\begin{itemize}
+  \item Calcula, para un escenario, la PGA en función de la distancia con una ley de atenuación
+        (GMPE) de forma cerrada, con efecto de sitio por $V_{s30}$.
+  \item Convierte PGA a intensidad Mercalli Modificada (MMI) y dibuja cuatro anillos de afectación.
+  \item Calcula tiempos de llegada $P$ y $S$, la ventana $t_S - t_P$ y un tiempo de alerta tipo SASMEX.
+  \item Sintetiza un sismograma $a(t)$ a 50 muestras por segundo para una estación (por distancia o
+        colocada en el mapa, con su propio $V_{s30}$) y muestra su espectrograma.
+  \item Lee un acelerograma real en texto (en el navegador, sin subirlo) y lo compara con el sintético.
+\end{itemize}
+\textbf{No hace:}
+\begin{itemize}
+  \item No usa datos NISAR ni registros sísmicos para calibrarse. Los coeficientes de la GMPE no tienen
+        una fuente publicada verificada (sección~\ref{sec:limitaciones}).
+  \item No modela directividad, geometría de la falla, efectos topográficos ni variabilidad aleatoria
+        (no hay desviación estándar: cada escenario da un único valor).
+  \item No es un sistema de alerta ni un estudio de peligro sísmico.
+\end{itemize}
 
-El simulador opera combinando tres pilares científicos:
-\begin{enumerate}
-  \item \textbf{Física del medio continuo y elastodinámica:} Cálculo riguroso de tiempos de arribo de frentes de onda longitudinales ($P$) y transversales ($S$) a partir de las propiedades elásticas de la corteza continental.
-  \item \textbf{Modelos empíricos y leyes de atenuación GMPE:} Estimación probabilística de aceleraciones espectrales calibradas con registros históricos de la Trinchera Mesoamericana.
-  \item \textbf{Cómputo geoespacial geodésico y series temporales:} Inversión numérica de radios de afectación y generación de trazas sintéticas de acelerogramas $a(t)$ con respuesta de sitio.
-\end{enumerate}
+\section{Arquitectura}
 
-\section{Arquitectura y Flujo de Procesamiento del Simulador}
+\begin{longtable}{>{\raggedright}p{5.2cm} p{9.8cm}}
+\toprule
+Archivo & Función \\
+\midrule
+\endhead
+\path{web/src/utils/seismic.ts} & Modelo: coeficientes, $V_{s30}$, saturación, PGA, MMI, M$_0$, tiempos, alerta, bisección de radios, círculos geodésicos, escenarios históricos y sismograma sintético. \\
+\path{web/src/utils/signal.ts} & FFT, espectrograma (STFT), frecuencia dominante, duración D5--95, pico y quitar la media. \\
+\path{web/src/utils/accelerogram.ts} & Lectura de acelerogramas en texto y conversión de unidades a $g$. \\
+\path{web/src/components/SeismicSimulatorPanel.tsx} & Panel: escenario, sismos históricos, ROI, $V_{s30}$, tarjetas (PGA, M$_0$, MMI, radios). \\
+\path{web/src/components/Seismic2DChart.tsx} & Pestañas: atenuación PGA, tiempos de viaje y \emph{Sismograma y Espectrograma} con la estación. \\
+\path{web/src/components/SeismogramSpectrogram.tsx} & Dibujo en canvas de $a(t)$ y su espectrograma con eje de tiempo común. \\
+\path{web/src/components/RealRecordCompare.tsx} & Carga y comparación con un registro real. \\
+\path{web/src/components/MapCanvas.tsx} & Anillos, epicentro y estación en MapLibre; clic para mover el epicentro o colocar la estación. \\
+\path{web/src/types/workspace.ts} & Estado \texttt{SeismicSimulationState} guardado por mapa. \\
+\path{web/src/utils/roiCatalog.ts} & Suelo y mecanismo sugeridos para ROIs del catálogo (\texttt{getRecommendedSeismicSettings}). \\
+\bottomrule
+\end{longtable}
 
-El ciclo de cómputo y renderizado del simulador opera de forma reactiva e interactiva siguiendo las etapas descritas a continuación:
+\textbf{Flujo.} El estado del escenario (\texttt{SeismicSimulationState}) se edita en el panel o con
+clics en el mapa. \texttt{runSeismicSimulation} devuelve PGA y MMI epicentrales, M$_0$, los cuatro
+anillos y la curva de atenuación; el mapa dibuja los anillos y el panel las tarjetas y gráficas.
+\texttt{synthesizeSeismogram} genera $a(t)$ para la estación, que \texttt{SeismogramSpectrogram} dibuja
+con su espectrograma.
 
-\begin{enumerate}
-  \item \textbf{Captura de Parámetros de Ruptura (Hipocentro y Mecanismo):}
-    El usuario define las coordenadas del epicentro $(\lambda_e, \phi_e)$ mediante un clic directo en el mapa o seleccionando un sismo histórico (p.~ej., Michoacán 1985 $M_w 8.1$, Puebla-Morelos 2017 $M_w 7.1$ o Tehuantepec 2017 $M_w 8.2$). Se configuran la magnitud de momento $M_w$, la profundidad focal $h$ (km), el mecanismo de falla (subducción interplaca, falla normal intraplaca o cortical superficial) y la litología superior ($V_{s30}$).
+\section{Parámetros de entrada}
 
-  \item \textbf{Cálculo Geodésico y Distancia Hipocentral:}
-    Para cualquier punto del dominio, se evalúa la distancia ortodrómica sobre el esferoide terrestre y la distancia hipocentral $R = \sqrt{D^2 + h^2}$.
+\begin{longtable}{>{\raggedright}p{4.2cm} p{3.6cm} p{7.2cm}}
+\toprule
+Parámetro & Rango en la interfaz & Notas \\
+\midrule
+\endhead
+Epicentro $(\lambda_e,\phi_e)$ & clic en el mapa & Con la herramienta \emph{mover}, o desde un sismo histórico o una ROI. \\
+Magnitud $M_w$ & 4.0 a 8.8 & Paso 0.1. \\
+Profundidad focal $h$ & 5 a 120 km & Paso 1 km. \\
+Mecanismo & subducción, intraplaca, cortical & Elige los coeficientes de la GMPE. \\
+Suelo del escenario & roca, suelo firme, lacustre & Fija $V_{s30}$ = 760, 450 o 100 m/s; editable de 80 a 1500 m/s. \\
+Estación & distancia (10 a 600 km) o clic en el mapa & En el mapa, la distancia se calcula con la ecuación~\eqref{eq:haversine}. \\
+$V_{s30}$ de la estación & 80 a 1500 m/s & Por omisión, el del escenario. \\
+\bottomrule
+\end{longtable}
 
-  \item \textbf{Evaluación del Campo de Movimiento del Suelo ($PGA$ y $MMI$):}
-    Se evalúa la ecuación GMPE considerando atenuación geométrica $\sim 1/R$, amortiguamiento inelástico $e^{-\gamma R}$ y el factor de amplificación de sitio $S_{\text{sitio}}$. El valor pico resultante se transforma a la escala Mercalli Modificada ($MMI$) para cuantificar daños en infraestructura.
+\section{Fuente y geometría}
 
-  \item \textbf{Inversión Numérica de Radios de Isosisma (Bisección):}
-    Mediante un algoritmo de bisección se resuelven las 4 distancias epicentrales límites para los umbrales de aceleración destructiva ($\ge 0.34\,g$), daño severo ($0.12\,g$), percepción moderada ($0.03\,g$) y percepción leve ($0.005\,g$).
-
-  \item \textbf{Generación de Polígonos Geodésicos Vectoriales:}
-    A partir de cada radio $R_{\text{zona}}$, se computa una trayectoria circular geodésica de 64 nodos sobre el elipsoide WGS84, ensamblando capas GeoJSON proyectadas dinámicamente en MapLibre GL.
-
-  \item \textbf{Síntesis Temporal del Sismograma $a(t, D)$:}
-    Se genera la serie continua de aceleración en función del tiempo para una estación receptora elegida por el usuario, mostrando la onda $P$, la ventana de advertencia temprana $\Delta t = t_S - t_P$, el impacto cortante de la onda $S$ y la coda con resonancia de estrato blando.
-\end{enumerate}
-
-\section{Ecuaciones de Fuente y Geometría Focal}
-
-El momento sísmico escalar $M_0$ (en dyn$\cdot$cm) representa la energía liberada en la falla:
+\textbf{Momento sísmico} (Hanks y Kanamori, 1979), con $M_0$ en dyn$\cdot$cm
+(1~dyn$\cdot$cm $=10^{-7}$~N$\cdot$m); función \texttt{seismicMomentDynCm}:
 \begin{equation}
-  M_w = \frac{2}{3} \log_{10}(M_0) - 10.7 \iff M_0 = 10^{\frac{3}{2}(M_w + 10.7)}.
-  \label{eq:kanamori}
+  M_w = \tfrac{2}{3}\log_{10} M_0 - 10.7 \quad\Longleftrightarrow\quad M_0 = 10^{\frac{3}{2}(M_w + 10.7)}.
 \end{equation}
 
-Para una estación en $(\lambda, \phi)$ y epicentro en $(\lambda_e, \phi_e)$, la distancia epicentral superficial $D$ se obtiene por la ley de semiversenos (Haversine):
+\textbf{Distancia epicentral} sobre una esfera de radio $R_T = 6371$\,km (semiverseno);
+función \texttt{haversineDistanceKm}:
 \begin{equation}
-  D = 2 R_T \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_e)\cos(\phi)\sin^2\left(\frac{\Delta \lambda}{2}\right)} \right),
-  \label{eq:distancia_epicentral}
+  D = 2R_T \arcsin\sqrt{\sin^2\tfrac{\Delta\phi}{2} + \cos\phi_e\cos\phi\,\sin^2\tfrac{\Delta\lambda}{2}} .
+  \label{eq:haversine}
 \end{equation}
-donde $R_T \approx 6371\,\text{km}$, $\Delta \phi = \phi - \phi_e$ y $\Delta \lambda = \lambda - \lambda_e$.
+\textbf{Distancia hipocentral:} $R = \sqrt{D^2 + h^2}$. Se usa para los tiempos de viaje. La GMPE usa
+la distancia efectiva $R_{\mathrm{ef}}$ de la sección~\ref{sec:gmpe}.
 
-La distancia hipocentral tridimensional $R$ desde la ruptura hasta la superficie es:
+\section{Ondas P y S, tiempos y alerta}
+
+\subsection{Velocidades}
+En un sólido elástico isótropo (ecuación de Navier), los potenciales escalar y vectorial de
+Helmholtz se propagan con
 \begin{equation}
-  R = \sqrt{D^2 + h^2}.
-  \label{eq:distancia_hipocentral}
+  v_p = \sqrt{\frac{\lambda + 2\mu}{\rho}}, \qquad v_s = \sqrt{\frac{\mu}{\rho}} .
 \end{equation}
+El módulo usa $v_p = 6.0$\,km/s y $v_s = 3.5$\,km/s (constantes \texttt{VP\_KM\_S} y
+\texttt{VS\_KM\_S}). En un sólido de Poisson ($\nu = 0.25$, es decir $\lambda = \mu$) la razón sería
+$\sqrt{3}\approx 1.732$; la de las constantes usadas es $6.0/3.5 \approx 1.714$.
 
-\section{Elastodinámica Continua y Tiempos de Viaje de Ondas}
-
-La propagación de deformaciones mecánicas en la corteza terrestre está regida por la ecuación elástica de Navier:
+\subsection{Tiempos de llegada y ventana P--S}
 \begin{equation}
-  \rho \frac{\partial^2 \mathbf{u}}{\partial t^2} = (\lambda + \mu)\nabla(\nabla \cdot \mathbf{u}) + \mu \nabla^2 \mathbf{u},
-  \label{eq:navier}
-\end{equation}
-donde $\mathbf{u}(\mathbf{x}, t)$ es el vector desplazamiento, $\rho$ es la densidad de la roca, y $\lambda, \mu$ son los coeficientes elásticos de Lamé ($\mu$ módulo de corte o rigidez).
-
-Aplicando el teorema de descomposición de Helmholtz $\mathbf{u} = \nabla \Phi + \nabla \times \mathbf{\Psi}$:
-\begin{enumerate}
-  \item \textbf{Potencial escalar $\Phi$ (Onda P, compresional / longitudinal):}
-    \begin{equation}
-      \nabla^2 \Phi = \frac{1}{v_p^2}\frac{\partial^2 \Phi}{\partial t^2}, \qquad v_p = \sqrt{\frac{\lambda + 2\mu}{\rho}} \approx 6.0\,\text{km/s}.
-    \end{equation}
-  \item \textbf{Potencial vectorial $\mathbf{\Psi}$ (Onda S, cizalla / transversal):}
-    \begin{equation}
-      \nabla^2 \mathbf{\Psi} = \frac{1}{v_s^2}\frac{\partial^2 \mathbf{\Psi}}{\partial t^2}, \qquad v_s = \sqrt{\frac{\mu}{\rho}} \approx 3.5\,\text{km/s}.
-    \end{equation}
-\end{enumerate}
-
-Para un sólido de Poisson ($\nu = 0.25 \implies \lambda = \mu$), la razón cinemática satisface:
-\begin{equation}
-  \frac{v_p}{v_s} = \sqrt{\frac{\lambda + 2\mu}{\mu}} = \sqrt{3} \approx 1.732.
+  t_P = \frac{R}{v_p}, \qquad t_S = \frac{R}{v_s}, \qquad \Delta t = t_S - t_P = R\left(\frac{1}{3.5} - \frac{1}{6.0}\right) \approx 0.119\,R .
 \end{equation}
 
-\subsection{Tiempos de Llegada y Ventana Operativa de Alerta Temprana}
-
-Los tiempos de viaje desde el foco hasta el sitio receptor son:
+\subsection{Tiempo de alerta tipo SASMEX}
+Función \texttt{sasmexAlertTimeSec}, ecuación del manual anterior con $t_{\mathrm{proceso}} = 3$\,s:
 \begin{equation}
-  t_P(R) = \frac{R}{v_p} = \frac{\sqrt{D^2 + h^2}}{6.0}, \qquad t_S(R) = \frac{R}{v_s} = \frac{\sqrt{D^2 + h^2}}{3.5}.
+  T_{\mathrm{alerta}} = \max\!\left(0,\ \frac{\sqrt{D^2 + h^2}}{v_s} - t_{\mathrm{proceso}}\right).
+  \label{eq:alerta}
 \end{equation}
+Para la Ciudad de México a $D = 320$\,km de un sismo con $h = 15$\,km da 88.5\,s. \textbf{Este valor se
+cuenta desde el origen del sismo} y supone que la alerta se emite en el instante del origen: no resta
+el tiempo que tarda la onda $P$ en llegar a los sensores ni su detección. Por eso es mayor que los
+40--60\,s de anticipación que suele percibir la población. La interfaz lo rotula así y muestra aparte
+la ventana $\Delta t$.
 
-El margen temporal entre el arribo de la onda $P$ (no destructiva) y el tren cortante destructivo $S$ define la ventana de alerta temprana:
+\section{Movimiento del suelo (GMPE)}
+\label{sec:gmpe}
+
+\subsection{Ecuación}
+Función \texttt{computePga\_g}, con PGA en $g$ ($1\,g = 980.665$\,cm/s$^2$):
 \begin{equation}
-  \Delta t(D) = t_S - t_P = \sqrt{D^2 + h^2} \left( \frac{1}{3.5} - \frac{1}{6.0} \right) \approx 0.119 \cdot \sqrt{D^2 + h^2} \quad \text{(segundos)}.
-\end{equation}
-
-Dado que los sensores sismológicos costeros (SASMEX) transmiten por enlace de radio a la velocidad de la luz $c \approx 3\times 10^5\,\text{km/s} \gg v_s$, el tiempo de oportunidad útil para alertar a una metrópoli ubicada a $D \approx 320\,\text{km}$ (como la Ciudad de México respecto a Guerrero o Michoacán) es:
-\begin{equation}
-  T_{\text{alerta}} \approx \frac{\sqrt{320^2 + 15^2}}{3.5} - t_{\text{proceso}} \approx 91.5\,\text{s} - 3.0\,\text{s} \approx 88.5\,\text{s} \quad (\text{tiempo total desde el origen}).
-\end{equation}
-La población percibe la alerta entre 40 y 60 segundos antes del movimiento fuerte.
-
-\section{Leyes de Atenuación del Movimiento del Suelo (GMPE)}
-
-El parámetro físico principal para ingeniería estructural es la Aceleración Pico del Terreno (\emph{Peak Ground Acceleration}, $PGA$). El simulador implementa el modelo regional adaptado a México (Ordaz, García, Boore-Atkinson):
-\begin{equation}
-  \ln(PGA) = c_1 + c_2 M_w - c_3 \ln(R) - c_4 R + S_{\text{sitio}},
+  \ln \mathrm{PGA} = c_1 + c_2 M_w - c_3 \ln R_{\mathrm{ef}} - c_4 R_{\mathrm{ef}} + S_{\mathrm{sitio}},
+  \qquad
+  R_{\mathrm{ef}} = \sqrt{D^2 + h^2 + h_{\mathrm{sat}}(M_w)^2}.
   \label{eq:gmpe}
 \end{equation}
-donde $PGA$ está expresado en fracciones de la gravedad terrestre ($g$), con $1\,g = 980.665\,\text{cm/s}^2$ (Gals).
+El resultado se acota a $[0.0001,\ 2.5]\,g$ (ver~\ref{sec:tope}).
 
-\subsection{Coeficientes según Mecanismo Sismotectónico}
+\subsection{Coeficientes por mecanismo}
+Constante \texttt{GMPE\_COEFFICIENTS}, valores del manual anterior (\S5.1):
 
-\begin{itemize}
-  \item \textbf{Subducción Interplaca (Trinchera Mesoamericana):}
-    $c_1 = -1.85$, $c_2 = 0.92$, $c_3 = 1.15$, $c_4 = 0.0032\,\text{km}^{-1}$.
-  \item \textbf{Intraplaca en Placa de Cocos Subducida (Sismos Profundos):}
-    $c_1 = -1.55$, $c_2 = 0.96$, $c_3 = 1.25$, $c_4 = 0.0040\,\text{km}^{-1}$ (mayor contenido de alta frecuencia y menor atenuación por profundidad focal de 40 a 70 km).
-  \item \textbf{Cortical Somero (Fallas Locales):}
-    $c_1 = -1.95$, $c_2 = 0.88$, $c_3 = 1.05$, $c_4 = 0.0028\,\text{km}^{-1}$.
-\end{itemize}
-
-\subsection{Efecto de Sitio y Clasificación $V_{s30}$}
-
-La amplificación estratigráfica $S_{\text{sitio}}$ depende de la velocidad promedio de onda de corte en los primeros 30 metros de estrato:
-\begin{equation}
-  S_{\text{sitio}} = b_{\text{site}} \ln\left( \frac{V_{s30}}{V_{\text{ref}}} \right), \quad V_{\text{ref}} = 760\,\text{m/s}, \quad b_{\text{site}} = -0.45.
-\end{equation}
-
-\begin{itemize}
-  \item \textbf{Roca Firme ($V_{s30} \ge 760\,\text{m/s}$):} $S_{\text{sitio}} \approx 0.0$.
-  \item \textbf{Suelo Firme / Depósitos Aluviales ($V_{s30} \approx 450\,\text{m/s}$):} Amplificación moderada ($\sim 1.3\times$).
-  \item \textbf{Suelo Blando Lacustre ($V_{s30} \approx 100\,\text{m/s}$, Zona de Lago de la CDMX):} $S_{\text{sitio}} \approx 0.91$, lo que cuadruplica el valor de aceleración espectral debido al fenómeno de resonancia por bajo contraste de impedancias.
-\end{itemize}
-
-\section{Escala de Intensidad Mercalli Modificada (\texorpdfstring{$MMI$}{MMI})}
-
-Para traducir la aceleración cuantitativa a impacto perceptual y daños estructurales, se aplica la correlación de Worden et al. y Wald et al.:
-\begin{equation}
-  MMI(PGA_{\text{cgs}}) =
-  \begin{cases}
-    2.20 \log_{10}(PGA_{\text{cgs}}) + 1.00, & \text{si } PGA_{\text{cgs}} \le 4.22\,\text{cm/s}^2 \\[6pt]
-    3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66, & \text{si } PGA_{\text{cgs}} > 4.22\,\text{cm/s}^2
-  \end{cases}
-  \label{eq:mmi}
-\end{equation}
-donde $PGA_{\text{cgs}} = PGA_g \times 980.665$.
-
-\section{Zonificación de Riesgo Sísmico y Algoritmo de Bisección}
-
-El simulador define 4 categorías operativas de riesgo sísmico:
-
-\begin{table}[ht!]
+\begin{table}[h]
 \centering
-\small
-\begin{tabular}{@{}llccp{6.8cm}@{}}
+\begin{tabular}{lrrrr}
 \toprule
-\textbf{Nivel de Riesgo} & \textbf{Color UI} & \textbf{Intensidad $MMI$} & \textbf{Umbral $PGA$} & \textbf{Efectos Estructurales y Poblacionales} \\
+Mecanismo & $c_1$ & $c_2$ & $c_3$ & $c_4$ (km$^{-1}$) \\
 \midrule
-\textbf{Zona Destructiva} & Rojo (\#ef4444) & $\ge \text{VIII}$ & $\ge 0.34\,g$ & Daño severo y colapso de edificios; rotura masiva de redes hidráulicas y gasoductos; pánico total. \\
-\textbf{Zona de Daño Severo} & Naranja (\#f97316) & $\text{VI - VII}$ & $0.12 - 0.34\,g$ & Daño moderado en muros y cornisas; fisuras estructurales; objetos pesados desplazados. \\
-\textbf{Zona Moderada} & Ámbar (\#f59e0b) & $\text{IV - V}$ & $0.03 - 0.12\,g$ & Sentido ampliamente por toda la población; balanceo de lámparas y vajillas; sin daño estructural. \\
-\textbf{Zona de Percepción} & Azul (\#3b82f6) & $\text{II - III}$ & $0.005 - 0.03\,g$ & Sentido únicamente por personas en reposo o edificios elevados; límite instrumental. \\
+Subducción interplaca & $-1.85$ & 0.92 & 1.15 & 0.0032 \\
+Intraplaca (placa de Cocos) & $-1.55$ & 0.96 & 1.25 & 0.0040 \\
+Cortical somero & $-1.95$ & 0.88 & 1.05 & 0.0028 \\
 \bottomrule
 \end{tabular}
-\caption{Criterios cuantitativos de zonificación de riesgo sísmico en TerraPulse AI.}
-\label{tab:riesgo}
+\caption{Coeficientes de la ecuación~\eqref{eq:gmpe}. No tienen una fuente publicada verificada.}
 \end{table}
 
-Para cada umbral $PGA_{\text{umbral}}$, el radio de afectación $R_{\text{zona}}$ se calcula numéricamente mediante el método de bisección en el intervalo $[0, 1500\,\text{km}]$ con 30 iteraciones (precisión $< 0.01\,\text{km}$):
+\subsection{Saturación de campo cercano}
+Sin un término de saturación, la ecuación~\eqref{eq:gmpe} con $R$ hipocentral da valores imposibles
+junto a la fuente (14.5\,$g$ en el epicentro del escenario de 1985). Se adopta el término de
+distancia efectiva de Yenier y Atkinson (2015), que representa la extensión finita de la ruptura;
+función \texttt{nearSourceSaturationKm}:
 \begin{equation}
-  f(R) = PGA(R, M_w, h, \dots) - PGA_{\text{umbral}} = 0.
+  h_{\mathrm{sat}}(M_w) = 10^{-0.405 + 0.235\,M_w}\ \text{km}
+  \qquad (M_w\,7.1 \rightarrow 18.3\ \text{km};\ M_w\,8.1 \rightarrow 31.5\ \text{km}).
+\end{equation}
+Ese término fue calibrado con otro modelo de atenuación: aquí es una aproximación de la forma
+funcional, no una calibración. Lejos de la fuente casi no cambia el resultado (menos de 3\,\% a 300\,km
+para $M_w$\,8.1, verificado en las pruebas).
+
+\subsection{Tope de 2.5\,g}
+\label{sec:tope}
+Aun con saturación, cinco de los seis escenarios históricos superan 2.5\,$g$ en el epicentro
+(tabla~\ref{tab:escenarios}); el tope de 2.5\,$g$ se mantiene como salvaguarda. Que el tope actúe tan
+seguido indica que los coeficientes sobrestiman el movimiento cerca de la fuente
+(sección~\ref{sec:limitaciones}).
+
+\subsection{Efecto de sitio}
+Funciones \texttt{siteAmplification} y \texttt{effectiveVs30}:
+\begin{equation}
+  S_{\mathrm{sitio}} =
+  \begin{cases}
+    b \ln\!\left(V_{s30}/V_{\mathrm{ref}}\right) & V_{s30} < V_{\mathrm{ref}}\\
+    0 & V_{s30} \ge V_{\mathrm{ref}}
+  \end{cases}
+  \qquad V_{\mathrm{ref}} = 760\ \text{m/s},\quad b = -0.45 .
 \end{equation}
 
-A partir de $R_{\text{zona}}$, se genera un anillo geodésico sobre la esfera terrestre evaluando 64 vértices mediante trigonometría esférica de punto directo:
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Clase de suelo & $V_{s30}$ (m/s) & $S_{\mathrm{sitio}}$ & Factor $e^{S}$ \\
+\midrule
+Roca firme & 760 & 0 & 1.00 \\
+Suelo firme / aluvial & 450 & 0.236 & 1.27 \\
+Suelo blando lacustre (CDMX) & 100 & 0.913 & 2.49 \\
+\bottomrule
+\end{tabular}
+\caption{Valores representativos (\texttt{SOIL\_VS30}). El manual anterior decía que el suelo lacustre
+``cuadruplica'' la aceleración; con su propia ecuación el factor es 2.49.}
+\end{table}
+
+\section{Intensidad Mercalli}
+
+Relaciones de Wald et al.\ (1999), con PGA en cm/s$^2$; función \texttt{pgaToMmi}:
+\begin{equation}
+  \mathrm{MMI} =
+  \begin{cases}
+    2.20\log_{10}\mathrm{PGA} + 1.00 & \mathrm{PGA} \le \mathrm{PGA}_\times\\
+    3.66\log_{10}\mathrm{PGA} - 1.66 & \mathrm{PGA} > \mathrm{PGA}_\times
+  \end{cases}
+  \qquad
+  \mathrm{PGA}_\times = 10^{2.66/1.46} \approx 66.4\ \text{cm/s}^2 ,
+\end{equation}
+acotada a $[1,\ 10.5]$. $\mathrm{PGA}_\times$ es donde se cruzan las dos rectas (MMI $\approx$ V), de
+modo que la escala es continua y creciente. El manual anterior ponía el corte en 4.22\,cm/s$^2$: ahí la
+intensidad saltaba de 2.4 a 1.0 al aumentar la aceleración, y el umbral de 0.005\,$g$ daba MMI~I.
+
+\section{Zonificación}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llrr}
+\toprule
+Zona & Color & Umbral PGA & MMI del umbral \\
+\midrule
+Destructiva & rojo \texttt{\#ef4444} & $\ge 0.34\,g$ & 7.57 \\
+Daño fuerte a moderado & naranja \texttt{\#f97316} & $0.12\,g$ & 5.92 \\
+Percepción fuerte a moderada & ámbar \texttt{\#eab308} & $0.03\,g$ & 4.23 \\
+Percepción débil & azul \texttt{\#3b82f6} & $0.005\,g$ & 2.52 \\
+\bottomrule
+\end{tabular}
+\caption{Anillos de afectación. Con la MMI corregida, cada umbral cae en el rango de intensidad de su
+zona (VIII+, VI--VII, IV--V, II--III).}
+\end{table}
+
+Para cada umbral, el radio $R_{\mathrm{zona}}$ resuelve $\mathrm{PGA}(R_{\mathrm{zona}}) - \mathrm{PGA}_{\mathrm{umbral}} = 0$
+por bisección en $[0,\ 1500]$\,km con 30 iteraciones (función \texttt{solveDistanceForPga}), redondeado
+a 0.1\,km. Si la PGA epicentral no alcanza el umbral, la zona no se dibuja. El anillo es un círculo de
+64 vértices sobre la esfera de radio 6371\,km (función \texttt{generateGeodesicCircle}):
 \begin{align}
-  \phi_i &= \arcsin\left( \sin\phi_e \cos\delta + \cos\phi_e \sin\delta \cos\theta_i \right), \\
-  \lambda_i &= \lambda_e + \text{atan2}\left( \sin\theta_i \sin\delta \cos\phi_e, \; \cos\delta - \sin\phi_e \sin\phi_i \right),
+  \phi_i &= \arcsin(\sin\phi_e\cos\delta + \cos\phi_e\sin\delta\cos\theta_i),\\
+  \lambda_i &= \lambda_e + \operatorname{atan2}(\sin\theta_i\sin\delta\cos\phi_e,\ \cos\delta - \sin\phi_e\sin\phi_i),
 \end{align}
-donde $\delta = R_{\text{zona}} / R_T$ y $\theta_i = \frac{2\pi i}{64}$.
+con $\delta = R_{\mathrm{zona}}/R_T$ y $\theta_i = 2\pi i/64$. Todo el escenario usa un único
+$V_{s30}$: los anillos no reflejan cambios de suelo dentro de la región.
 
-\section{Formulación Analítica del Sismograma Sintético \texorpdfstring{$a(t, D)$}{a(t, D)}}
+\section{Sismograma sintético}
 
-Para reproducir fielmente la señal oscilatoria que registra una estación sísmica a distancia epicentral $D$, el simulador genera la serie temporal:
+Función \texttt{synthesizeSeismogram}. Para una estación a distancia epicentral $D$, con PGA$(D)$ de
+la ecuación~\eqref{eq:gmpe} evaluada con el $V_{s30}$ de la estación:
 \begin{equation}
-  a(t, D) = a_{\text{ruido}}(t) + a_P(t, D) + a_S(t, D).
-  \label{eq:sismograma}
+  a(t) = a_{\mathrm{fondo}}(t) + a_P(t) + a_S(t), \qquad t = i/f_m,\quad f_m = 50\ \text{Hz}.
 \end{equation}
 
-\subsection{Paquete de Onda Primaria (\texorpdfstring{$P$}{P})}
-Arriba en $t_P = \sqrt{D^2 + h^2} / 6.0$. Posee una vibración compresional de alta frecuencia ($f_P = 4.5\,\text{Hz}$) y baja amplitud ($\sim 22\%$ de $PGA$):
-\begin{equation}
-  a_P(t, D) = 0.22 \cdot PGA(D) \cdot \sin(2\pi f_P (t - t_P)) \cdot \cos(0.3\pi f_P (t - t_P)) \cdot \exp\left(-\frac{t - t_P}{3.2}\right) \cdot \mathcal{H}(t - t_P).
-\end{equation}
+\textbf{Fondo:} $a_{\mathrm{fondo}} = \mathrm{PGA}\,[0.0012\sin(11.2t + 0.3) + 0.0006\cos(23.7t)]$.
+Son dos senos fijos de 1.78 y 3.77\,Hz, no ruido aleatorio; en el espectrograma aparecen como líneas
+tenues horizontales.
 
-\subsection{Paquete de Onda Secundaria (\texorpdfstring{$S$}{S}) y Ondas Superficiales}
-Arriba en $t_S = \sqrt{D^2 + h^2} / 3.5$. Concentra el 80\% de la energía cinética destructiva, alcanzando el valor pico $PGA(D)$:
+\textbf{Onda P}, para $t_P \le t < t_S$, con $f_P = 4.5$\,Hz y $\tau = t - t_P$:
 \begin{equation}
-  a_S(t, D) = PGA(D) \cdot E_S(t - t_S) \cdot \Big[ 0.82 \sin(2\pi f_S (t - t_S)) + 0.18 \sin(4\pi f_S (t - t_S) + 0.6) \Big] \cdot \mathcal{H}(t - t_S),
+  a_P = 0.22\,\mathrm{PGA}\,\sin(2\pi f_P \tau)\cos(0.3\pi f_P \tau)\,e^{-\tau/3.2}.
 \end{equation}
-con la envolvente $E_S(\tau)$:
+Por la identidad $\sin x\cos y = \tfrac12[\sin(x+y) + \sin(x-y)]$, su energía está en
+$0.85 f_P \approx 3.8$\,Hz y $1.15 f_P \approx 5.2$\,Hz, no en un solo pico de 4.5\,Hz.
+
+\textbf{Onda S}, para $t \ge t_S$, con $\tau = t - t_S$:
 \begin{equation}
+  a_S = \mathrm{PGA}\,E_S(\tau)\,[0.82\sin(2\pi f_S\tau) + 0.18\sin(4\pi f_S \tau + 0.6)],
+  \qquad
   E_S(\tau) =
   \begin{cases}
-    \dfrac{\tau}{1.8}, & 0 \le \tau \le 1.8\,\text{s} \\[8pt]
-    \exp\left(-\dfrac{\tau - 1.8}{\tau_{\text{coda}}}\right), & \tau > 1.8\,\text{s}.
+    \tau/1.8 & 0 \le \tau \le 1.8\ \text{s}\\
+    e^{-(\tau - 1.8)/\tau_{\mathrm{coda}}} & \tau > 1.8\ \text{s}
   \end{cases}
 \end{equation}
+La frecuencia y la coda dependen del $V_{s30}$ de la estación (función \texttt{siteWaveParams}):
 
-\subsection{Efecto de Resonancia en Cuenca Lacustre (CDMX)}
-En depósitos lacustres blandos ($V_{s30} < 180\,\text{m/s}$), el contraste de impedancia acústica entre el basamento rocoso y las arcillas de alta compresibilidad atrapa las ondas sísmicas. En el simulador, esto se modela reduciendo la frecuencia fundamental a $f_S = 0.52\,\text{Hz}$ (período característico $T_0 \approx 1.9 - 2.0\,\text{s}$) y elevando el tiempo de decaimiento a $\tau_{\text{coda}} = 28.0\,\text{s}$. Esto reproduce fielmente las sacudidas armónicas de gran persistencia observadas en 1985 y 2017.
-
-\section{Presets Históricos Mexicanos Precalibrados}
-
-El sistema incluye 6 escenarios históricos calibrados para validación analítica:
-\begin{enumerate}
-  \item \textbf{1985 -- Michoacán / Costa del Pacífico ($M_w 8.1$, $h=15\,\text{km}$):} Ruptura de subducción en la Trinchera Mesoamericana. Generó severa resonancia y colapso estructural en la Ciudad de México a 350 km de distancia.
-  \item \textbf{2017 -- Puebla / Morelos ($M_w 7.1$, $h=57\,\text{km}$):} Falla normal intraplaca profunda en el slab de Cocos. Altas aceleraciones destructivas de alta frecuencia en Morelos, Puebla y el Valle de México.
-  \item \textbf{2017 -- Golfo de Tehuantepec ($M_w 8.2$, $h=45\,\text{km}$):} El sismo de mayor magnitud registrado en México en un siglo. Falla normal intraplaca con extensa zona de ruptura en Oaxaca y Chiapas.
-  \item \textbf{2021 -- Acapulco / Guerrero ($M_w 7.1$, $h=10\,\text{km}$):} Subducción somera en la brecha de Guerrero con fuerte aceleración en la costa y activación de alerta temprana en CDMX.
-  \item \textbf{2022 -- Coalcomán / Michoacán ($M_w 7.7$, $h=15\,\text{km}$):} Ruptura interplaca con afectaciones en Colima, Michoacán y alerta sísmica en la zona centro.
-  \item \textbf{2010 -- Mexicali / Baja California ($M_w 7.2$, $h=10\,\text{km}$):} Falla cortical de rumbo lateral (sistema Laguna Salada / San Andrés).
-\end{enumerate}
-
-\section{Mapeo Sinóptico entre Ecuaciones y Funciones del Código}
-
-\begin{table}[ht!]
+\begin{table}[h]
 \centering
-\small
-\begin{tabular}{@{}lllp{5.5cm}@{}}
+\begin{tabular}{lrrl}
 \toprule
-\textbf{Magnitud Física} & \textbf{Símbolo / Ecuación} & \textbf{Unidad} & \textbf{Función en TypeScript (\texttt{seismic.ts})} \\
+$V_{s30}$ de la estación & $f_S$ (Hz) & $\tau_{\mathrm{coda}}$ (s) & Origen \\
 \midrule
-Distancia Epicentral & $D = 2 R_T \arcsin(\dots)$ & km & Trigonometría esférica Haversine \\
-Distancia Hipocentral & $R = \sqrt{D^2 + h^2}$ & km & \texttt{Math.sqrt(dist*dist + depthKm*depthKm)} \\
-Aceleración Pico & $\ln(PGA) = c_1 + c_2 M_w - c_3 \ln R - c_4 R + S$ & $g$ & \texttt{computePga\_g(...)} \\
-Aceleración en CGS & $PGA_{\text{cgs}} = PGA_g \times 980.665$ & $\text{cm/s}^2$ & \texttt{pga\_g * 980.665} \\
-Escala Mercalli & $MMI = 3.66 \log_{10}(PGA_{\text{cgs}}) - 1.66$ & I a X+ & \texttt{pgaToMmi(pga\_g)} \\
-Tiempo de Onda P & $t_P = R / 6.0$ & s & \texttt{tP = hypoDist / 6.0} \\
-Tiempo de Onda S & $t_S = R / 3.5$ & s & \texttt{tS = hypoDist / 3.5} \\
-Ventana Alerta SASMEX & $\Delta t = t_S - t_P$ & s & \texttt{Math.max(0, tS - tP)} \\
-Sismograma $a(t)$ & $a(t) = a_{\text{ruido}} + a_P(t) + a_S(t)$ & $g$, Gal & \texttt{generateSyntheticSeismogram(...)} \\
-Radios de Afectación & $\text{Bisección: } PGA(R_{\text{zona}}) = PGA_{\text{umbral}}$ & km & \texttt{solveDistanceForPga(...)} \\
-Polígono Isosisma & Proyección geodésica $64$ nodos & LngLat[] & \texttt{generateGeodesicCircle(center, rKm, 64)} \\
+$< 180$ m/s (cuenca lacustre) & 0.52 & 28.0 & manual, \S8.3 ($T_0 \approx 1.9$ s) \\
+$180$ a $< 760$ m/s & 1.3 & 14.0 & código original; el manual no lo especifica \\
+$\ge 760$ m/s & 2.2 & 9.0 & código original; el manual no lo especifica \\
 \bottomrule
 \end{tabular}
-\caption{Correspondencia exacta entre el modelo físico analítico y las rutinas de cálculo del código fuente.}
-\label{tab:mapeo}
 \end{table}
 
-\section{Conclusiones}
+\textbf{Muestreo y duración.} $f_m = 50$\,Hz (Nyquist 25\,Hz, por encima de la onda $P$). La versión
+anterior usaba 240 muestras en 45\,s o más (unas 5 por segundo), insuficiente para la onda $P$. La
+duración es $\max(45,\ \lceil t_S + 45\rceil)$\,s en cuenca lacustre y $\max(45,\ \lceil t_S + 30\rceil)$\,s
+en otros suelos. El pico de $a(t)$ queda entre 0.75 y 1 veces la PGA del modelo.
 
-La integración de la elastodinámica continua con las leyes regionales de atenuación GMPE y la resonancia estratigráfica permite que el Simulador de Terremotos de TerraPulse AI proporcione una herramienta analítica confiable, científicamente rigurosa y visualmente accesible en tiempo real tanto en cartografía vectorial como en análisis de series temporales.
+\section{Espectrograma}
+
+Funciones \texttt{computeSpectrogram} y \texttt{fft}. Transformada de Fourier de tiempo corto con
+ventana de Hann de $N = 2^{\lceil \log_2(4 f_m)\rceil}$ muestras (256 a 50\,Hz: 5.12\,s, resolución
+0.195\,Hz) y paso $N/8$ (87.5\,\% de traslape):
+\begin{equation}
+  P(m, k) = 10\log_{10}\Bigl|\sum_{n=0}^{N-1} a(mH + n)\,w(n)\,e^{-2\pi i k n/N}\Bigr|^2 \ \text{dB},
+  \qquad w(n) = \tfrac12 - \tfrac12\cos\frac{2\pi n}{N-1}.
+\end{equation}
+Se muestra en dB relativos al máximo, con 60\,dB de rango dinámico y la paleta \emph{inferno}, hasta
+15\,Hz en el sintético y hasta $\min(25\ \text{Hz},\ f_m/2)$ en un registro real. El eje de tiempo es
+el mismo que el de $a(t)$, y las llegadas $P$ y $S$ y la ventana de alerta se marcan en ambos paneles.
+Con esta ventana se separan la resonancia de cuenca (0.52\,Hz) y la onda $P$ (3.8--5.2\,Hz); a cambio,
+los cambios rápidos se difuminan unos 5\,s en el tiempo.
+
+\section{Comparación con un registro real}
+
+\textbf{Lectura} (\texttt{parseAccelerogram}). Archivo de texto con una o varias columnas numéricas
+separadas por coma, punto y coma, tabulador o espacios; las líneas no numéricas iniciales se muestran
+como encabezado. Si la primera de varias columnas crece con paso constante, se toma como tiempo y
+define $\Delta t$; si no, se busca el intervalo de muestreo en el encabezado (palabras ``muestreo'',
+``sampling'', ``dt'' o ``delta''). El usuario confirma componente, $\Delta t$ y unidades (gal, $g$ o
+m/s$^2$). El archivo se lee en el navegador y no se envía a ningún servidor.
+
+\textbf{Preparación.} Se convierte a $g$ y se le quita la media. No se filtra ni se corrige la línea
+base más allá de eso.
+
+\textbf{Métricas} (modelo frente a registro):
+\begin{itemize}
+  \item PGA: máximo de $|a(t)|$ (en el modelo, la PGA de la GMPE).
+  \item Frecuencia dominante (\texttt{dominantFrequencyHz}): máximo del espectro de amplitud con ventana
+        de Hann y ceros hasta al menos 8 veces la longitud. En el modelo se calcula desde $t_S$.
+  \item Duración significativa D5--95 (\texttt{significantDurationSec}; Trifunac y Brady, 1975): tiempo
+        entre el 5\,\% y el 95\,\% de $\int a^2\,dt$, proporcional a la intensidad de Arias (Arias, 1970).
+\end{itemize}
+Para que la comparación tenga sentido, el usuario debe ajustar el escenario (magnitud, profundidad,
+mecanismo) y la estación (distancia y $V_{s30}$) a los del sismo y la estación reales. El tiempo del
+registro es el de su archivo, no el del origen del sismo.
+
+\section{Estación en el mapa}
+
+En la pestaña \emph{Sismograma y Espectrograma}, el botón ``Elegir estación en el mapa'' hace que el
+siguiente clic coloque la estación (punto verde). La distancia se calcula con la
+ecuación~\eqref{eq:haversine} y la estación tiene su propio $V_{s30}$, que afecta a su PGA, a $f_S$ y a
+la coda. Así se puede representar un epicentro en roca y una estación en suelo lacustre, como en 1985.
+Al elegir una distancia predefinida, la estación se quita.
+
+\section{Escenarios históricos y resultados del modelo}
+
+Los escenarios están en \texttt{HISTORICAL\_SEISMIC\_PRESETS}. Las cifras siguientes son las que
+calcula el módulo con su suelo predefinido; \textbf{no son valores observados}.
+
+\begin{table}[h]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrrllrrl}
+\toprule
+Escenario & $M_w$ & $h$ (km) & Mecanismo & Suelo & PGA ep.\ sin tope & PGA ep. & Radios (km) \\
+\midrule
+Michoacán 1985 & 8.1 & 15 & subducción & 450 & 5.16\,$g$ & 2.50\,$g$ & 218 / 364 / 612 / 998 \\
+Puebla--Morelos 2017 & 7.1 & 57 & intraplaca & 760 & 0.91\,$g$ & 0.91\,$g$ & 95 / 187 / 352 / 625 \\
+Tehuantepec 2017 & 8.2 & 45 & intraplaca & 760 & 2.91\,$g$ & 2.50\,$g$ & 190 / 309 / 506 / 810 \\
+Acapulco 2021 & 7.1 & 10 & subducción & 450 & 3.88\,$g$ & 2.50\,$g$ & 127 / 235 / 442 / 793 \\
+Coalcomán 2022 & 7.7 & 15 & subducción & 450 & 4.41\,$g$ & 2.50\,$g$ & 178 / 309 / 542 / 914 \\
+Mexicali 2010 & 7.2 & 10 & cortical & 760 & 2.97\,$g$ & 2.50\,$g$ & 127 / 250 / 493 / 905 \\
+\bottomrule
+\end{tabular}
+\caption{Resultados del modelo. Suelo como $V_{s30}$ en m/s. Radios de las zonas destructiva, de daño,
+de percepción moderada y de percepción débil.}
+\label{tab:escenarios}
+\end{table}
+
+\textbf{Ejemplo: 1985 con la estación en la Ciudad de México.} Epicentro del escenario de 1985,
+estación a 350\,km:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrrr}
+\toprule
+$V_{s30}$ estación & PGA & MMI & $f$ dominante & D5--95 & $t_S$ \\
+\midrule
+760 m/s & 0.104\,$g$ (102 gal) & 5.7 (VI) & 2.20 Hz & 13.3 s & 100.1 s \\
+450 m/s & 0.131\,$g$ (129 gal) & 6.1 (VI) & 1.30 Hz & 19.1 s & 100.1 s \\
+100 m/s & 0.258\,$g$ (253 gal) & 7.1 (VII) & 0.52 Hz & 33.4 s & 100.1 s \\
+\bottomrule
+\end{tabular}
+\caption{El suelo lacustre amplifica la PGA unas 2.5 veces, baja la frecuencia a la resonancia de
+cuenca y alarga el movimiento fuerte. Cifras del modelo, no observadas.}
+\end{table}
+
+\section{Correcciones respecto al manual del 17 de noviembre de 2026}
+
+\begin{enumerate}
+  \item \textbf{Coeficientes por mecanismo y efecto de sitio:} el código no usaba los del manual
+        (intraplaca y cortical solo ajustaban un coeficiente; el suelo tenía tres valores fijos y daba
+        $-0.15$ en roca). Ahora sigue el manual: tabla de coeficientes completa y $S_{\mathrm{sitio}}$
+        por $V_{s30}$.
+  \item \textbf{M$_0$} (ec.~1 del manual): ahora se calcula y se muestra.
+  \item \textbf{Alerta:} la interfaz mostraba $t_S - t_P$ como ``alerta SASMEX''. Ahora muestra la
+        ecuación~\eqref{eq:alerta} rotulada ``desde el origen'' y, aparte, la ventana $t_S - t_P$.
+  \item \textbf{Estación:} el manual decía que la elige el usuario; antes solo había una distancia.
+  \item \textbf{MMI discontinua:} el corte pasó de 4.22 a 66.4\,cm/s$^2$.
+  \item \textbf{Saturación:} se añadió $h_{\mathrm{sat}}(M_w)$; el tope de 2.5\,$g$, que el manual no
+        mencionaba, queda documentado.
+  \item \textbf{Muestreo del sismograma:} de unas 5 a 50 muestras por segundo.
+  \item \textbf{Clic del mapa:} mover el epicentro usaba una copia antigua del estado y deshacía otros
+        cambios del escenario.
+  \item \textbf{Errores del texto del manual:} ``cuadruplica'' (el factor es 2.49);
+        ``$\nu = 0.25\lambda = \mu$'' (debe ser $\nu = 0.25$, $\lambda = \mu$); la justificación de la
+        intraplaca (``menor atenuación'') contradice sus coeficientes, que atenúan más; decía ``elipsoide
+        WGS84'' pero las fórmulas son esféricas; la ecuación de la envolvente y dos tablas salían mal
+        compuestas y la sección de correspondencia estaba vacía.
+\end{enumerate}
+
+\section{Limitaciones conocidas}
+\label{sec:limitaciones}
+
+\begin{itemize}
+  \item \textbf{Coeficientes sin fuente verificada.} El manual atribuye la GMPE a ``Ordaz, García,
+        Boore--Atkinson'', pero no cita las publicaciones ni los coeficientes coinciden con una ecuación
+        publicada que se haya verificado. Que el tope de 2.5\,$g$ actúe en cinco de seis escenarios indica
+        que sobrestiman el movimiento cerca de la fuente. Para resultados cuantitativos conviene sustituirla
+        por una GMPE publicada para México, tomando los coeficientes directamente del artículo.
+  \item \textbf{Saturación aproximada:} $h_{\mathrm{sat}}$ proviene de otro modelo.
+  \item \textbf{Sin variabilidad:} una GMPE real tiene una desviación estándar de un factor 2 o más; aquí
+        cada escenario da un único valor.
+  \item \textbf{Un solo $V_{s30}$ para los anillos} y fuente puntual: sin directividad ni geometría de la
+        ruptura.
+  \item \textbf{Sismograma analítico:} reproduce rasgos cualitativos (llegadas, frecuencia por suelo,
+        coda), no la forma de un registro.
+  \item \textbf{Alerta:} la ecuación~\eqref{eq:alerta} no es el tiempo de anticipación real del SASMEX.
+\end{itemize}
+
+\section{Correspondencia entre ecuaciones y código}
+
+\begin{longtable}{>{\raggedright}p{5cm} p{10cm}}
+\toprule
+Magnitud & Función o constante (\path{web/src/utils/}) \\
+\midrule
+\endhead
+$M_0$ & \texttt{seismicMomentDynCm} (\path{seismic.ts}) \\
+$D$, $R$ & \texttt{haversineDistanceKm}; \texttt{Math.sqrt(D*D + h*h)} \\
+$h_{\mathrm{sat}}$ & \texttt{nearSourceSaturationKm} \\
+PGA & \texttt{computePga\_g}, \texttt{GMPE\_COEFFICIENTS} \\
+$S_{\mathrm{sitio}}$, $V_{s30}$ & \texttt{siteAmplification}, \texttt{effectiveVs30}, \texttt{SOIL\_VS30} \\
+MMI & \texttt{pgaToMmi}, \texttt{MMI\_BREAKPOINT\_GAL}, \texttt{mmiToRoman} \\
+$t_P$, $t_S$, $\Delta t$ & \texttt{VP\_KM\_S}, \texttt{VS\_KM\_S} en \texttt{runSeismicSimulation} y \texttt{synthesizeSeismogram} \\
+$T_{\mathrm{alerta}}$ & \texttt{sasmexAlertTimeSec}, \texttt{SASMEX\_PROCESS\_SEC} \\
+Radios y anillos & \texttt{solveDistanceForPga}, \texttt{generateGeodesicCircle} \\
+$a(t)$ & \texttt{synthesizeSeismogram}, \texttt{siteWaveParams} \\
+Espectrograma & \texttt{computeSpectrogram}, \texttt{fft} (\path{signal.ts}) \\
+$f$ dominante, D5--95 & \texttt{dominantFrequencyHz}, \texttt{significantDurationSec} (\path{signal.ts}) \\
+Registro real & \texttt{parseAccelerogram}, \texttt{toAccelG} (\path{accelerogram.ts}) \\
+\bottomrule
+\end{longtable}
+
+\section{Pruebas}
+
+Desde \path{web/}: \texttt{node --test tests/}.
+\begin{itemize}
+  \item \path{tests/seismicModel.test.mjs}: coeficientes, $S_{\mathrm{sitio}}$ (760, 450, 100\,m/s),
+        ecuación~\eqref{eq:gmpe} con saturación por mecanismo, $M_0$, alerta (88.5\,s a 320\,km),
+        $f_S$ por $V_{s30}$, estación con su $V_{s30}$, MMI continua y coherente con los umbrales, PGA
+        decreciente con la distancia y orden de los radios.
+  \item \path{tests/seismicSignal.test.mjs}: muestreo a 50\,Hz, ausencia de señal antes de $t_P$, pico
+        frente a la PGA, líneas de la onda $P$ en $0.85f_P$ y $1.15f_P$, resonancia de 0.52\,Hz,
+        espectrograma de un seno, D5--95 y lectura de archivos en varios formatos.
+\end{itemize}
+Las pruebas verifican que el código implementa las ecuaciones de este documento, no que el modelo
+reproduzca sismos reales.
+
+\section*{Referencias}
+\begin{itemize}
+  \item Arias, A. (1970). A measure of earthquake intensity. En R.~J.~Hansen (ed.), \emph{Seismic Design
+        for Nuclear Power Plants}, MIT Press, 438--483.
+  \item Hanks, T.~C. y Kanamori, H. (1979). A moment magnitude scale. \emph{Journal of Geophysical
+        Research}, 84(B5), 2348--2350.
+  \item Trifunac, M.~D. y Brady, A.~G. (1975). A study on the duration of strong earthquake ground motion.
+        \emph{Bulletin of the Seismological Society of America}, 65(3), 581--626.
+  \item Wald, D.~J., Quitoriano, V., Heaton, T.~H. y Kanamori, H. (1999). Relationships between peak
+        ground acceleration, peak ground velocity, and Modified Mercalli Intensity in California.
+        \emph{Earthquake Spectra}, 15(3), 557--564.
+  \item Yenier, E. y Atkinson, G.~M. (2015). Regionally adjustable generic ground-motion prediction
+        equation based on equivalent point-source simulations: application to central and eastern North
+        America. \emph{Bulletin of the Seismological Society of America}, 105(4), 1989--2009.
+\end{itemize}
 
 \end{document}

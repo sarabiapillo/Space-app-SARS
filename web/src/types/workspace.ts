@@ -138,6 +138,14 @@ export interface SeismicSimulationState {
   name: string
   mechanism: 'subduction' | 'intraplate' | 'crustal'
   soilType: 'rock' | 'intermediate' | 'soft_lacustrine'
+  /** Vs30 (m/s) del escenario; si falta, el representativo de soilType. */
+  vs30?: number
+  /** Estación receptora del sismograma, elegida con un clic en el mapa. */
+  station?: LngLat | null
+  /** Vs30 (m/s) de la estación; si falta, el del escenario. */
+  stationVs30?: number | null
+  /** Mientras es true, el siguiente clic en el mapa coloca la estación. */
+  pickingStation?: boolean
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */

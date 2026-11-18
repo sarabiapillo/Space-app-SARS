@@ -17,7 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import NotFound, ValidationError
 
-from pipeline.roi_explore import validate_roi, cache_key, write_json
+from pipeline.roi_explore import validate_roi, cache_key, write_json, recompute_change, ChangeBusy
 from pipeline.catalog import code_version
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -164,6 +164,15 @@ class RoiPrepare(APIView):
         return Response({'id': key}, status=202)
 
 
+def asset_urls(manifest, path, job_id):
+    """Cambia las rutas png/cog del manifiesto por URLs de RoiAsset (sin exponer rutas del servidor)."""
+    for layer in manifest['capas']:
+        for kind in ('png', 'cog'):
+            relative = (ROOT / layer[kind]).resolve().relative_to(path.resolve()).as_posix()
+            layer[kind] = f'api/roi-jobs/{job_id}/assets/{relative}'
+    return manifest
+
+
 class RoiStatus(APIView):
     def get(self, request, job_id):
         path = job_dir(job_id)
@@ -176,10 +185,7 @@ class RoiStatus(APIView):
             result = json.loads((path / 'result.json').read_text(encoding='utf-8'))
             # Capas de cada fecha y, si hay par comparable, las del mapa de cambio (layers/cambio/).
             for manifest in [*result['manifests'], *([result['change']] if result.get('change') else [])]:
-                for layer in manifest['capas']:
-                    for kind in ('png', 'cog'):
-                        relative = (ROOT / layer[kind]).resolve().relative_to(path.resolve()).as_posix()
-                        layer[kind] = f'api/roi-jobs/{job_id}/assets/{relative}'
+                asset_urls(manifest, path, job_id)
             data.update(result)
             copia = path / 'copia.json'
             data['copia'] = (json.loads(copia.read_text(encoding='utf-8')) if copia.is_file()
@@ -194,3 +200,22 @@ class RoiAsset(APIView):
         if not path.is_relative_to(root) or path.suffix not in ('.png', '.tif') or not path.is_file():
             raise NotFound()
         return FileResponse(path.open('rb'))
+
+
+class RoiChange(APIView):
+    """Recalcula el mapa de cambio de una ROI lista con otro multilook o umbral (ver docs/api-roi-jobs.md)."""
+
+    def post(self, request, job_id):
+        path = job_dir(job_id)
+        status = path / 'status.json'
+        if not status.is_file() or json.loads(status.read_text(encoding='utf-8')).get('status') != 'ready':
+            return Response({'detail': 'La ROI todavía no está lista.'}, status=409)
+        if not isinstance(request.data, dict) or 'multilook' not in request.data or 'umbral_dB' not in request.data:
+            raise ValidationError({'detail': 'Se requiere un objeto JSON con multilook y umbral_dB.'})
+        try:
+            manifest = recompute_change(path, request.data['multilook'], request.data['umbral_dB'])
+        except ChangeBusy as exc:
+            return Response({'detail': str(exc)}, status=409)
+        except ValueError as exc:
+            raise ValidationError({'detail': str(exc)})
+        return Response(asset_urls(manifest, path, job_id))

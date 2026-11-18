@@ -161,3 +161,74 @@ def test_diverging_png_colors(tmp_path):
     assert r[0, 1] > 240 and g[0, 1] > 240 and b[0, 1] > 240   # cero → blanco
     assert r[0, 2] > b[0, 2]                       # positivo → rojo
     assert a[0, 3] == 0
+
+
+# --- Ruido de referencia y Δ desde potencia lineal (ROI con multilook y umbral configurables) ---
+
+def test_noise_reference_flags_threshold_close_to_noise():
+    rng = np.random.default_rng(0)
+    d = rng.normal(0.0, 1.2, 10_000).astype("float32")      # ruido ~1.2 dB: 3 dB < 3 × ruido
+    ref = ch.noise_reference(d, ch.robust_zscore(d), threshold_db=3.0)
+    assert ref["ruido_dB"] == pytest.approx(1.2, rel=0.05)
+    assert ref["umbral_sobre_ruido"] == pytest.approx(3.0 / ref["ruido_dB"])
+    assert ref["umbral_cerca_del_ruido"] is True
+    assert 0 < ref["pct_abs_z_mayor_3"] < 1                  # ~0.27 % de una normal
+    quiet = d * 0.25                                         # ~0.3 dB: 3 dB ≈ 10 × ruido
+    assert ch.noise_reference(quiet, ch.robust_zscore(quiet), threshold_db=3.0)["umbral_cerca_del_ruido"] is False
+
+
+def test_noise_reference_without_valid_pixels():
+    d = np.full((2, 2), np.nan, "float32")
+    ref = ch.noise_reference(d, d, threshold_db=3.0)
+    assert ref["ruido_dB"] is None and ref["umbral_cerca_del_ruido"] is None
+
+
+def _lin_cog(path, arr, transform):
+    return _db_cog(path, arr, transform)
+
+
+def test_change_from_linear_cogs_multilooks_power_before_db(tmp_path):
+    from rasterio.transform import from_origin
+    t = from_origin(500000, 1850000, 10, 10)
+    a = np.full((10, 10), 0.1, "float32")
+    b = a.copy()
+    b[:5, :5] = 0.01                                        # un bloque 5×5 baja 10 dB
+    b[9, 9] = np.nan                                        # 1 de 25 sin dato: el bloque sigue válido
+    pairs = {"HH": (_lin_cog(tmp_path / "h1.tif", a, t), _lin_cog(tmp_path / "h2.tif", b, t))}
+    info = ch.change_from_linear_cogs(pairs, tmp_path / "c", t1_id="A", t2_id="B", magnitude="gamma0",
+                                      looks=5, threshold_db=3.0, roi_wkt=ROI_ALL, web_scale_db=6.0)
+    assert info["multilook"] == 5 and info["pixel_m"] == 50.0
+    assert info["capas"][0]["pixel_m"] == 50.0
+    with rasterio.open(tmp_path / "c" / "delta_HH_dB.tif") as src:
+        d = src.read(1)
+        assert src.res == (50.0, 50.0) and d.shape == (2, 2)
+    assert d[0, 0] == pytest.approx(-10.0, abs=1e-4) and d[1, 1] == pytest.approx(0.0, abs=1e-4)
+    m = info["metricas"]["HH"]
+    assert m["area_disminucion_km2"] == pytest.approx(2500 / 1e6)
+    assert "ruido_dB" in m and "pct_abs_z_mayor_3" in m and "umbral_cerca_del_ruido" in m
+    meta = json.loads((tmp_path / "c" / "change.json").read_text(encoding="utf-8"))
+    assert meta["parametros"]["multilook_metodo"] == "promedio de potencia lineal n×n antes del dB"
+    assert meta["parametros"]["pixel_m"] == 50.0
+
+
+def test_change_from_linear_cogs_rejects_different_grids(tmp_path):
+    from rasterio.transform import from_origin
+    a = np.ones((4, 4), "float32")
+    pairs = {"HH": (_lin_cog(tmp_path / "1.tif", a, from_origin(500000, 1850000, 10, 10)),
+                    _lin_cog(tmp_path / "2.tif", a, from_origin(500010, 1850000, 10, 10)))}
+    with pytest.raises(ValueError, match="malla"):
+        ch.change_from_linear_cogs(pairs, tmp_path / "c", t1_id="A", t2_id="B", magnitude="gamma0",
+                                   looks=2, threshold_db=3.0, roi_wkt=ROI_ALL)
+
+
+def test_manifest_warns_when_threshold_is_close_to_noise(tmp_path):
+    from rasterio.transform import from_origin
+    t = from_origin(500000, 1850000, 10, 10)
+    rng = np.random.default_rng(1)
+    a = np.full((40, 40), 0.1, "float32")
+    b = (a * 10 ** (rng.normal(0, 2.0, a.shape) / 10)).astype("float32")   # ~2 dB de ruido por píxel
+    pairs = {"HH": (_lin_cog(tmp_path / "1.tif", a, t), _lin_cog(tmp_path / "2.tif", b, t))}
+    info = ch.change_from_linear_cogs(pairs, tmp_path / "c", t1_id="A", t2_id="B", magnitude="gamma0",
+                                      looks=1, threshold_db=3.0, roi_wkt=ROI_ALL)
+    assert info["metricas"]["HH"]["umbral_cerca_del_ruido"] is True
+    assert any("ruido" in w for w in info["advertencias"])
