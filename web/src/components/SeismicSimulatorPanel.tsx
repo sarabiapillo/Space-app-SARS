@@ -43,7 +43,7 @@ interface SeismicSimulatorPanelProps {
   onFlyToEpicenter?: (coord: LngLat) => void
   onClose: () => void
   croppedRegion?: LngLat[] | null
-  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { simulation?: 'seismic' }) => void
   /** Centro de la región del mapa (ROI o, sin ROI, centro visible del mapa): ahí se crea un sismo nuevo. */
   getRegionCenter?: () => LngLat
 }
@@ -262,15 +262,19 @@ export function SeismicSimulatorPanel({
               onChange={(e) => {
                 const preset = PRESET_ROI_CATALOG.find((p) => p.id === e.target.value)
                 if (preset) {
-                  onSelectPresetROI?.(preset)
-                  const geo = getRecommendedSeismicSettings(preset.state, preset.name)
-                  onSeismicChange({
-                    ...seismic,
-                    epicenter: preset.center,
-                    name: `Sismo - ${preset.name}`,
-                    soilType: geo.soilType,
-                    mechanism: geo.mechanism,
-                  })
+                  if (onSelectPresetROI) {
+                    onSelectPresetROI(preset, { simulation: 'seismic' })
+                  } else {
+                    const geo = getRecommendedSeismicSettings(preset.state, preset.name)
+                    onSeismicChange({
+                      ...seismic,
+                      epicenter: preset.center,
+                      name: `Sismo - ${preset.name}`,
+                      soilType: geo.soilType,
+                      vs30: SOIL_VS30[geo.soilType],
+                      mechanism: geo.mechanism,
+                    })
+                  }
                   onFlyToEpicenter?.(preset.center)
                 }
               }}

@@ -13,6 +13,7 @@ import {
   ImageSource,
   Map as MapLibreMap,
   MapMouseEvent,
+  type MapLayerMouseEvent,
   NavigationControl,
   ScaleControl,
   type StyleSpecification,
@@ -26,7 +27,7 @@ import {
   Crosshair,
   Download,
   Droplets,
-  Flame,
+  Sun,
   GripHorizontal,
   Hand,
   Monitor,
@@ -51,7 +52,7 @@ import {
   type ExploreDateViewMode,
   type ExploreLayerId,
 } from '../mocks/initialWorkspaces'
-import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
+import { fetchExploreManifest, getSolarSample, verifyExploreScaleMatch, type ExploreWebManifest, type SolarSampleResponse } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
 import { CHANGE_GRADIENT_VERTICAL, pickChangeLayer, pickChangeMetrics } from '../utils/changeLayer.ts'
 import { ChangeControls } from './ChangeControls'
@@ -135,10 +136,17 @@ interface MapCanvasProps {
   locationPreview?: AdministrativeGeometry | null
   gcovFootprint?: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
-  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { simulation?: 'solar' | 'seismic' }) => void
   onDuplicateWithHeatmap?: () => void
   onDuplicateForWater?: () => void
   onDuplicateForSeismic?: () => void
+}
+
+interface SolarSampleState {
+  coordinate: LngLat
+  loading: boolean
+  result: SolarSampleResponse | null
+  error: string | null
 }
 
 interface ViewportMetrics {
@@ -281,12 +289,13 @@ function computeHillshadeParams(solar: SolarSimulationState): {
   exaggeration: number
   highlightColor: string
 } {
-  const direction = Math.round(90 + (solar.sunAngle / 180) * 180)
-  const elevationFactor = 0.38 + 0.62 * Math.sin((solar.sunAngle * Math.PI) / 180)
+  const direction = solar.azimuthDeg ?? 180
+  const elevationFactor = Math.sin(((solar.elevationDeg ?? 45) * Math.PI) / 180)
   const exaggeration = solar.enabled
-    ? Number(Math.min(0.85, (solar.radiationIntensity / 100) * 0.85 * elevationFactor).toFixed(3))
+    ? Number(Math.min(0.85, 0.55 * elevationFactor).toFixed(3))
     : 0
-  const highlightColor = interpolateThermalHighlight(solar.radiationIntensity)
+  // Visualization is deliberately independent of the physical radiation factor.
+  const highlightColor = interpolateThermalHighlight(100)
   return { direction, exaggeration, highlightColor }
 }
 
@@ -341,9 +350,6 @@ export function MapCanvas({
   gcovFootprint = null,
   onNotify,
   onSelectPresetROI,
-  onDuplicateWithHeatmap,
-  onDuplicateForWater,
-  onDuplicateForSeismic,
 }: MapCanvasProps) {
   const { t, localizeText, language, locale } = useTranslation()
   const displayDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -354,11 +360,16 @@ export function MapCanvas({
   const svgOverlayRef = useRef<SVGSVGElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [solarSample, setSolarSample] = useState<SolarSampleState | null>(null)
+  const [selectedContourValue, setSelectedContourValue] = useState<number | null>(null)
+  const solarOpacity = solar.layerOpacity ?? 88
+  const solarSampleRequest = useRef(0)
   const navigationRef = useRef<NavigationControl | null>(null)
 
   const activeDockWindow = dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
   const isDg2 = activeDockWindow?.kind === 'agua'
-  const isSeismic = activeDockWindow?.kind === 'sismo' || Boolean(seismic?.enabled)
+  const isSeismic = activeDockWindow?.kind === 'sismo'
+  const isActiveSolarMap = solar.enabled && activeDockWindow?.kind === 'solar'
   useEffect(() => {
     const nav = navigationRef.current
     if (!nav) return
@@ -1186,7 +1197,7 @@ export function MapCanvas({
     if (!source) return
 
     const activeSeismic = seismic || DEFAULT_SEISMIC
-    const shouldShow = isSeismic || Boolean(seismic?.enabled)
+    const shouldShow = isSeismic && Boolean(seismic?.enabled)
 
     source.setData(shouldShow && activeSeismic
       ? seismicFeatureCollection(activeSeismic)
@@ -1299,7 +1310,6 @@ export function MapCanvas({
     manifestT1 && manifestT2 ? verifyExploreScaleMatch(manifestT1, manifestT2, exploreLayerId) : null
 
   const activeColormapSpec = getColormapSpec(colormapId)
-  const infernoSpec = getColormapSpec('inferno')
 
   // Colorear dinámicamente los PNG oficiales en EPSG:3857 usando la tabla LUT de 256 colores (Inferno por defecto)
   useEffect(() => {
@@ -1323,25 +1333,16 @@ export function MapCanvas({
     ? (changeLayer ? `/${changeLayer.png}` : '')
     : dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
 
+  const hideHeatmap = activeDockWindow?.kind !== 'map'
+  const hideSolar = activeDockWindow?.kind !== 'solar'
+  const hideNisar = hideHeatmap || isActiveSolarMap
+  const shouldShowNisar = !hideNisar && dateViewMode !== 'swipe' && Boolean(activeLayerEntry) && imagesReady && (!hasAnalysisRoi || !roiLayers.loading) && opacity > 0
+
   // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
     const alpha = opacity / 100
-
-    // Ocultar mapa de calor completamente en pestañas de simulación (Agua / DG2 y Sismo)
-    // para evitar que se quede pegado encima o debajo de las simulaciones.
-    const isWaterTab = activeDockWindow?.kind === 'agua'
-    const isSeismicTab = activeDockWindow?.kind === 'sismo'
-    const hideHeatmap = isWaterTab || isSeismicTab
-
-    const shouldShowNisar =
-      !hideHeatmap &&
-      dateViewMode !== 'swipe' &&
-      Boolean(activeLayerEntry) &&
-      imagesReady &&
-      (!hasAnalysisRoi || !roiLayers.loading) &&
-      opacity > 0
 
     const webglOpacity = shouldShowNisar ? alpha : 0
 
@@ -1350,9 +1351,11 @@ export function MapCanvas({
       map.setPaintProperty(NISAR_LAYER, 'raster-opacity', webglOpacity)
       map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
     }
+    if (map.getLayer(FOOTPRINT_LINE_LAYER)) map.setLayoutProperty(FOOTPRINT_LINE_LAYER, 'visibility', hideNisar ? 'none' : 'visible')
+    if (map.getLayer(`${GCOV_PREVIEW_SOURCE}-line`)) map.setLayoutProperty(`${GCOV_PREVIEW_SOURCE}-line`, 'visibility', hideNisar ? 'none' : 'visible')
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
-      map.setLayoutProperty(FOOTPRINT_FILL_LAYER, 'visibility', hideHeatmap || opacity <= 0 ? 'none' : 'visible')
-      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', hideHeatmap || opacity <= 0 ? 0 : alpha * 0.03)
+      map.setLayoutProperty(FOOTPRINT_FILL_LAYER, 'visibility', hideNisar || opacity <= 0 ? 'none' : 'visible')
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', hideNisar || opacity <= 0 ? 0 : alpha * 0.03)
     }
   }, [
     opacity,
@@ -1364,6 +1367,8 @@ export function MapCanvas({
     roiLayers.loading,
     imagesReady,
     activeDockWindow?.kind,
+    hideNisar,
+    shouldShowNisar,
   ])
 
   // Actualizar fuente `image` de MapLibre con el BlobURL/DataURL coloreado por LUT y `capa.esquinas_lonlat` (EPSG:3857)
@@ -1374,18 +1379,21 @@ export function MapCanvas({
     try {
       if (!imgSource && activeColorizedUrl) {
         map.addSource(NISAR_SOURCE, { type: 'image', url: activeColorizedUrl, coordinates: activeLayerEntry.esquinas_lonlat })
-        map.addLayer({ id: NISAR_LAYER, type: 'raster', source: NISAR_SOURCE, paint: { 'raster-opacity': opacityRef.current / 100, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } })
+        map.addLayer({ id: NISAR_LAYER, type: 'raster', source: NISAR_SOURCE, layout: { visibility: shouldShowNisar ? 'visible' : 'none' }, paint: { 'raster-opacity': shouldShowNisar ? opacityRef.current / 100 : 0, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } })
       } else if (imgSource && typeof imgSource.updateImage === 'function') {
         imgSource.updateImage({ url: activeColorizedUrl, coordinates: activeLayerEntry.esquinas_lonlat })
       }
       if (map.getSource(FOOTPRINT_SOURCE)) {
         (map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...activeLayerEntry.esquinas_lonlat, activeLayerEntry.esquinas_lonlat[0]]] } } as never)
       }
-      if (map.getLayer(NISAR_LAYER)) map.setPaintProperty(NISAR_LAYER, 'raster-opacity', opacityRef.current / 100)
+      if (map.getLayer(NISAR_LAYER)) {
+        map.setLayoutProperty(NISAR_LAYER, 'visibility', shouldShowNisar ? 'visible' : 'none')
+        map.setPaintProperty(NISAR_LAYER, 'raster-opacity', shouldShowNisar ? opacityRef.current / 100 : 0)
+      }
     } catch (err) {
       console.warn('No se pudo actualizar la capa raster NISAR coloreada:', err)
     }
-  }, [activeLayerEntry, activeColorizedUrl, mapReady, imagesReady, opacity])
+  }, [activeLayerEntry, activeColorizedUrl, mapReady, imagesReady, opacity, shouldShowNisar])
 
   // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
@@ -1467,13 +1475,43 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || !map.getLayer(SOLAR_THERMAL_LAYER)) return
+    map.setLayoutProperty(SOLAR_THERMAL_LAYER, 'visibility', isActiveSolarMap ? 'visible' : 'none')
     const hs = computeHillshadeParams(solar)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-illumination-direction', hs.direction)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-exaggeration', hs.exaggeration)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-highlight-color', hs.highlightColor)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-accent-color', '#DD513A')
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#420A68')
-  }, [solar, mapReady])
+  }, [solar, mapReady, isActiveSolarMap])
+
+  // Selección sobre el mapa: el valor siempre se consulta al GeoTIFF, nunca al PNG.
+  useEffect(() => {
+    const map = mapRef.current
+    const previewUrl = solar.rasterPreviewUrl
+    if (!map || !mapReady || !solar.enabled || hideSolar || solarOpacity <= 0 || !previewUrl || solar.showRasterOnMap === false) {
+      solarSampleRequest.current++
+      setSolarSample(null)
+      return
+    }
+    setSolarSample(null)
+    const onSolarMapClick = async (event: MapMouseEvent) => {
+      if (isEditing && activeTool !== 'mover') return
+      const coordinate: LngLat = [event.lngLat.lng, event.lngLat.lat]
+      const requestId = ++solarSampleRequest.current
+      setSolarSample({ coordinate, loading: true, result: null, error: null })
+      try {
+        const response = await getSolarSample(previewUrl.replace(/\/preview\/incident(?:\?.*)?$/, '/sample'), coordinate[0], coordinate[1])
+        if (requestId === solarSampleRequest.current) setSolarSample({ coordinate, loading: false, result: response, error: null })
+      } catch (error) {
+        if (requestId === solarSampleRequest.current) setSolarSample({ coordinate, loading: false, result: null, error: error instanceof Error ? error.message : 'Error al consultar el GeoTIFF' })
+      }
+    }
+    map.on('click', onSolarMapClick)
+    return () => {
+      map.off('click', onSolarMapClick)
+      solarSampleRequest.current++
+    }
+  }, [mapReady, solar.enabled, solar.rasterPreviewUrl, solar.showRasterOnMap, hideSolar, solarOpacity, isEditing, activeTool, JSON.stringify(croppedRegion)])
 
   // Superponer en el mapa el ráster generado por la simulación solar de NASADEM (escala Inferno)
   useEffect(() => {
@@ -1485,6 +1523,8 @@ export function MapCanvas({
 
     const shouldShow =
       solar.enabled &&
+      !hideSolar &&
+      solarOpacity > 0 &&
       Boolean(solar.rasterPreviewUrl) &&
       Array.isArray(solar.rasterBounds) &&
       solar.rasterBounds.length === 4 &&
@@ -1505,9 +1545,7 @@ export function MapCanvas({
       [bounds[0], bounds[1]], // SW: [west, south]
     ]
 
-    // Opacidad fija: la intensidad ya está en los valores calculados; atarla a la opacidad
-    // hacía que una radiación baja se viera casi transparente y no se distinguiera.
-    const opacity = 0.88
+    const opacity = solarOpacity / 100
 
     const existingSource = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
     if (existingSource) {
@@ -1533,8 +1571,8 @@ export function MapCanvas({
             source: SOLAR_CALC_SOURCE,
             paint: {
               'raster-opacity': opacity,
-              'raster-fade-duration': 150,
-              'raster-resampling': 'linear',
+              'raster-fade-duration': 0,
+              'raster-resampling': 'nearest',
             },
           },
           map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
@@ -1549,7 +1587,47 @@ export function MapCanvas({
     solar.rasterPreviewUrl,
     solar.rasterBounds,
     solar.showRasterOnMap,
+    solarOpacity,
+    hideSolar,
   ])
+
+  // Mostrar isolíneas del GeoJSON de la corrida solar activa, sin mezclarlas con otras copias.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const sourceId = 'solar-contours-source'
+    const layerId = 'solar-contours-line'
+    const visible = solar.enabled && !hideSolar && solar.showContours !== false && Boolean(solar.contours)
+    const source = map.getSource(sourceId) as GeoJSONSource | undefined
+    if (!visible) {
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'none')
+      return
+    }
+    if (source) {
+      source.setData(solar.contours as never)
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'visible')
+      return
+    }
+    map.addSource(sourceId, { type: 'geojson', data: solar.contours as never })
+    map.addLayer({ id: layerId, type: 'line', source: sourceId, paint: { 'line-color': '#1f2937', 'line-width': 1, 'line-opacity': Math.min(0.48, solarOpacity / 200) } })
+  }, [mapReady, solar.enabled, solar.contours, solar.showContours, solarOpacity, hideSolar])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layerId = 'solar-contours-line'
+    setSelectedContourValue(null)
+    if (!map || !mapReady || hideSolar || !solar.enabled || solar.showContours === false || !solar.contours || !map.getLayer(layerId)) {
+      setSelectedContourValue(null)
+      return
+    }
+    const onContourClick = (event: MapLayerMouseEvent) => {
+      const value = event.features?.[0]?.properties?.value_w_m2
+      const numeric = typeof value === 'number' ? value : Number(value)
+      if (Number.isFinite(numeric)) setSelectedContourValue(numeric)
+    }
+    map.on('click', layerId, onContourClick)
+    return () => { map.off('click', layerId, onContourClick) }
+  }, [mapReady, solar.enabled, solar.contours, solar.showContours, hideSolar, viewKey])
 
   // Superponer en el mapa el ráster generado por la simulación de inundación / encharcamientos
   useEffect(() => {
@@ -1560,12 +1638,12 @@ export function MapCanvas({
     const FLOOD_CALC_LAYER = 'flood-calc-raster-layer'
 
     const shouldShow =
+      activeDockWindow?.kind === 'agua' &&
       hasCurrentFloodResult &&
       Boolean(activeFlood.rasterUrl) &&
       Array.isArray(activeFlood.rasterBounds) &&
       activeFlood.rasterBounds.length === 4 &&
-      activeFlood.showRasterOnMap !== false &&
-      activeDockWindow?.kind !== 'sismo'
+      activeFlood.showRasterOnMap !== false
 
     if (!shouldShow) {
       if (map.getLayer(FLOOD_CALC_LAYER)) {
@@ -1975,7 +2053,9 @@ export function MapCanvas({
       ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: activeDockWindow.index })
       : activeDockWindow.kind === 'sismo'
         ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: activeDockWindow.index })
-        : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
+        : activeDockWindow.kind === 'solar'
+          ? t('Solar / Radiación {index}', 'Solar / Irradiance {index}', { index: activeDockWindow.index })
+          : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
     : t('Gráficos / Mapa 1', 'Graphics / Map Plot 1')
 
   // Cerrar el menú de «+» al hacer clic fuera o con Escape.
@@ -1995,13 +2075,6 @@ export function MapCanvas({
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [newWindowMenuOpen])
-
-  // Sombreado direccional de radiación solar con los stops exactos de Inferno
-  const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
-  const radRatio = solar.radiationIntensity / 100
-  const sunFocusX = 85 - (solar.sunAngle / 180) * 70
-  const sunFocusY = 54 - Math.sin((solar.sunAngle * Math.PI) / 180) * 20
-  const shadowSideX = 100 - sunFocusX
 
   // Captura la región seleccionada (o toda la vista) combinando WebGL + capa SVG de anotaciones
   const executeRegionCapture = useCallback(
@@ -2041,24 +2114,6 @@ export function MapCanvas({
         outCanvas.width,
         outCanvas.height,
       )
-
-      // 2. Superponer sombreado solar si está activo
-      if (solar.enabled && solar.radiationIntensity > 0) {
-        const rad = solar.radiationIntensity / 100
-        const grad = ctx.createRadialGradient(
-          outCanvas.width * (sunFocusX / 100),
-          outCanvas.height * (sunFocusY / 100),
-          10,
-          outCanvas.width * 0.5,
-          outCanvas.height * 0.5,
-          Math.max(outCanvas.width, outCanvas.height) * 0.75,
-        )
-        grad.addColorStop(0, `rgba(252, 255, 164, ${(0.24 * rad).toFixed(2)})`)
-        grad.addColorStop(0.55, `rgba(237, 105, 37, ${(0.18 * rad).toFixed(2)})`)
-        grad.addColorStop(1, `rgba(0, 0, 4, ${(0.26 * rad).toFixed(2)})`)
-        ctx.fillStyle = grad
-        ctx.fillRect(0, 0, outCanvas.width, outCanvas.height)
-      }
 
       // 3. Superponer la capa SVG (ROI, Swipe t1/t2 y anotaciones)
       const svgEl = svgOverlayRef.current
@@ -2116,10 +2171,6 @@ export function MapCanvas({
     [
       viewport.width,
       viewport.height,
-      solar.enabled,
-      solar.radiationIntensity,
-      sunFocusX,
-      sunFocusY,
       dateViewMode,
       displayScene.t1,
       displayScene.t2,
@@ -2164,15 +2215,18 @@ export function MapCanvas({
             const isActive = win.id === activeDockWindow?.id
             const isAgua = win.kind === 'agua'
             const isSismo = win.kind === 'sismo'
+            const isSolar = win.kind === 'solar'
             const label = isAgua
               ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: win.index })
               : isSismo
                 ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: win.index })
-                : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
+                : isSolar
+                  ? t('Solar / Radiación {index}', 'Solar / Irradiance {index}', { index: win.index })
+                  : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
             return (
               <div
                 key={win.id}
-                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${isSismo ? ' ws-panel-tab-group--seismic' : ''}${
+                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${isSismo ? ' ws-panel-tab-group--seismic' : ''}${isSolar ? ' ws-panel-tab-group--solar' : ''}${
                   isActive ? ' is-active' : ''
                 }`}
               >
@@ -2180,7 +2234,7 @@ export function MapCanvas({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${isSismo ? ' ws-panel-tab--seismic' : ''}${
+                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${isSismo ? ' ws-panel-tab--seismic' : ''}${isSolar ? ' ws-panel-tab--solar' : ''}${
                     isActive ? ' is-active' : ''
                   }`}
                   title={label}
@@ -2190,6 +2244,8 @@ export function MapCanvas({
                     <Droplets size={13} aria-hidden="true" />
                   ) : isSismo ? (
                     <Activity size={13} aria-hidden="true" />
+                  ) : isSolar ? (
+                    <Sun size={13} aria-hidden="true" />
                   ) : (
                     <Monitor size={13} aria-hidden="true" />
                   )}
@@ -2260,6 +2316,22 @@ export function MapCanvas({
                 <button
                   type="button"
                   role="menuitem"
+                  className="ws-window-menu__item"
+                  onClick={() => {
+                    onSolarChange({ ...solar, enabled: true })
+                    onOpenDockWindow('solar')
+                    setNewWindowMenuOpen(false)
+                  }}
+                >
+                  <Sun size={13} aria-hidden="true" />
+                  <span>
+                    {t('Ventana solar', 'Solar window')}
+                    <em>{t('Solar / Radiación', 'Solar / Irradiance')}</em>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   className="ws-window-menu__item ws-window-menu__item--seismic"
                   onClick={() => {
                     onOpenDockWindow('sismo')
@@ -2276,46 +2348,9 @@ export function MapCanvas({
             )}
           </div>
 
-          {hasAnalysisRoi && (
-            <div className="ws-panel-tab-actions">
-              {onDuplicateWithHeatmap && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--heat"
-                  onClick={onDuplicateWithHeatmap}
-                  title={t('Generar una copia de este mapa con el mapa de calor SAR activado', 'Generate a copy of this map with SAR heatmap enabled')}
-                >
-                  <Flame size={12} />
-                  <span>{t('Copia con Calor', 'Copy with Heatmap')}</span>
-                </button>
-              )}
-              {onDuplicateForWater && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--water"
-                  onClick={onDuplicateForWater}
-                  title={t('Generar copia limpia para simulación de agua (DG2) sin mapa de calor', 'Generate clean copy for water simulation (DG2) without heatmap')}
-                >
-                  <Droplets size={12} />
-                  <span>{t('Copia Agua (DG2)', 'Water Copy (DG2)')}</span>
-                </button>
-              )}
-              {onDuplicateForSeismic && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--seismic"
-                  onClick={onDuplicateForSeismic}
-                  title={t('Generar copia limpia para simulación sísmica / terremoto', 'Generate clean copy for seismic / earthquake simulation')}
-                >
-                  <Activity size={12} />
-                  <span>{t('Copia Sismo', 'Seismic Copy')}</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
-        <div className="ws-panel-tabbar__summary">
+        {!isActiveSolarMap && <div className="ws-panel-tabbar__summary">
           <span className="ws-mono">
             {isEditing && activeMapName ? activeMapName : t('Mapa General (Solo lectura)', 'Overview map (read-only)')}
           </span>
@@ -2338,7 +2373,7 @@ export function MapCanvas({
             {t('Centro', 'Center')}: [{viewport.centro[0].toFixed(4)}, {viewport.centro[1].toFixed(4)}] · z=
             {viewport.zoom.toFixed(2)}
           </span>
-        </div>
+        </div>}
       </div>
 
       <div
@@ -2410,24 +2445,6 @@ export function MapCanvas({
               }}
             />
 
-        {/* Efecto direccional de radiación del Simulador Solar con los stops de Inferno */}
-        {showSolarOverlay && (
-          <div
-            className="solar-thermal-overlay"
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              pointerEvents: 'none',
-              zIndex: 4,
-              background: `
-                radial-gradient(circle at ${sunFocusX.toFixed(1)}% ${sunFocusY.toFixed(1)}%, rgba(252, 255, 164, ${(radRatio * 0.46).toFixed(2)}) 0%, rgba(252, 165, 10, ${(radRatio * 0.38).toFixed(2)}) 26%, rgba(221, 81, 58, ${(radRatio * 0.30).toFixed(2)}) 50%, rgba(147, 38, 103, ${(radRatio * 0.22).toFixed(2)}) 72%, rgba(0, 0, 4, 0) 90%),
-                radial-gradient(circle at ${shadowSideX.toFixed(1)}% ${(100 - sunFocusY).toFixed(1)}%, rgba(66, 10, 104, ${(radRatio * 0.42).toFixed(2)}) 0%, rgba(0, 0, 4, ${(radRatio * 0.28).toFixed(2)}) 45%, rgba(0, 0, 4, 0) 75%)
-              `,
-            }}
-          />
-        )}
-
         {/* OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
         <svg
           ref={svgOverlayRef}
@@ -2446,7 +2463,7 @@ export function MapCanvas({
           }}
         >
           {/* Deslizador Antes/Después (Swipe t1 ↔ t2) en EPSG:3857 con LUT coloreado */}
-          {dateViewMode === 'swipe' && imagesReady && layerT1 && layerT2 && opacity > 0 && roiLayers.comparable && (
+          {dateViewMode === 'swipe' && !hideNisar && imagesReady && layerT1 && layerT2 && opacity > 0 && roiLayers.comparable && (
             <g>
               <defs>
                 <clipPath id="explore-swipe-left">
@@ -2495,7 +2512,7 @@ export function MapCanvas({
           )}
 
           {/* Deslizador Comparativo: Inundación Simulada vs Terreno Original Base */}
-          {hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
+          {activeDockWindow?.kind === 'agua' && hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
             <g>
               <defs>
                 <clipPath id="flood-compare-clip">
@@ -2832,7 +2849,7 @@ export function MapCanvas({
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Antes/Después (Swipe t1 ↔ t2) */}
-        {dateViewMode === 'swipe' && imagesReady && roiLayers.comparable && (
+        {dateViewMode === 'swipe' && !hideNisar && imagesReady && roiLayers.comparable && (
           <div
             className="swipe-handle-overlay"
             style={{
@@ -2863,7 +2880,7 @@ export function MapCanvas({
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Comparativo de Inundación */}
-        {hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
+        {activeDockWindow?.kind === 'agua' && hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
           <div
             className="swipe-handle-overlay swipe-handle-overlay--flood"
             style={{
@@ -2910,7 +2927,7 @@ export function MapCanvas({
         )}
 
         {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
-        {((opacity > 0 && activeDockWindow?.kind === 'map') || solar.enabled) && (
+        {!isActiveSolarMap && shouldShowNisar && (
           <aside
             className="comsol-colorbar"
           aria-label={activeLayerEntry ? t('Escala radiométrica de la ROI', 'ROI radiometric scale') : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
@@ -2969,48 +2986,6 @@ export function MapCanvas({
             </div>
           </div>
 
-          {solar.enabled && (
-            <div className="comsol-colorbar__column comsol-colorbar__column--solar">
-              <div className="comsol-colorbar__header">
-                <span className="comsol-colorbar__symbol">{t('Radiación', 'Irradiance')}</span>
-                <span className="comsol-colorbar__unit">[Inferno · {solar.radiationIntensity}%]</span>
-              </div>
-              <div className="comsol-colorbar__body">
-                <div
-                  className="comsol-colorbar__gradient"
-                  style={{ background: infernoSpec.cssGradientVertical }}
-                  role="img"
-                  aria-label={t('Escala vertical de irradiancia solar de menor a mayor (Inferno)', 'Vertical solar irradiance scale from lower to higher (Inferno)')}
-                />
-                <div className="comsol-colorbar__ticks">
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">{t('Mayor', 'Higher')}</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">80%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">60%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">40%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">20%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">{t('Menor', 'Lower')}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </aside>
         )}
 
@@ -3055,7 +3030,7 @@ export function MapCanvas({
           </div>
         )}
 
-        {hasAnalysisRoi && (roiLayers.loading || roiLayers.error || !imagesReady) && (
+        {!isActiveSolarMap && hasAnalysisRoi && (roiLayers.loading || roiLayers.error || !imagesReady) && (
           <div className="roi-loading-backdrop">
             <section className="roi-loading-dialog" role="dialog" aria-modal="true" aria-label={t('Carga de ROI', 'Loading ROI')} aria-busy={roiLayers.loading}>
               <h3>{roiLayers.error ? t('No se pudo cargar la ROI', 'Could not load the ROI') : t('Preparando nueva ROI', 'Preparing new ROI')}</h3>
@@ -3100,7 +3075,7 @@ export function MapCanvas({
         )}
 
         {/* Cuadro Flotante Arrastrable para Herramientas de Dibujo */}
-        {floatingToolsOpen && (
+        {!hideHeatmap && !isActiveSolarMap && floatingToolsOpen && (
           <aside
             className="ws-floating-toolbox"
             style={{ left: `${toolboxPos.x}px`, top: `${toolboxPos.y}px` }}
@@ -3496,22 +3471,37 @@ export function MapCanvas({
         )}
 
         {/* Panel derecho acoplable/flotante de Simulación Solar */}
-        {solar.enabled && !isDg2 && (
+        {solar.enabled && !hideSolar && selectedContourValue !== null && (
+          <div className="solar-contour-selection" role="status" aria-live="polite" style={{ position: 'absolute', right: 360, top: 18, zIndex: 20, padding: '6px 10px', borderRadius: 6, background: 'rgba(255,255,255,.95)', color: '#111827', boxShadow: '0 1px 5px #0003' }}>
+            {t('Isolínea seleccionada:', 'Selected isoline:')} {selectedContourValue.toFixed(2)} W/m²
+          </div>
+        )}
+        {solar.enabled && !hideSolar && (
           <RightPanel
+            key={viewKey}
             solar={solar}
             onSolarChange={onSolarChange}
-            onClose={() => onSolarChange({ ...solar, enabled: false })}
+            onClose={() => {
+              onSolarChange({ ...solar, enabled: false })
+              const mapTab = dockWindows.find((window) => window.kind === 'map')
+              if (mapTab) onActivateDockWindow(mapTab.id)
+              else onOpenDockWindow('map')
+            }}
             center={view.centro}
             croppedRegion={croppedRegion}
+            effectiveRoi={effectiveRoi}
             onFlyToZone={handleFlyToZone}
             onSelectPresetROI={onSelectPresetROI}
             roiLayers={roiLayers}
+            solarSample={solarSample}
+            solarOpacity={solarOpacity}
+            onSolarOpacityChange={value => onSolarChange({ ...solar, layerOpacity: value })}
           />
         )}
       </div>
 
       {/* 5. PANEL INFERIOR COLAPSABLE DE BITÁCORA Y TRAZABILIDAD ("Messages / Progress / Traceability Log") */}
-      <section
+      {!isActiveSolarMap && <section
         className={`workstation-log-panel ${logPanelCollapsed ? 'is-collapsed' : ''}`}
         aria-label={t('Mensajes / Progreso / Registro de trazabilidad', 'Messages / Progress / Traceability Log')}
       >
@@ -3641,7 +3631,7 @@ export function MapCanvas({
               <div className="ws-log-grid">
                 <div className="ws-log-row">
                   <span className="ws-log-tag ws-log-tag--info">{t('CAPA ACTIVA', 'ACTIVE LAYER')}</span>
-                  <strong>{activeLayerEntry.id}:</strong> {localizeText(activeLayerOption.title)} · {t('Paleta LUT', 'LUT palette')}:{' '}
+                  <strong>{activeLayerEntry.id}:</strong> {localizeText(activeLayerOption.title)} · {t('Paleta SAR (solo SAR)', 'SAR palette (SAR only)')}:{' '}
                   <strong>{localizeText(activeColormapSpec.label)}</strong>
                 </div>
                 <div className="ws-log-row">
@@ -3678,7 +3668,7 @@ export function MapCanvas({
             )}
           </div>
         )}
-      </section>
+      </section>}
       </div>
     </main>
   )

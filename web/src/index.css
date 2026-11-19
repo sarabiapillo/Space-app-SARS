@@ -1345,6 +1345,16 @@ button:disabled {
   border-top-color: #0ea5e9;
 }
 
+.ws-panel-tab-group--solar { background: #fff7ed; }
+.ws-panel-tab-group--solar.is-active { background: #ffedd5; border-top-color: #ea580c; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar { background: transparent; color: #c2410c; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar:hover:not(.is-active) { background: #ffedd5; color: #9a3412; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar.is-active { background: transparent; color: #9a3412; border-top-color: #ea580c; }
+.ws-panel-tab-group--solar .ws-panel-tab__close { color: #c2410c; }
+.ws-panel-tab-group--solar .ws-panel-tab__close:hover:not(:disabled) { background: #fed7aa; color: #9a3412; }
+.ws-panel-tab-group--solar .ws-panel-tab__close:focus-visible,
+.ws-panel-tab-group--solar .ws-panel-tab--solar:focus-visible { outline: 2px solid #c2410c; outline-offset: -2px; }
+
 .ws-panel-tab__close {
   display: grid;
   place-items: center;
@@ -2608,7 +2618,9 @@ button:disabled {
   top: 12px;
   left: 12px;
   width: 284px;
-  max-height: calc(100vh - 120px);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  box-sizing: border-box;
   overflow-y: auto;
   padding: 10px 12px;
   border: 1px solid var(--color-border-strong);
@@ -2626,6 +2638,18 @@ button:disabled {
   padding-bottom: 5px;
   border-bottom: 1px solid var(--color-border);
 }
+
+.solar-card__header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.solar-card__collapse:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.solar-card.is-collapsed { width: min(284px, calc(100% - 24px)); max-height: none; overflow: visible; }
+.solar-card.is-collapsed .solar-card__header { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.solar-card__body[hidden] { display: none; }
 
 .solar-card__title {
   display: inline-flex;
@@ -3782,7 +3806,7 @@ button:disabled {
 
 .ws-chart-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 8px;
 }
 
@@ -3832,7 +3856,7 @@ button:disabled {
 
 .ws-charts-two-col {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
   gap: 12px;
 }
 
@@ -4086,7 +4110,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 5px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ws-hist-legend__line {
@@ -5122,19 +5147,19 @@ button:disabled {
 .solar-api-stale { margin: 4px 0; padding: 4px 6px; border-radius: 3px; background: rgba(252, 165, 10, 0.15); color: var(--color-text); font-size: 10.5px; }
 
 /* T3: cinta compacta en grupos; la navegación permanece visible sin desbordar la ventana. */
-.ws-menubar { min-width: 0; gap: 8px; }
-.ws-menubar__menus { flex: 0 0 auto; }
+.ws-menubar { min-width: 0; height: auto; min-height: 27px; gap: 8px; flex-wrap: wrap; }
+.ws-menubar__menus { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
 .ws-menubar__title { flex: 1 1 180px; min-width: 80px; }
 .ws-menubar__status { font-size: 10px; }
-.ws-ribbon { align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 3px 6px; max-height: 94px; overflow-y: auto; }
+.ws-ribbon { align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 3px 6px; overflow: visible; }
 /* El menú flotante no puede sobresalir de un ancestro con overflow auto. */
 .ws-ribbon.ws-ribbon--layer-menu-open { overflow: visible; max-height: none; }
 .ws-ribbon__top-groups,
 .ws-ribbon__bottom-groups { display: flex; width: 100%; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 .ws-ribbon__group { gap: 1px; padding: 0 3px; }
-.ws-ribbon__controls { min-height: 25px; gap: 3px; }
+.ws-ribbon__controls { min-height: 25px; gap: 3px; flex-wrap: wrap; }
 .ws-ribbon__label { font-size: 9px; line-height: 1.1; }
-.ws-ribbon__btn { height: 24px; padding: 0 6px; gap: 4px; font-size: 10.5px; }
+.ws-ribbon__btn { height: 24px; min-height: 24px; padding: 0 6px; gap: 4px; font-size: 10.5px; }
 .ws-ribbon__inline-field { height: 24px; padding: 0 4px; gap: 3px; }
 .ws-ribbon__range { width: 52px; }
 .ws-floating-toolbox { max-width: min(280px, calc(100vw - 24px)); }
@@ -5709,8 +5734,8 @@ button:disabled {
   top: 42px;
   left: 16px;
   width: 480px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 120px);
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 54px);
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(8px);
   border: 1px solid #cbd5e1;
@@ -5725,7 +5750,7 @@ button:disabled {
 
 .seismic-panel.is-expanded-full {
   width: 680px;
-  max-height: calc(100vh - 90px);
+  max-height: calc(100% - 54px);
 }
 
 .seismic-panel.is-collapsed {

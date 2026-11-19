@@ -11,10 +11,15 @@ import math
 from numbers import Real
 
 import numpy as np
+from pyproj import Transformer
+from shapely import contains_xy
+from shapely.geometry import shape
+from shapely.ops import transform as transform_geometry
+from rasterio.transform import Affine
 
-from pipeline.solar.clearsky import compute_clear_sky_dni
+from pipeline.solar.clearsky import compute_clear_sky_dni, compute_reference_dni
 from pipeline.solar.dem import prepare_dem
-from pipeline.solar.position import acquire_provider_tile_paths, solar_position_from_prepared
+from pipeline.solar.position import acquire_provider_tile_paths, idealized_position_from_prepared, solar_position_from_prepared
 from pipeline.solar.radiation import simulate_radiation
 from pipeline.solar.terrain import compute_prepared_terrain
 from pipeline.solar.time import resolve_solar_inputs
@@ -68,8 +73,8 @@ def _validate_prepared_crs(crs):
 
 
 def compute_incident_irradiance(
-    *, roi, datetime_local, timezone_name, provider, intensity_percent,
-    temperature_c=None, pressure_hpa=None,
+    *, roi, provider, intensity_percent=100, elevation_deg=None, azimuth_deg=None,
+    datetime_local=None, timezone_name=None, temperature_c=None, pressure_hpa=None,
 ):
     """Return a geospatial layer of direct incident irradiance (W/m²).
 
@@ -85,34 +90,55 @@ def compute_incident_irradiance(
     if not isinstance(roi, dict):
         raise ValueError("roi must be a GeoJSON Polygon or MultiPolygon")
     percent = _validate_percent(intensity_percent)
-    # Validate time/atmosphere before any provider I/O; the placeholder altitude
-    # is discarded because pressure is recomputed from the selected NASADEM pixel.
-    resolve_solar_inputs(
-        datetime_local, timezone_name, altitude_m=0.0,
-        temperature_c=temperature_c, pressure_hpa=pressure_hpa,
-    )
+    idealized = elevation_deg is not None or azimuth_deg is not None or datetime_local is None
+    if idealized:
+        elevation = 45.0 if elevation_deg is None else _finite_number(elevation_deg, "elevation_deg")
+        azimuth = 180.0 if azimuth_deg is None else _finite_number(azimuth_deg, "azimuth_deg")
+        if not 0 <= elevation <= 90 or not 0 <= azimuth <= 360:
+            raise ValueError("solar geometry outside supported range")
+    else:
+        resolve_solar_inputs(datetime_local, timezone_name, altitude_m=0.0,
+                             temperature_c=temperature_c, pressure_hpa=pressure_hpa)
 
     # Single acquisition of NASADEM tiles for this simulation.
     zip_paths = acquire_provider_tile_paths(provider, roi)
     prepared = prepare_dem(zip_paths, roi)
     _validate_prepared_crs(prepared.crs)
 
-    position = solar_position_from_prepared(
-        prepared, roi=roi, datetime_local=datetime_local,
-        timezone_name=timezone_name, temperature_c=temperature_c,
-        pressure_hpa=pressure_hpa,
-    )
-
-    # Reuse the phase-A position so SPA and the DEM acquisition are not repeated.
-    clear_sky = compute_clear_sky_dni(
-        roi=roi, datetime_local=datetime_local, timezone_name=timezone_name,
-        provider=provider, intensity_percent=percent,
-        temperature_c=temperature_c, pressure_hpa=pressure_hpa,
-        position=position,
-    )
+    if idealized:
+        position = idealized_position_from_prepared(
+            prepared, roi=roi, elevation_deg=elevation, azimuth_deg=azimuth,
+            pressure_hpa=pressure_hpa,
+        )
+        clear_sky = compute_reference_dni(
+            elevation_deg=elevation, altitude_m=position["altitude_m"],
+            pressure_pa=position["pressure_pa"], intensity_percent=percent,
+        )
+    else:
+        position = solar_position_from_prepared(
+            prepared, roi=roi, datetime_local=datetime_local,
+            timezone_name=timezone_name, temperature_c=temperature_c,
+            pressure_hpa=pressure_hpa,
+        )
+        clear_sky = compute_clear_sky_dni(
+            roi=roi, datetime_local=datetime_local, timezone_name=timezone_name,
+            provider=provider, intensity_percent=percent,
+            temperature_c=temperature_c, pressure_hpa=pressure_hpa, position=position,
+        )
 
     fields = compute_prepared_terrain(prepared)
-    valid = np.asarray(fields["valid"], dtype=bool)
+    valid = np.asarray(fields["valid"], dtype=bool).copy()
+    # Terrain derivatives above use the prepared DEM and its halo. Only now
+    # restrict published values to pixel centers strictly inside the ROI.
+    metric_roi = transform_geometry(
+        Transformer.from_crs("EPSG:4326", prepared.crs, always_xy=True).transform,
+        shape(roi),
+    )
+    affine = Affine.from_gdal(*prepared.transform)
+    rows, cols = np.indices(valid.shape, dtype=np.float64)
+    center_x = affine.a * (cols + 0.5) + affine.b * (rows + 0.5) + affine.c
+    center_y = affine.d * (cols + 0.5) + affine.e * (rows + 0.5) + affine.f
+    valid &= np.asarray(contains_xy(metric_roi, center_x, center_y), dtype=bool)
     normals = np.asarray(fields["normal"], dtype=np.float64)
 
     # Consistency checks on terrain normals and solar direction.
@@ -127,8 +153,9 @@ def compute_incident_irradiance(
         raise ValueError("valid terrain normals must point upward")
 
     azimuth = _finite_number(position.get("azimuth_deg"), "azimuth_deg")
-    apparent_elevation = _finite_number(position.get("apparent_elevation_deg"), "apparent_elevation_deg")
-    apparent_zenith = _finite_number(position.get("apparent_zenith_deg"), "apparent_zenith_deg")
+    apparent_elevation = _finite_number(position.get("elevation_deg", position.get("apparent_elevation_deg")), "elevation_deg")
+    geometric_elevation = _finite_number(position.get("geometric_elevation_deg"), "geometric_elevation_deg")
+    apparent_zenith = _finite_number(position.get("apparent_zenith_deg", 90.0-apparent_elevation), "zenith_deg")
     if not 0.0 <= azimuth <= 360.0:
         raise ValueError("solar azimuth must be in [0, 360]")
     if not -90.0 <= apparent_elevation <= 90.0:
@@ -144,7 +171,7 @@ def compute_incident_irradiance(
     if dni_adjusted < 0.0:
         raise ValueError("adjusted DNI must be non-negative")
 
-    night = apparent_elevation <= 0.0
+    night = geometric_elevation <= 0.0
     incident = np.full(valid.shape, np.nan, dtype=np.float64)
 
     if night:

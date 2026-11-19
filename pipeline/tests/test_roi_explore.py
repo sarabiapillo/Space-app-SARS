@@ -1,4 +1,6 @@
 import pytest
+import time
+from pathlib import Path
 
 from pipeline.roi_explore import validate_roi, select_scenes, cache_key
 from pipeline.sources.base import SceneMeta
@@ -46,7 +48,6 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     from pipeline.sources import asf
     from pipeline.roi_explore import prepare, write_json
 
-    monkeypatch.setattr('pipeline.roi_explore.COPY_ROOT', tmp_path / 'graficas-roi')
     h5, _ = make_gcov(tmp_path / 'synthetic.h5')
     add_radar_grid(h5)
     remote = FakeHTTPS(h5)
@@ -58,6 +59,8 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
             return [selected]
     monkeypatch.setattr(sources, 'get_source', lambda _: Source())
     monkeypatch.setattr(asf, 'earthdata_https_fs', lambda: remote)
+    from pipeline import roi_explore
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'graficas-roi')
     run = tmp_path / 'run'
     run.mkdir()
     write_json(run / 'request.json', {'roi': mapping(wkt.loads(synthetic_roi))})
@@ -70,11 +73,41 @@ def test_preparation_uses_remote_windows_and_publishes_one_scene(tmp_path, monke
     assert all(c['escala']['vmin_dB'] == -22 for c in result['manifests'][0]['capas'])
     assert remote.opened[0][1]['cache_type'] == 'blockcache'
     assert not list(run.rglob('*.h5'))
-    scene_dir = run / 'layers' / result['manifests'][0]['escena']['granuleId']
-    assert list((scene_dir / 'web').glob('*.tif'))
-    assert list((scene_dir / 'web').glob('*.png'))
-    assert (scene_dir / 'graficas.json').is_file()
-    assert (scene_dir / 'metadatos.json').is_file()
+
+
+def test_preparation_records_phase_timings_with_monotonic_clock(tmp_path, monkeypatch):
+    import json
+    from dataclasses import replace
+    from shapely import wkt
+    from shapely.geometry import mapping
+    from pipeline.tests.test_subset import make_gcov, scene as synthetic_scene, ROI as synthetic_roi
+    from pipeline.tests.test_etapa1 import add_radar_grid, FakeHTTPS
+    from pipeline import sources, roi_explore
+    from pipeline.sources import asf
+
+    h5, _ = make_gcov(tmp_path / 'synthetic.h5')
+    add_radar_grid(h5)
+    selected = replace(synthetic_scene(), url='https://example.invalid/synthetic.h5')
+    class Source:
+        def search(self, roi, product):
+            return [selected]
+    monkeypatch.setattr(sources, 'get_source', lambda _: Source())
+    monkeypatch.setattr(asf, 'earthdata_https_fs', lambda: FakeHTTPS(h5))
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'graficas-roi')
+    ticks = iter(range(100, 200))
+    monkeypatch.setattr(roi_explore.time, 'monotonic', lambda: next(ticks))
+    run = tmp_path / 'timed'
+    run.mkdir()
+    roi_explore.write_json(run / 'request.json', {'roi': mapping(wkt.loads(synthetic_roi))})
+
+    roi_explore.prepare(run)
+    timings = json.loads((run / 'result.json').read_text(encoding='utf-8'))['timings']
+    assert timings['search_asf_seconds'] == 1.0
+    assert timings['scene_processing_seconds'] == [1.0]
+    assert timings['grid_compare_seconds'] == 1.0
+    assert timings['chart_copy_seconds'] == 1.0
+    assert timings['server_prepare_total_seconds'] == 9.0
+    assert all(isinstance(value, float) for value in timings.values() if not isinstance(value, list))
 
 
 def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
@@ -114,10 +147,10 @@ def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
     assert wkt.loads(meta_roi['wkt_4326']).equals(wkt.loads(synthetic_roi))
 
     copy = tmp_path / 'graficas-roi' / 'abc123'
-    root = roi_explore.Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[2]
     resolved_copy = copy.resolve()
-    expected_copy = (resolved_copy.relative_to(root).as_posix()
-                     if resolved_copy.is_relative_to(root) else resolved_copy.as_posix())
+    expected_copy = (resolved_copy.relative_to(repo_root).as_posix()
+                     if resolved_copy.is_relative_to(repo_root) else resolved_copy.as_posix())
     assert result['copia_disco'] == expected_copy
     assert json.loads((copy / entry['granuleId'] / 'graficas.json').read_text(encoding='utf-8')) == entry['manifest']
     assert (copy / entry['granuleId'] / 'metadatos.json').is_file()
@@ -125,59 +158,199 @@ def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
     assert summary['id'] == 'abc123' and summary['escenas'] == [entry['granuleId']]
 
 
-def _local_scene(scene_id, date, h5_path, *, crid='P05023'):
-    from dataclasses import replace
-    from pipeline.tests.test_subset import scene as synthetic_scene
-    base = synthetic_scene(scene_id=scene_id)
-    return replace(base, crid=crid, start_time=f'{date}T00:00:00Z',
-                   extra={'local_h5': str(h5_path)})
+def test_children_receive_selected_ids_and_results_keep_selection_order(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from pipeline import roi_explore
+
+    first, second = scene('2026-01-01'), scene('2026-02-01')
+    launches, completion_order = [], []
+    def save_result(index, item):
+        (tmp_path / f'scene-result-{index}.json').write_text(json.dumps({
+            'manifest': {'escena': {'granuleId': item.scene_id}}, 'charts': None, 'seconds': float(index)}))
+    class Child:
+        def __init__(self, args, **kwargs):
+            self.args, self.returncode, self.polls = args, None, 0
+            launches.append(args)
+            if int(args[-1]) == 1:
+                save_result(1, second)
+                completion_order.append(1)
+                self.returncode = 0
+        def wait(self, timeout=None): return self.returncode
+        def poll(self):
+            self.polls += 1
+            if int(self.args[-1]) == 0 and self.polls > 1:
+                save_result(0, first)
+                completion_order.append(0)
+                self.returncode = 0
+            return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', Child)
+    result = roi_explore._run_scene_children(tmp_path, [first, second], deadline=time.monotonic() + 10)
+    assert [cmd[-2] for cmd in launches] == [first.scene_id, second.scene_id]
+    assert completion_order == [1, 0]
+    assert [row['manifest']['escena']['granuleId'] for row in result] == [first.scene_id, second.scene_id]
 
 
-def test_prepare_pair_uses_two_local_h5_children_in_selected_order(tmp_path, monkeypatch):
+def test_child_failure_cleans_up_all_launched_processes(tmp_path, monkeypatch):
+    import subprocess
+    from pipeline import roi_explore
+    children = []
+    class Child:
+        def __init__(self, args, **kwargs):
+            self.args, self.returncode = args, 1 if not children else None
+            children.append(self)
+        def wait(self, timeout=None):
+            return self.returncode
+        def poll(self): return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', Child)
+    with pytest.raises(subprocess.CalledProcessError):
+        roi_explore._run_scene_children(tmp_path, [scene('2026-01-01'), scene('2026-02-01')], deadline=time.monotonic() + 10)
+    assert len(children) == 2
+    assert all(child.returncode is not None for child in children)
+
+
+def test_children_fail_fast_when_second_child_exits_while_first_is_running(tmp_path, monkeypatch):
+    import subprocess
+    from pipeline import roi_explore
+    children = []
+    class Child:
+        def __init__(self, args, **kwargs):
+            self.args, self.returncode = args, None
+            children.append(self)
+            if int(args[-1]) == 1:
+                self.returncode = 9
+        def poll(self): return self.returncode
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise AssertionError('Debe detectarse primero el fallo del segundo hijo sin esperar al primero')
+            return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', Child)
+    with pytest.raises(subprocess.CalledProcessError):
+        roi_explore._run_scene_children(tmp_path, [scene('2026-01-01'), scene('2026-02-01')], deadline=time.monotonic() + 10)
+    assert len(children) == 2
+    assert children[0].returncode is not None
+
+
+def test_child_timeout_reaps_all_processes(tmp_path, monkeypatch):
+    import subprocess
+    from pipeline import roi_explore
+    ticks = [0.0]
+    def monotonic():
+        ticks[0] += 0.5
+        return ticks[0]
+    monkeypatch.setattr(roi_explore.time, 'monotonic', monotonic)
+    monkeypatch.setattr(roi_explore.time, 'sleep', lambda _: None)
+    children = []
+    class Child:
+        def __init__(self, args, **kwargs):
+            self.args, self.returncode, self.waits = args, None, 0
+            children.append(self)
+        def wait(self, timeout=None):
+            self.waits += 1
+            if self is children[0] and self.waits == 1:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            self.returncode = -15 if self.waits > 1 else 0
+        def poll(self): return self.returncode
+        def terminate(self): self.terminated = True
+        def kill(self): self.returncode = -9
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', Child)
+    with pytest.raises(subprocess.TimeoutExpired):
+        roi_explore._run_scene_children(tmp_path, [scene('2026-01-01'), scene('2026-02-01')], deadline=3.0)
+    assert len(children) == 2
+    assert all(child.returncode is not None for child in children)
+
+
+def test_delayed_search_expiring_budget_does_not_launch_children(tmp_path, monkeypatch):
     import json
     from shapely import wkt
     from shapely.geometry import mapping
     from pipeline import roi_explore, sources
-    from pipeline.tests.test_subset import make_gcov, ROI as synthetic_roi
-    from pipeline.tests.test_etapa1 import add_radar_grid
+    from pipeline.roi_explore import RoiPreparationError
+    from pipeline.sources.base import SceneMeta
 
-    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'graficas-roi')
-    scenes = []
-    for sid, date in (('PAIR_EARLY', '2026-01-01'), ('PAIR_LATE', '2026-02-01')):
-        h5, _ = make_gcov(tmp_path / f'{sid}.h5', granule=sid)
-        add_radar_grid(h5)
-        scenes.append(_local_scene(sid, date, h5))
-    extra_h5, _ = make_gcov(tmp_path / 'unselected.h5', granule='UNSELECTED')
-    add_radar_grid(extra_h5)
-    unselected = _local_scene('UNSELECTED', '2026-03-01', extra_h5, crid='OTHER')
-
+    first = scene('2026-01-01')
+    second = scene('2026-02-01')
+    ticks = [10.0]
+    monkeypatch.setattr(roi_explore.time, 'monotonic', lambda: ticks[0])
     class Source:
         def search(self, roi, product):
-            assert wkt.loads(roi).equals(wkt.loads(synthetic_roi))
-            return [scenes[1], unselected, scenes[0]]
+            ticks[0] = 1511.0
+            return [first, second]
     monkeypatch.setattr(sources, 'get_source', lambda _: Source())
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'charts')
+    from pipeline import catalog
+    monkeypatch.setattr(catalog, 'code_version', lambda: 'test-version')
+    launches = []
+    def unexpected_launch(*args, **kwargs):
+        launches.append(args)
+        raise AssertionError('No child may start after the total preparation deadline')
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', unexpected_launch)
+    run = tmp_path / 'late-search'
+    run.mkdir()
+    roi_explore.write_json(run / 'request.json', {'roi': ROI})
+    with pytest.raises(RoiPreparationError):
+        roi_explore.prepare(run)
+    assert launches == []
+
+
+def test_pair_workers_process_exact_selected_local_scenes_with_extra_catalog_entry(tmp_path, monkeypatch):
+    import json
+    from dataclasses import replace
+    from shapely import wkt
+    from shapely.geometry import mapping
+    from pipeline.tests.test_subset import make_gcov, scene as synthetic_scene, ROI as synthetic_roi
+    from pipeline.tests.test_etapa1 import add_radar_grid
+    from pipeline import sources, roi_explore
+
+    selected = []
+    for granule, date in (('LOCAL_OLD', '2026-01-01T00:00:00Z'), ('LOCAL_NEW', '2026-02-01T00:00:00Z')):
+        h5, _ = make_gcov(tmp_path / f'{granule}.h5', granule=granule)
+        add_radar_grid(h5)
+        base = synthetic_scene(granule)
+        selected.append(replace(base, start_time=date, extra={'local_h5': str(h5)}))
+    unselected_h5, _ = make_gcov(tmp_path / 'unselected.h5', granule='LOCAL_UNSELECTED')
+    add_radar_grid(unselected_h5)
+    unselected = replace(selected[1], scene_id='LOCAL_UNSELECTED', start_time='2026-03-01T00:00:00Z',
+                         crid='P2', extra={'local_h5': str(unselected_h5)})
+    class Source:
+        def search(self, roi, product):
+            assert product == 'GCOV'
+            assert wkt.loads(roi).equals(wkt.loads(synthetic_roi))
+            return [unselected, *selected]
+    monkeypatch.setattr(sources, 'get_source', lambda _: Source())
+    monkeypatch.setattr(roi_explore, 'COPY_ROOT', tmp_path / 'chart-copy')
     run = tmp_path / 'pair-run'
     run.mkdir()
     roi_explore.write_json(run / 'request.json', {'roi': mapping(wkt.loads(synthetic_roi))})
-    roi_explore.prepare(run)
 
-    result = json.loads((run / 'result.json').read_text(encoding='utf-8'))
-    assert [m['escena']['granuleId'] for m in result['manifests']] == ['PAIR_EARLY', 'PAIR_LATE']
-    assert [c['granuleId'] for c in result['charts']] == ['PAIR_EARLY', 'PAIR_LATE']
+    roi_explore.prepare(run)
+    result = json.loads((run / 'result.json').read_text())
+    ids = [manifest['escena']['granuleId'] for manifest in result['manifests']]
+    assert ids == ['LOCAL_OLD', 'LOCAL_NEW']
     assert result['comparable'] is True
-    for sid in ('PAIR_EARLY', 'PAIR_LATE'):
-        scene_dir = run / 'layers' / sid
+    assert all(any(layer['pct_pixeles_validos'] > 0 for layer in manifest['capas'])
+               for manifest in result['manifests'])
+    assert [row['granuleId'] for row in result['charts']] == ids
+    assert len(result['timings']['scene_processing_seconds']) == 2
+    for scene_id in ids:
+        scene_dir = run / 'layers' / scene_id
+        assert (scene_dir / 'web' / 'capas.json').is_file()
         assert list((scene_dir / 'web').glob('*.tif'))
         assert list((scene_dir / 'web').glob('*.png'))
         assert (scene_dir / 'graficas.json').is_file()
-        assert (scene_dir / 'metadatos.json').is_file()
-        assert json.loads((scene_dir / 'metadatos.json').read_text())['identificacion']['granuleId'] == sid
-    assert not (run / 'layers' / 'UNSELECTED').exists()
+        assert json.loads((scene_dir / 'metadatos.json').read_text())['identificacion']['granuleId'] == scene_id
+    assert not (run / 'layers' / 'LOCAL_UNSELECTED').exists()
 
     # Mapa de cambio t2 − t1 sobre la misma ROI dibujada (comparable → se calcula).
     change = result['change']
     assert change['tipo'] == 'mapa_de_cambio'
-    assert change['t1'] == 'PAIR_EARLY' and change['t2'] == 'PAIR_LATE'
+    assert change['t1'] == ids[0] and change['t2'] == ids[1]
     assert {c['capa'] for c in change['capas']} == {'HHHH', 'HVHV'}
     # Por defecto: multilook 5×5 desde la potencia lineal del producto y umbral de 3 dB.
     default = run / 'layers' / 'cambio' / 'ml5_u3'
@@ -207,69 +380,52 @@ def test_prepare_pair_uses_two_local_h5_children_in_selected_order(tmp_path, mon
             roi_explore.recompute_change(run, looks, threshold)
 
 
-def test_scene_children_keep_selected_order_and_reap_both(tmp_path, monkeypatch):
+def test_worker_process_reads_local_h5_without_parent_mocks(tmp_path):
     import json
-    from pipeline import roi_explore
+    import subprocess
+    import sys
+    from pathlib import Path
+    import yaml
+    from pipeline.tests.test_subset import make_gcov, scene as synthetic_scene, ROI as synthetic_roi
+    from pipeline.tests.test_etapa1 import add_radar_grid
+    from pipeline.roi_explore import write_json
 
-    selected = [scene('2026-01-01'), scene('2026-02-01')]
-    observed = {'polls': [0, 0], 'waited': [], 'launched': []}
-
-    class Child:
-        def __init__(self, index):
-            self.index = index
-            self.args = ['worker', str(index)]
-        def poll(self):
-            observed['polls'][self.index] += 1
-            # El segundo termina primero; el primero permanece activo una iteración más.
-            if self.index == 1:
-                return 0
-            return 0 if observed['polls'][self.index] >= 2 else None
-        def wait(self, timeout=None):
-            observed['waited'].append(self.index)
-            return 0
-        def terminate(self):
-            raise AssertionError('No debe terminarse un hijo exitoso')
-
-    def fake_popen(args, **kwargs):
-        observed['launched'].append(args)
-        index = int(args[-1])
-        (tmp_path / f'scene-result-{index}.json').write_text(
-            json.dumps({'manifest': {'index': index}, 'charts': None}), encoding='utf-8')
-        return Child(index)
-
-    monkeypatch.setattr(roi_explore.subprocess, 'Popen', fake_popen)
-    monkeypatch.setattr(roi_explore.time, 'sleep', lambda _: None)
-    results = roi_explore._run_scene_children(tmp_path, selected, roi_explore.time.monotonic() + 10)
-    assert [item['manifest']['index'] for item in results] == [0, 1]
-    assert [args[-2] for args in observed['launched']] == [selected[0].scene_id, selected[1].scene_id]
-    assert sorted(observed['waited']) == [0, 1]
+    h5, _ = make_gcov(tmp_path / 'fixture.h5', granule='LOCAL_CHILD_SCENE')
+    add_radar_grid(h5)
+    base = synthetic_scene('LOCAL_CHILD_SCENE')
+    selected = base.__class__(**{**base.to_dict(), 'extra': {'local_h5': str(h5)}})
+    run = tmp_path / 'run'
+    (run / 'layers').mkdir(parents=True)
+    write_json(run / 'catalog.json', {'scenes': [selected.to_dict()]})
+    (run / 'config.yaml').write_text(yaml.safe_dump({'roi': {'wkt': synthetic_roi}}))
+    child = subprocess.run([sys.executable, '-m', 'pipeline.roi_explore', '--scene-worker', str(run),
+                            selected.scene_id, '0'], cwd=Path(__file__).resolve().parents[2],
+                           capture_output=True, text=True, timeout=120, check=False)
+    assert child.returncode == 0, child.stderr
+    result = json.loads((run / 'scene-result-0.json').read_text())
+    assert result['manifest']['escena']['granuleId'] == selected.scene_id
+    assert (run / 'layers' / selected.scene_id / 'web' / 'capas.json').is_file()
 
 
-def test_scene_children_fail_fast_and_reap_active_child(tmp_path, monkeypatch):
+def test_child_failure_waits_for_both_children(tmp_path, monkeypatch):
     import subprocess
     from pipeline import roi_explore
 
-    observed = {'launched': [], 'terminated': [], 'waited': []}
+    observed = {'terminated': [], 'waited': []}
     class Child:
-        def __init__(self, index): self.index, self.polls = index, 0
-        def poll(self):
-            self.polls += 1
-            return None if self.index == 0 else 7
+        def __init__(self, args): self.args, self.index = args, int(args[-1])
+        def poll(self): return None if self.index == 0 else 7
         def terminate(self): observed['terminated'].append(self.index)
         def wait(self, timeout=None): observed['waited'].append(self.index); return 0
-    def fake_popen(args, **kwargs):
-        observed['launched'].append(args)
-        return Child(int(args[-1]))
-    monkeypatch.setattr(roi_explore.subprocess, 'Popen', fake_popen)
+    monkeypatch.setattr(roi_explore.subprocess, 'Popen', lambda args, **kwargs: Child(args))
     with pytest.raises(subprocess.CalledProcessError):
         roi_explore._run_scene_children(tmp_path, [scene('2026-01-01'), scene('2026-02-01')],
-                                        roi_explore.time.monotonic() + 10)
+                                        time.monotonic() + 10)
     assert observed['terminated'] == [0]
     assert observed['waited'] == [0, 1]
 
 
 def test_slow_search_expiring_deadline_launches_no_scene_children(tmp_path, monkeypatch):
-    import json
     from shapely import wkt
     from shapely.geometry import mapping
     from pipeline import roi_explore, sources, catalog
@@ -277,8 +433,7 @@ def test_slow_search_expiring_deadline_launches_no_scene_children(tmp_path, monk
 
     monkeypatch.setattr(catalog, 'code_version', lambda: 'test')
     tick = {'value': 0}
-    def monotonic(): return tick['value']
-    monkeypatch.setattr(roi_explore.time, 'monotonic', monotonic)
+    monkeypatch.setattr(roi_explore.time, 'monotonic', lambda: tick['value'])
     pair = [scene('2026-01-01'), scene('2026-02-01')]
     class Source:
         def search(self, roi, product):
@@ -313,6 +468,6 @@ def test_prune_change_cache_keeps_default_and_newest(tmp_path):
     for i, name in enumerate(names):
         (base / name).mkdir(parents=True)
         os.utime(base / name, (1000 + i, 1000 + i))
-    os.utime(base / 'ml5_u3', (1, 1))                                     # la más antigua, pero es la de defecto
+    os.utime(base / 'ml5_u3', (1, 1))
     roi_explore.prune_change_cache(base, keep=3)
     assert sorted(d.name for d in base.iterdir()) == sorted(['ml5_u3', 'ml10_u6', 'ml2_u3', 'ml10_u3'])

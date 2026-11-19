@@ -22,6 +22,14 @@ export interface RoiChartsCopy {
   errores?: string[]
 }
 
+export interface RoiPreparationTimings {
+  search_asf_seconds: number
+  scene_processing_seconds: number[]
+  grid_compare_seconds: number
+  chart_copy_seconds: number
+  server_prepare_total_seconds: number
+}
+
 export type RoiLayersState = ReturnType<typeof useRoiLayers>
 
 export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: string) {
@@ -30,7 +38,9 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     key: string; loading: boolean; error: string | null; message: string;
     manifests: ExploreWebManifest[]; comparable: boolean; change: RoiChangeManifest | null
     charts: RoiChartsEntry[]; copia: RoiChartsCopy | null; jobId: string | null
-  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false, change: null, charts: [], copia: null, jobId: null })
+    preparationSeconds: number | null; timings: RoiPreparationTimings | null
+  }>({ key: '', loading: false, error: null, message: '', manifests: [], comparable: false,
+    change: null, charts: [], copia: null, jobId: null, preparationSeconds: null, timings: null })
   const [attempt, setAttempt] = useState(0)
   const geometry = JSON.stringify(region)
   const key = `${viewKey}:${geometry}:${attempt}`
@@ -71,7 +81,8 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     const update = (data: Partial<typeof state>) => {
       if (!controller.signal.aborted) setState(previous => ({ ...previous, ...data, key }))
     }
-    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false, change: null, charts: [], copia: null, jobId: null })
+    update({ loading: true, error: null, message: 'Consultando la ROI…', manifests: [], comparable: false,
+      change: null, charts: [], copia: null, jobId: null, preparationSeconds: null, timings: null })
     async function json(url: string, body?: unknown) {
       const response = await fetch(url, {
         method: body ? 'POST' : 'GET', signal: controller.signal,
@@ -82,6 +93,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
       return response.json()
     }
     async function start() {
+      const started = performance.now()
       try {
         const parsed = JSON.parse(geometry) as LngLat[] | RoiGeometry
         const roi = Array.isArray(parsed)
@@ -111,7 +123,9 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
                   img.src = `/${c.png}`
                 })))
               update({ loading: false, manifests: result.manifests, comparable: result.comparable, change, message: result.message,
-                charts: Array.isArray(result.charts) ? result.charts : [], copia: result.copia ?? null })
+                charts: Array.isArray(result.charts) ? result.charts : [], copia: result.copia ?? null,
+                timings: result.timings ?? null,
+                preparationSeconds: Number(((performance.now() - started) / 1000).toFixed(3)) })
               // La copia en PostGIS se escribe justo después de terminar: consultar una vez más su estado.
               if (result.copia?.base_datos === 'guardando') {
                 timer = setTimeout(async () => {
@@ -145,7 +159,8 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     loading: Boolean(region) && (!current || state.loading),
     error: current ? localizeText(state.error) : null, manifests: current ? state.manifests : [],
     comparable: current && state.comparable, change: current ? state.change : null, charts: current ? state.charts : [],
-    copia: current ? state.copia : null, retry: () => setAttempt(n => n + 1),
+    copia: current ? state.copia : null, timings: current ? state.timings : null,
+    preparationSeconds: current ? state.preparationSeconds : null, retry: () => setAttempt(n => n + 1),
     recomputeChange, changeBusy: changeJob.key === key && changeJob.busy,
     changeError: changeJob.key === key ? localizeText(changeJob.error) : null }
 }

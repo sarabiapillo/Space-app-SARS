@@ -200,7 +200,7 @@ export function TeamLandingPage({ onClose }: TeamLandingPageProps) {
 
           <footer className="team-landing__footer">
             <p>
-              <strong>{t('Caso de estudio actual:', 'Current case study:')}</strong> Chiapas, {t('México', 'Mexico')} ·{' '}
+              <strong>{t('Caso de referencia documentado:', 'Documented reference case:')}</strong> Chiapas, {t('México', 'Mexico')} ·{' '}
               <code>EPSG:32615</code> · {t('productos', 'products')} <strong>NISAR L2 GCOV</strong> (Frequency A,
               L-band, 10 × 10 m).
             </p>

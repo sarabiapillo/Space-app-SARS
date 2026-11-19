@@ -53,10 +53,14 @@ def test_ready_assets_rewritten_without_exposing_files(tmp_path):
     image.parent.mkdir(parents=True)
     image.write_bytes(b'png-fixture')
     write_json(path / 'status.json', {'status': 'ready'})
-    write_json(path / 'result.json', {'manifests': [{'capas': [{'png': str(image), 'cog': str(image.with_suffix('.tif'))}]}]})
+    write_json(path / 'result.json', {'manifests': [{'capas': [{'png': str(image), 'cog': str(image.with_suffix('.tif'))}]}],
+                                    'timings': {'search_asf_seconds': 0.25, 'scene_processing_seconds': [1.5],
+                                                'grid_compare_seconds': 0.1, 'chart_copy_seconds': 0.05,
+                                                'server_prepare_total_seconds': 2.0}})
     with override_settings(ROI_OUTPUT_ROOT=tmp_path):
         response = Client().get(f'/roi-jobs/{key}')
         assert response.status_code == 200
+        assert response.json()['timings']['server_prepare_total_seconds'] == 2.0
         url = response.json()['manifests'][0]['capas'][0]['png']
         assert url == f'api/roi-jobs/{key}/assets/layers/scene/web/layer.png'
         download = Client().get(url.removeprefix('api'))

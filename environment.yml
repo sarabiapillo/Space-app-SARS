@@ -25,4 +25,5 @@ dependencies:
       - redis==8.1.0
       - pyyaml==6.0.3
       - pvlib==0.16.1        # simulador solar (pipeline/solar); sin él, pytest no puede importar sus pruebas
+      - timezonefinder>=7,<8  # polígonos de zonas horarias para /api/solar/timezone
       - pytest==9.2.0

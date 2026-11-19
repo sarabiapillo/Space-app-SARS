@@ -15,6 +15,8 @@ def roi(west, south, east, north):
 
 @pytest.mark.parametrize("bounds,expected", [
     ((-93.3919, 16.6539, -92.8757, 16.8964), ("n16w093", "n16w094")),
+    ((-102.34, 21.85, -102.32, 21.87), ("n21w103",)),  # Aguascalientes
+    ((-110.97, 29.06, -110.95, 29.08), ("n29w111",)),  # Sonora
     ((-71.9, -33.5, -71.5, -33.2), ("s34w072",)),
     ((1.0, 16.0, 2.0, 17.0), ("n16e001",)),
     ((-.5, .2, .2, .8), ("n00e000", "n00w001")),
@@ -22,6 +24,15 @@ def roi(west, south, east, north):
 def test_variable_roi_uses_southwest_tile_origin_without_extra_border_tiles(bounds, expected):
     selected, _ = required_nasadem_tiles(roi(*bounds))
     assert selected == expected
+
+
+def test_irregular_mexican_roi_uses_geometry_not_bbox_fill():
+    geometry = {"type": "Polygon", "coordinates": [[
+        [-102.45, 21.85], [-102.25, 21.85], [-102.25, 21.95],
+        [-102.32, 21.91], [-102.45, 21.95], [-102.45, 21.85],
+    ]]}
+    selected, _ = required_nasadem_tiles(geometry)
+    assert selected == ("n21w103",)
 
 
 def test_halo_is_optional_and_stays_inside_nasadem_latitude_band():

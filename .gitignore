@@ -6,6 +6,7 @@
 _netrc
 *.pem
 *.key
+/references
 
 # --- Datos NISAR y resultados (pesados, no van a git) ---
 data/**

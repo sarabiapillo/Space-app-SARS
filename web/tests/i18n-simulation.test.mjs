@@ -29,7 +29,7 @@ const { FloodCharts } = await import('../src/components/FloodCharts.tsx')
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props))
 const roi = [[-93.2, 16.7], [-93, 16.7], [-93, 16.8], [-93.2, 16.7]]
 const flood = { rainfallAmount: 35, rainfallDuration: 3, pressureHpa: 1005, statsSource: 'backend' }
-const solar = { sunAngle: 90, radiationIntensity: 65, heatmapMode: 'estirado' }
+const solar = { sunAngle: 90, elevationDeg: 45, azimuthDeg: 180, radiationIntensity: 65, heatmapMode: 'estirado' }
 
 test('simulation panels switch display language but retain numeric input and scientific units', () => {
   setLanguage('es')
@@ -44,8 +44,9 @@ test('simulation panels switch display language but retain numeric input and sci
   assert.match(enRain, /runoff/)
   assert.match(enRain, /35 mm/)
   assert.match(enSolar, /Incident irradiance/)
-  assert.match(enSolar, /aria-valuenow="90"/)
-  assert.match(enSolar, /value="90"/)
+  assert.match(enSolar, /type="range" min="0" max="90" step="1"[^>]*value="45"/)
+  assert.match(enSolar, /type="range" min="0" max="360" step="1"[^>]*value="180"/)
+  assert.match(enSolar, /value="65"/)
   assert.doesNotMatch(enRain, /Lámina Acumulada|escorrentía/)
   setLanguage('es')
 })

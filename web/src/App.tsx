@@ -34,6 +34,7 @@ import { type ScientificColormapId } from './utils/colormapLut'
 import { newId } from './utils/id'
 import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
 import { seismicForMap, newSeismicScenario, regionCenter, markEdited } from './utils/seismicScenario'
+import { SOIL_VS30 } from './utils/seismic'
 import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, getRecommendedSeismicSettings, type CatalogRoiPreset } from './utils/roiCatalog'
 import { bboxFromGeometry, type LonLatBBox } from './utils/terrain3d'
 
@@ -117,7 +118,7 @@ function App() {
   )
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 
-  // Ventanas acoplables del área central (mapa normal y agua/DG2): solo cambia la vista activa,
+  // Ventanas acoplables del área central (mapa normal y simuladores): solo cambia la vista activa,
   // el mapa y su estado se conservan porque el lienzo no se desmonta.
   const activeDockWindow =
     dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
@@ -126,7 +127,9 @@ function App() {
       ? 'rain-dg2'
       : activeDockWindow?.kind === 'sismo'
         ? 'seismic'
-        : 'map'
+        : activeDockWindow?.kind === 'solar'
+          ? 'solar'
+          : 'map'
 
   const openDockWindow = useCallback(
     (kind: DockWindowKind) => {
@@ -156,7 +159,7 @@ function App() {
 
   const handleDockTabChange = useCallback(
     (tab: CenterDockTab) => {
-      const kind: DockWindowKind = tab === 'rain-dg2' ? 'agua' : tab === 'seismic' ? 'sismo' : 'map'
+      const kind: DockWindowKind = tab === 'rain-dg2' ? 'agua' : tab === 'seismic' ? 'sismo' : tab === 'solar' ? 'solar' : 'map'
       const existing = dockWindows.find((w) => w.kind === kind)
       if (existing) {
         setActiveDockWindowId(existing.id)
@@ -188,6 +191,17 @@ function App() {
   const handleSelectMap = (id: string) => {
     setLocationPreview(null)
     setGcovFootprint(null)
+    const selected = maps.find(map => map.id === id)
+    const dockKind: DockWindowKind = selected?.solar.enabled
+      ? 'solar'
+      : selected?.flood?.enabled
+        ? 'agua'
+        : selected?.seismic?.enabled
+          ? 'sismo'
+          : 'map'
+    const dock = dockWindows.find(window => window.kind === dockKind)
+    if (dock) setActiveDockWindowId(dock.id)
+    else openDockWindow(dockKind)
     setActiveCopyId(id)
     setViewMode('editado')
   }
@@ -239,8 +253,16 @@ function App() {
     // Por defecto al cargar un ROI se muestra limpio SIN mapa de calor (opacidadSar = 0).
     // Si se especifica withHeatmap se activa a 72.
     const initialOpacity = options?.withHeatmap ? 72 : 0
+    const presetSeismic = options?.simulation === 'seismic'
+      ? (() => {
+          const settings = getRecommendedSeismicSettings(preset.state, preset.name)
+          return { ...newSeismicScenario(preset.center, preset.name), enabled: true,
+            name: `Sismo - ${preset.name}`, soilType: settings.soilType,
+            vs30: SOIL_VS30[settings.soilType], mechanism: settings.mechanism, autoPlaced: false }
+        })()
+      : null
 
-    if (activeCopy) {
+    if (activeCopy && isEditing) {
       updateMap(activeCopy.id, {
         centro: preset.center,
         zoom: preset.zoom,
@@ -248,8 +270,10 @@ function App() {
         effectiveRoi: polygon,
         effectiveRoiMetadata: metadata,
         croppedRegion: cropRing,
-        solar: { ...activeCopy.solar, enabled: options?.simulation === 'solar', rasterPreviewUrl: null, rasterBounds: null },
+        solar: { ...activeCopy.solar, enabled: options?.simulation === 'solar', rasterPreviewUrl: null, rasterBounds: null,
+          simulationResult: null, analysisResult: null, contours: null },
         ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: options?.simulation === 'flood', rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
+        ...(presetSeismic ? { seismic: presetSeismic } : {}),
         fechaModificacion: new Date().toISOString(),
       })
     } else {
@@ -276,7 +300,7 @@ function App() {
         effectiveRoiMetadata: metadata,
         solar: { ...DEFAULT_SOLAR, enabled: options?.simulation === 'solar' },
         flood: { ...DEFAULT_FLOOD, enabled: options?.simulation === 'flood' },
-        seismic: { ...newSeismicScenario(preset.center, preset.name), enabled: options?.simulation === 'seismic' },
+        seismic: presetSeismic ?? newSeismicScenario(preset.center, preset.name),
       }
       addMap(newCopy)
       setActiveCopyId(newCopy.id)
@@ -288,6 +312,9 @@ function App() {
     if (options?.simulation === 'flood') {
       handleDockTabChange('rain-dg2')
       notify('success', t(`ROI activada para Simulación de Agua: ${preset.name} (${preset.state}) sin mapa de calor.`, `ROI activated for Water Simulation: ${preset.name} (${preset.state}) without heatmap.`))
+    } else if (options?.simulation === 'solar') {
+      handleDockTabChange('solar')
+      notify('success', t(`ROI activada para Simulación Solar: ${preset.name} (${preset.state}).`, `ROI activated for Solar Simulation: ${preset.name} (${preset.state}).`))
     } else if (options?.simulation === 'seismic') {
       handleDockTabChange('seismic')
       notify('success', t(`ROI activada para Sismo: ${preset.name} (${preset.state}) sin mapa de calor.`, `ROI activated for Seismic: ${preset.name} (${preset.state}) without heatmap.`))
@@ -298,7 +325,7 @@ function App() {
       handleDockTabChange('map')
       notify('success', t(`ROI activada (vista limpia sin mapa de calor): ${preset.name} (${preset.state}).`, `ROI activated (clean view without heatmap): ${preset.name} (${preset.state}).`))
     }
-  }, [activeCopy, current, updateMap, addMap, notify, t, handleDockTabChange])
+  }, [activeCopy, isEditing, current, updateMap, addMap, notify, t, handleDockTabChange])
 
   const handleSolarChange = useCallback(
     (nextSolar: SolarSimulationState) => {
@@ -345,20 +372,13 @@ function App() {
       if (mode === 'flood') {
         handleDockTabChange('rain-dg2')
       } else if (mode === 'solar') {
-        handleSolarChange({ ...current.solar, enabled: true })
+        handleDockTabChange('solar')
+        // Preset selection already enabled solar and cleared results for the new ROI.
+        if (!preset) handleSolarChange({ ...current.solar, enabled: true })
       } else if (mode === 'seismic') {
         handleDockTabChange('seismic')
         if (preset) {
           const geoSettings = getRecommendedSeismicSettings(preset.state, preset.name)
-          const baseSeismic = currentSeismic
-          handleSeismicChange({
-            ...baseSeismic,
-            enabled: true,
-            epicenter: preset.center,
-            name: `Sismo - ${preset.name}`,
-            soilType: geoSettings.soilType,
-            mechanism: geoSettings.mechanism,
-          })
           cameraRef.current = { centro: preset.center, zoom: Math.max(7, preset.zoom - 2) }
           notify(
             'success',
@@ -370,7 +390,7 @@ function App() {
         }
       }
     },
-    [handleDockTabChange, current.solar, currentSeismic, handleSolarChange, handleSeismicChange, notify, t]
+    [handleDockTabChange, current.solar, handleSolarChange, notify, t]
   )
 
   const handleCropRegionChange = (polygon: LngLat[] | null) => {
@@ -385,7 +405,8 @@ function App() {
       croppedRegion: polygon,
       effectiveRoi: null,
       effectiveRoiMetadata: null,
-      ...(changed ? { solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null } } : {}),
+      ...(changed ? { solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null,
+        simulationResult: null, analysisResult: null, contours: null } } : {}),
       ...(changed && previousFlood ? {
         flood: { ...previousFlood, enabled: false, rasterUrl: null, rasterBounds: null,
           stats: null, charts: null, resultRoiKey: undefined, compareMode: false },
@@ -428,6 +449,7 @@ function App() {
       carpeta: 'Mis Análisis',
       esEditable: true,
       opacidadSar: 72,
+      solar: { ...current.solar, enabled: false },
       fechaModificacion: new Date().toISOString(),
     }
     addMap(newCopy)
@@ -450,6 +472,7 @@ function App() {
       carpeta: 'Zonas de Riesgo',
       esEditable: true,
       opacidadSar: 0,
+      solar: { ...current.solar, enabled: false },
       flood: {
         ...(current.flood || DEFAULT_FLOOD),
         enabled: true,
@@ -477,7 +500,8 @@ function App() {
       carpeta: 'Zonas de Riesgo',
       esEditable: true,
       opacidadSar: 0,
-      // Escenario nuevo en la ROI de la copia, sin heredar el de otro mapa.
+      solar: { ...current.solar, enabled: false },
+      // Escenario sísmico nuevo en la ROI de la copia, sin heredar el de otro mapa.
       seismic: {
         ...newSeismicScenario(regionCenter(current.effectiveRoi, current.croppedRegion, current.centro), `Sismo - ${baseTitle}`),
         enabled: true,
@@ -607,7 +631,8 @@ function App() {
               effectiveRoi: geometry, effectiveRoiMetadata: metadata,
               croppedRegion: cropRing,
               opacidadSar: 0,
-              solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null },
+              solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null,
+                simulationResult: null, analysisResult: null, contours: null },
               ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: false, rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
               fechaModificacion: new Date().toISOString(),
             })

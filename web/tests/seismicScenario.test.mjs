@@ -1,6 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { regionCenter, newSeismicScenario, seismicForMap } from '../src/utils/seismicScenario.ts'
+
+test('seleccionar preset sísmico aplica ajustes a la copia elegida sin modificar la anterior', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const select = app.slice(app.indexOf('const handleSelectPresetROI'), app.indexOf('const handleSolarChange'))
+  const open = app.slice(app.indexOf('const handleOpenSimulation'), app.indexOf('const handleCropRegionChange'))
+  assert.match(select, /const presetSeismic = options\?\.simulation === 'seismic'/)
+  assert.match(select, /seismic: presetSeismic/)
+  assert.match(select, /seismic: presetSeismic \?\?/)
+  assert.match(select, /vs30: SOIL_VS30\[settings\.soilType\]/, 'Vs30 corresponde al suelo recomendado')
+  assert.doesNotMatch(open, /handleSeismicChange\(/, 'el segundo callback no debe escribir en la copia anterior')
+  const panel = readFileSync(new URL('../src/components/SeismicSimulatorPanel.tsx', import.meta.url), 'utf8')
+  assert.match(panel, /onSelectPresetROI\(preset, \{ simulation: 'seismic' \}\)/)
+  assert.match(panel, /if \(onSelectPresetROI\) \{[\s\S]*?\} else \{[\s\S]*?onSeismicChange/)
+  assert.match(panel, /vs30: SOIL_VS30\[geo\.soilType\]/)
+})
 
 const square = (lng, lat, d) => [[lng, lat], [lng + d, lat], [lng + d, lat + d], [lng, lat + d]]
 
