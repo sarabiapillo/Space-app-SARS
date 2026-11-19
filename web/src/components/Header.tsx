@@ -12,6 +12,7 @@ import {
   Droplets,
   Flame,
   Layers,
+  Mountain,
   PencilRuler,
   Plus,
   Sliders,
@@ -61,6 +62,9 @@ interface HeaderProps {
   onDuplicateForSeismic?: () => void
   /** Abre la landing institucional del equipo (MonitosCH) sin perder el estado del mapa. */
   onOpenTeamPage: () => void
+  /** Abre el visor aislado de Relieve 3D de la ROI activa (modal, no desmonta el mapa). */
+  onOpenTerrain3D?: () => void
+  terrain3DOpen?: boolean
 }
 
 const TOOL_LABELS: Record<DrawTool, string> = {
@@ -167,6 +171,8 @@ export function Header({
   onDuplicateForWater,
   onDuplicateForSeismic,
   onOpenTeamPage,
+  onOpenTerrain3D,
+  terrain3DOpen = false,
 }: HeaderProps) {
   const { language, setLanguage, t, localizeText } = useTranslation()
   const isEditing = viewMode === 'editado' && canShowEdited
@@ -659,6 +665,18 @@ export function Header({
               <Activity size={14} />
               <span>{t('Simulador Terremoto', 'Earthquake Simulator')}</span>
             </button>
+
+            {onOpenTerrain3D && (
+              <button
+                type="button"
+                className={`ws-ribbon__btn ws-ribbon__btn--terrain3d ${terrain3DOpen ? 'is-active' : ''}`}
+                onClick={onOpenTerrain3D}
+                title={t('Abrir maqueta 3D interactiva del relieve de la ROI activa (AWS Terrarium / NASA SRTM + Esri)', 'Open an interactive 3D relief model of the active ROI (AWS Terrarium / NASA SRTM + Esri)')}
+              >
+                <Mountain size={14} />
+                <span>{t('Relieve 3D', '3D Relief')}</span>
+              </button>
+            )}
 
 
           </div>

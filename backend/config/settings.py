@@ -19,6 +19,10 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Asegurar que la raíz del repo (donde vive `pipeline/`) esté siempre en sys.path.
+if str(BASE_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR.parent))
+
 # Variables de entorno desde terrapulse/.env (no se sube a git; ver .env.example).
 load_dotenv(BASE_DIR.parent / ".env")
 

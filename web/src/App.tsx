@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from 'react'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { MapCanvas } from './components/MapCanvas'
@@ -35,13 +35,19 @@ import { newId } from './utils/id'
 import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
 import { seismicForMap, newSeismicScenario, regionCenter, markEdited } from './utils/seismicScenario'
 import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, getRecommendedSeismicSettings, type CatalogRoiPreset } from './utils/roiCatalog'
+import { bboxFromGeometry, type LonLatBBox } from './utils/terrain3d'
+
+// Visor 3D aislado: three.js solo se descarga cuando el usuario abre "Relieve 3D".
+const Terrain3DViewer = lazy(() => import('./components/Terrain3DViewer'))
+/** Lado máximo (grados) del rectángulo de la ROI para el relieve 3D. */
+const TERRAIN3D_MAX_DEG = 3
 
 function baseName(nombre: string): string {
   return nombre.replace(/^(Copia \d+|Mapa General)\s*-\s*/i, '').trim() || nombre
 }
 
 function App() {
-  const { t } = useTranslation()
+  const { t, localizeText } = useTranslation()
   const { maps, addMap, updateMap, deleteMap } = useSavedMaps()
   const [viewMode, setViewMode] = useState<ViewMode>('editado')
   const [activeCopyId, setActiveCopyId] = useState<string | null>(() => maps[0]?.id ?? null)
@@ -52,6 +58,7 @@ function App() {
   const [generalSeismic, setGeneralSeismic] = useState<SeismicSimulationState | undefined>(undefined)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
+  const [terrainBBox, setTerrainBBox] = useState<LonLatBBox | null>(null)
   const [locationPreview, setLocationPreview] = useState<AdministrativeGeometry | null>(null)
   const [gcovFootprint, setGcovFootprint] = useState<unknown | null>(null)
   const [toast, setToast] = useState<ToastMessage | null>(null)
@@ -77,15 +84,19 @@ function App() {
 
   const activeCopy = maps.find((m) => m.id === activeCopyId) ?? maps[0] ?? null
   const isEditing = viewMode === 'editado' && activeCopy !== null
-  const current: WorkspaceMap = isEditing
-    ? activeCopy
-    : {
-        ...MAPA_GENERAL,
-        opacidadSar: generalOpacity,
-        solar: generalSolar,
-        flood: generalFlood,
-        seismic: generalSeismic,
-      }
+  const current: WorkspaceMap = useMemo(
+    () =>
+      isEditing
+        ? activeCopy
+        : {
+            ...MAPA_GENERAL,
+            opacidadSar: generalOpacity,
+            solar: generalSolar,
+            flood: generalFlood,
+            seismic: generalSeismic,
+          },
+    [isEditing, activeCopy, generalOpacity, generalSolar, generalFlood, generalSeismic],
+  )
 
   const manualRoi = current.croppedRegion?.length
     ? { type: 'Polygon' as const, coordinates: [[...current.croppedRegion, current.croppedRegion[0]]] }
@@ -289,16 +300,19 @@ function App() {
     }
   }, [activeCopy, current, updateMap, addMap, notify, t, handleDockTabChange])
 
-  const handleSolarChange = (nextSolar: SolarSimulationState) => {
-    if (isEditing && activeCopy) {
-      updateMap(activeCopy.id, {
-        solar: nextSolar,
-        fechaModificacion: new Date().toISOString(),
-      })
-    } else {
-      setGeneralSolar(nextSolar)
-    }
-  }
+  const handleSolarChange = useCallback(
+    (nextSolar: SolarSimulationState) => {
+      if (isEditing && activeCopy) {
+        updateMap(activeCopy.id, {
+          solar: nextSolar,
+          fechaModificacion: new Date().toISOString(),
+        })
+      } else {
+        setGeneralSolar(nextSolar)
+      }
+    },
+    [isEditing, activeCopy, updateMap],
+  )
 
   const handleFloodChange = (nextFlood: FloodSimulationState) => {
     if (isEditing && activeCopy) {
@@ -311,17 +325,20 @@ function App() {
     }
   }
 
-  const handleSeismicChange = (incoming: SeismicSimulationState) => {
-    const nextSeismic = markEdited(currentSeismic, incoming)
-    if (isEditing && activeCopy) {
-      updateMap(activeCopy.id, {
-        seismic: nextSeismic,
-        fechaModificacion: new Date().toISOString(),
-      })
-    } else {
-      setGeneralSeismic(nextSeismic)
-    }
-  }
+  const handleSeismicChange = useCallback(
+    (incoming: SeismicSimulationState) => {
+      const nextSeismic = markEdited(currentSeismic, incoming)
+      if (isEditing && activeCopy) {
+        updateMap(activeCopy.id, {
+          seismic: nextSeismic,
+          fechaModificacion: new Date().toISOString(),
+        })
+      } else {
+        setGeneralSeismic(nextSeismic)
+      }
+    },
+    [currentSeismic, isEditing, activeCopy, updateMap],
+  )
 
   const handleOpenSimulation = useCallback(
     (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => {
@@ -353,7 +370,7 @@ function App() {
         }
       }
     },
-    [handleDockTabChange, current.solar, currentSeismic, notify, t]
+    [handleDockTabChange, current.solar, currentSeismic, handleSolarChange, handleSeismicChange, notify, t]
   )
 
   const handleCropRegionChange = (polygon: LngLat[] | null) => {
@@ -493,6 +510,21 @@ function App() {
   }
 
   const closeModal = useCallback(() => setDuplicating(false), [])
+  const closeTerrain3D = useCallback(() => setTerrainBBox(null), [])
+
+  const handleOpenTerrain3D = () => {
+    if (terrainBBox) { setTerrainBBox(null); return }
+    const bbox = bboxFromGeometry(confirmedROI)
+    if (!bbox) {
+      notify('error', localizeText('Selecciona primero una ROI para ver su relieve 3D.'))
+      return
+    }
+    if (bbox[2] - bbox[0] > TERRAIN3D_MAX_DEG || bbox[3] - bbox[1] > TERRAIN3D_MAX_DEG) {
+      notify('error', localizeText('La ROI es demasiado grande para el relieve 3D (máximo 3° por lado).'))
+      return
+    }
+    setTerrainBBox(bbox)
+  }
 
   return (
     <div className="app">
@@ -525,6 +557,8 @@ function App() {
         onDuplicateForWater={handleDuplicateForWater}
         onDuplicateForSeismic={handleDuplicateForSeismic}
         onOpenTeamPage={() => setTeamPageOpen(true)}
+        onOpenTerrain3D={handleOpenTerrain3D}
+        terrain3DOpen={terrainBBox !== null}
       />
 
       <div className="app__body">
@@ -645,6 +679,16 @@ function App() {
       )}
 
       {teamPageOpen && <TeamLandingPage onClose={() => setTeamPageOpen(false)} />}
+      {terrainBBox && (
+        <Suspense fallback={<div className="terrain3d-overlay"><div className="terrain3d-status">{t('Cargando visor 3D…', 'Loading 3D viewer…')}</div></div>}>
+          <Terrain3DViewer
+            key={terrainBBox.join(',')}
+            bbox={terrainBBox}
+            roiName={current.effectiveRoiMetadata?.name || current.nombre}
+            onClose={closeTerrain3D}
+          />
+        </Suspense>
+      )}
       <Toast message={toast} onClose={closeToast} />
 
     </div>

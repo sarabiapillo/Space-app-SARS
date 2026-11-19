@@ -24,6 +24,7 @@ export interface ScientificFigure {
   aspectRatio: 'standard' | 'wide'
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const SCIENTIFIC_FIGURES: ScientificFigure[] = [
   {
     id: 'incidencia',

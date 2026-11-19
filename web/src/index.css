@@ -6855,3 +6855,148 @@ button:disabled {
   color: #0f172a;
   font-family: var(--font-mono, monospace);
 }
+
+
+/* ===== Relieve 3D de la ROI (módulo aislado, Terrain3DViewer) ===== */
+.terrain3d-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+.terrain3d-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1280px, 96vw);
+  height: min(820px, 92vh);
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.35);
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+}
+.terrain3d-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+.terrain3d-title { display: flex; align-items: center; gap: 8px; }
+.terrain3d-roi {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0f2f1;
+  color: #0f766e;
+  font-size: 12px;
+}
+.terrain3d-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+.terrain3d-icon-btn:hover { background: #f1f5f9; }
+.terrain3d-body { display: flex; flex: 1; min-height: 0; }
+.terrain3d-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: radial-gradient(ellipse at 50% 35%, #ffffff 0%, #e2e8f0 70%, #cbd5e1 100%);
+}
+.terrain3d-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.terrain3d-stage canvas:active { cursor: grabbing; }
+.terrain3d-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: #334155;
+}
+.terrain3d-overlay > .terrain3d-status { position: static; background: #ffffff; border-radius: 8px; }
+.terrain3d-status--error { color: #9f1239; }
+.terrain3d-status code {
+  max-width: 80%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fff1f2;
+  font-size: 11px;
+  word-break: break-word;
+}
+.terrain3d-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
+  font-size: 11px;
+  pointer-events: none;
+}
+.terrain3d-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 290px;
+  padding: 12px;
+  border-left: 1px solid #e2e8f0;
+  background: #ffffff;
+  overflow-y: auto;
+}
+.terrain3d-panel section { display: flex; flex-direction: column; gap: 6px; }
+.terrain3d-panel input[type='range'] { width: 100%; accent-color: #0f766e; }
+.terrain3d-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #475569;
+}
+.terrain3d-seg { display: flex; flex-direction: column; gap: 4px; }
+.terrain3d-seg button,
+.terrain3d-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.terrain3d-seg button:hover:not(:disabled),
+.terrain3d-actions button:hover:not(:disabled) { background: #f1f5f9; }
+.terrain3d-seg button.is-active { border-color: #0f766e; background: #e0f2f1; color: #0f766e; font-weight: 600; }
+.terrain3d-seg button:disabled,
+.terrain3d-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.terrain3d-telemetry dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  margin: 0;
+}
+.terrain3d-telemetry dt { color: #64748b; }
+.terrain3d-telemetry dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+.terrain3d-source { margin: 4px 0 0; font-size: 11px; color: #334155; }
+.terrain3d-note { margin: 0; font-size: 11px; color: #64748b; line-height: 1.4; }
