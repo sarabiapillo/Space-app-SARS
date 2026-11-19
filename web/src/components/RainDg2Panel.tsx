@@ -3,7 +3,7 @@ import { CloudRain, ChevronDown, ChevronUp, X } from 'lucide-react'
 import type { FloodSimulationState, LngLat } from '../types/workspace'
 import { floodRoiPolygon } from '../utils/floodRoi'
 import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
-import { createFloodRunController } from '../utils/floodDg2'
+import { buildRoiFloodRequest, createFloodRunController, type FloodDg2Form } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
 
@@ -15,8 +15,8 @@ interface Props {
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   onClose?: () => void
 }
-const initial = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundary:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',confirm:false}
-type Form = typeof initial
+const initial: FloodDg2Form = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundary:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false}
+type Form = FloodDg2Form
 export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSelectPresetROI,onClose}:Props) {
   const {t,localizeText} = useTranslation()
   const [collapsed,setCollapsed]=useState(false)
@@ -46,21 +46,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
   },[roiKey])
   const set=(name:keyof Form,value:string|boolean)=>setForm(f=>({...f,[name]:value,confirm:name==='confirm' && value===true}))
   const roi=floodRoiPolygon(croppedRegion)
-  const buildRequest=()=>{
-    if(!roi)throw Error(t('Selecciona una ROI Polygon válida en el mapa.','Select a valid Polygon ROI on the map.'))
-    let domain
-    if(form.useRoi) domain=roi
-    else {
-      try {const parsed=JSON.parse(form.domain); if(parsed?.type!=='Polygon'||!Array.isArray(parsed.coordinates)||Object.keys(parsed).some(k=>!['type','coordinates'].includes(k)))throw Error(); domain=parsed}
-      catch {throw Error(t('Indica un dominio GeoJSON Polygon válido o acepta explícitamente usar la ROI como dominio.','Enter a valid GeoJSON Polygon domain or explicitly opt in to using the ROI as domain.'))}
-    }
-    const positive=(raw:string,label:string,max=Infinity)=>{const n=Number(raw);if(!raw.trim()||!Number.isFinite(n)||n<=0||n>max)throw Error(`${label}: ${t('indica un número positivo válido.','enter a valid positive number.')}`);return n}
-    const integer=(raw:string,label:string,allowZero=false)=>{const n=Number(raw);if(!raw.trim()||!Number.isSafeInteger(n)||n<0||(!allowZero&&n===0))throw Error(`${label}: ${t('se requiere un entero válido.','valid integer required.')}`);return n}
-    if(!/^EPSG:\d+$/.test(form.crs))throw Error(t('Indica un CRS métrico EPSG para el terreno.','Enter a metric EPSG terrain CRS.'))
-    if(!['nearest','bilinear'].includes(form.resampling)||!['free','closed'].includes(form.boundary))throw Error(t('Selecciona remuestreo y frontera.','Select resampling and boundary.'))
-    if(!form.nonurban||!form.confirm)throw Error(t('Declara el dominio no urbano y confirma las hipótesis.','Declare a nonurban domain and confirm the assumptions.'))
-    return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:'dry_zero_velocity',boundary:form.boundary,infiltration:'unsupported',domain_nonurban:true},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial')}}
-  }
+  const buildRequest=()=>buildRoiFloodRequest(form,roi,t)
   const launch=async()=>{try {const req=buildRequest();const {flood:prev,onFloodChange:change}=latest.current; change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,stats:null,charts:null,resultRoiKey:undefined}); const outcome=await controller.current!.start(req,roiKey);if(outcome?.result){const first=outcome.result.artifacts.find(a=>a.frame_index===undefined||a.frame_index===null)??outcome.result.artifacts[0];if(first){await controller.current!.select(outcome.run,outcome.result,first.name,roiKey)}}}catch(e){setView({roiKey,error:e instanceof Error?e.message:String(e)})}}
   const choose=async(name:string)=>{if(!view?.run||!view.result)return;await controller.current!.select(view.run,view.result,name,roiKey)}
   const current=view?.roiKey===roiKey?view:null
@@ -86,11 +72,14 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         <label style={{display:'block'}}><input type="checkbox" checked={form.nonurban} onChange={e=>set('nonurban',e.target.checked)}/>{t('Declaro que el dominio es no urbano','I declare the domain nonurban')}</label>
         {field('amount',t('Lluvia hipotética (mm)','Hypothetical rainfall (mm)'))}{field('rainDuration',t('Duración lluvia (s)','Rainfall duration (s)'))}{field('seed',t('Semilla del perfil sintético (entero no negativo)','Synthetic profile seed (nonnegative integer)'))}{field('intervals',t('Número de intervalos','Interval count'))}
         {field('duration',t('Duración de simulación (s, máximo 86400)','Simulation duration (s, max 86400)'))}{field('save',t('Intervalo solicitado de guardado (s)','Requested save interval (s)'))}{field('tstep',t('Paso inicial (s)','Initial timestep (s)'))}
+        <label style={{display:'block',margin:'6px 0'}}>{t('Umbral de lámina delgada DG2 (m, 0–1; dg2depththresh)','DG2 thin-depth threshold (m, 0–1; dg2depththresh)')}<input className="ws-rain-select" style={{width:'100%'}} type="number" value={form.thinDepth} disabled={form.thinDepthOff} onChange={e=>set('thinDepth',e.target.value)}/></label>
+        <label style={{display:'block'}}><input type="checkbox" checked={form.thinDepthOff} onChange={e=>set('thinDepthOff',e.target.checked)}/>{t('Desactivar umbral (por defecto del solver): pueden aparecer profundidades negativas en láminas finas.','Disable threshold (solver default): negative depths may appear on thin films.')}</label>
+        <p>{t('El umbral elimina profundidades negativas en láminas finas, pero cambia la solución; queda registrado en la corrida.','The threshold removes negative depths on thin films but changes the solution; it is recorded with the run.')}</p>
         <label style={{display:'block'}}><input type="checkbox" checked={form.confirm} onChange={e=>set('confirm',e.target.checked)}/>{t('Confirmo estas hipótesis hipotéticas, lluvia sintética y exactitud no validada.','I confirm these hypothetical assumptions, synthetic rainfall and unvalidated accuracy.')}</label>
         <button type="button" className="ws-rain-action-btn" disabled={!roi||!form.confirm||Boolean(current?.run&&!['succeeded','failed','timed_out'].includes(current.run.state))} onClick={launch}>{t('Iniciar corrida DG2 (sin inicio automático)','Start DG2 run (no automatic launch)')}</button>
       </section>
       {current?.error&&<p role="alert" className="ws-rain-error">{localizeText(current.error)}</p>}
-      {current?.run&&<section className="ws-rain-card" aria-live="polite"><h3>{t('Corrida','Run')}</h3><p>{current.run.id} · {current.run.state} · {current.run.stage}</p>{['failed','timed_out'].includes(current.run.state)&&<p role="alert">{t('Corrida fallida:','Run failed:')} {current.run.error??current.run.state}</p>}</section>}
+      {current?.run&&<section className="ws-rain-card" aria-live="polite"><h3>{t('Corrida','Run')}</h3><p>{current.run.id} · {current.run.state} · {current.run.stage}</p><p>{t('Umbral de lámina delgada DG2:','DG2 thin-depth threshold:')} {current.run.dg2_depth_thresh_m==null?t('desactivado','disabled'):`${current.run.dg2_depth_thresh_m} m`}</p>{['failed','timed_out'].includes(current.run.state)&&<p role="alert">{t('Corrida fallida:','Run failed:')} {current.run.error??current.run.state}</p>}</section>}
       {current?.result&&<section className="ws-rain-card ws-rain-card--results"><h3>{t('Resultados DG2: profundidad (m)','DG2 results: depth (m)')}</h3><p>{t('Lluvia sintética; exactitud hidráulica NO validada. No son observaciones.','Synthetic rainfall; hydraulic accuracy NOT validated. Not observations.')}</p><p>{t('Los cuadros se ordenan por índice; el tiempo programado no es tiempo físico observado.','Frames ordered by index; scheduled time is not observed physical time.')}</p>
         <label>{t('Cuadro / máximo','Frame / maximum')}<select value={selected} onChange={e=>choose(e.target.value)}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s)`}</option>)}</select></label>
         {stats&&<dl>{(['wet_cells','valid_cells','nodata_cells','min_m','max_m'] as const).filter(key=>typeof stats[key]==='number'&&Number.isFinite(stats[key])).map(key=><div key={key}><dt>{key}</dt><dd>{String(stats[key])} {key.endsWith('_m')?'m':''}</dd></div>)}</dl>}

@@ -390,7 +390,7 @@ export async function runSolarSimulation(
   return res.json()
 }
 
-export interface FloodRoiRun { id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean }
+export interface FloodRoiRun { id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null }
 export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
 export interface FloodRoiResult {
   frames: Array<{frame_index: number; scheduled_time_s: number | null; time_s: null; stats: FloodRoiStats}>

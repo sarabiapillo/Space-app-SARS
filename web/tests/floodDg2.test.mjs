@@ -97,3 +97,27 @@ test('controller invalidation aborts stale ROI and revokes object URLs; no resul
   const job=controller.start({},'roi-a'); await Promise.resolve(); controller.invalidate(); release(); await job
   assert.equal(results,0); assert.equal(changes.some(v=>v?.rasterUrl),false); assert.deepEqual(revoked,[])
 })
+
+const { buildRoiFloodRequest } = await import('../src/utils/floodDg2.ts')
+const tr = es => es
+const square = {type:'Polygon',coordinates:[[[-93.3,16.67],[-93.29,16.67],[-93.29,16.68],[-93.3,16.68],[-93.3,16.67]]]}
+const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundary:'free',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
+
+test('request builder keeps every previous field and sends an explicitly disabled thin-depth threshold as null', () => {
+  assert.deepEqual(buildRoiFloodRequest(filledForm(), square, tr), {roi:square,domain:square,
+    rainfall:{amount:20,unit:'mm',duration:600,duration_unit:'s'},
+    rainfall_profile:{interval_count:4,seed:7,distribution:'uniform_balanced'},
+    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
+    hydraulics:{manning:.05,initial_condition:'dry_zero_velocity',boundary:'free',infiltration:'unsupported',domain_nonurban:true},
+    simulation:{duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null}})
+})
+
+test('request builder sends an explicit thin-depth threshold in meters', () => {
+  assert.equal(buildRoiFloodRequest(filledForm({thinDepth:'0.02',thinDepthOff:false}), square, tr).simulation.dg2_depth_thresh_m, .02)
+})
+
+test('request builder rejects a missing or out-of-range thin-depth threshold unless explicitly disabled', () => {
+  for (const thinDepth of ['', '0', '-0.02', '1.5', 'abc']) {
+    assert.throws(() => buildRoiFloodRequest(filledForm({thinDepth,thinDepthOff:false}), square, tr), /Umbral de lámina delgada DG2/)
+  }
+})

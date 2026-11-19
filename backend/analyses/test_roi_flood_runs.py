@@ -48,10 +48,21 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, payload(), format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual(start.call_args.args, ('1', payload()))
-        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertIsNone(response.json()['dg2_depth_thresh_m'])
         self.assertEqual(response.json()['state'], 'created')
         self.assertEqual(self.alice.get(response.json()['results_url']).status_code, 409)
         self.assertEqual(self.bob.get(response.json()['status_url']).status_code, 404)
+
+    def test_start_echoes_explicit_thin_depth_threshold(self):
+        body = payload(); body['simulation']['dg2_depth_thresh_m'] = .02
+        with patch('analyses.roi_flood_runs.start_roi_run') as start:
+            from pipeline.hydrology.roi_runner import start_roi_run
+            start.side_effect = lambda *args, **kwargs: start_roi_run(*args, **{**kwargs, 'launch': False})
+            response = self.alice.post(self.start, body, format='json')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()['dg2_depth_thresh_m'], .02)
+        self.assertEqual(self.alice.get(response.json()['status_url']).json()['dg2_depth_thresh_m'], .02)
 
     def test_rejections_leave_no_jobs(self):
         examples = [dict(payload(), extra='path'), {k:v for k,v in payload().items() if k != 'domain'}]
@@ -77,7 +88,9 @@ class RoiHttpTests(SimpleTestCase):
             self.assertNotEqual(client.get(status).status_code, 200)
             self.assertNotEqual(client.get(results).status_code, 200)
             self.assertNotEqual(client.get(download).status_code, 200)
-        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        # Runs recorded before the threshold existed ran with the solver default (off): reported as null.
+        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertIsNone(self.alice.get(status).json()['dg2_depth_thresh_m'])
         result = self.alice.get(results)
         self.assertEqual(result.status_code, 200)
         body = result.json()

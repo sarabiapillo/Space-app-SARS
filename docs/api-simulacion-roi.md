@@ -18,9 +18,11 @@ El servicio se configura por entorno, con rutas y hashes fijados en el servidor,
   "rainfall_profile": {"interval_count":2,"seed":7,"distribution":"uniform_balanced"},
   "terrain": {"target_crs":"EPSG:32615","resolution_m":20,"resampling":"nearest"},
   "hydraulics": {"manning":0.02,"initial_condition":"dry_zero_velocity","boundary":"free","infiltration":"unsupported","domain_nonurban":true},
-  "simulation": {"duration_s":2,"save_interval_s":1,"initial_tstep_s":0.1}
+  "simulation": {"duration_s":2,"save_interval_s":1,"initial_tstep_s":0.1,"dg2_depth_thresh_m":null}
 }
 ```
+
+`simulation.dg2_depth_thresh_m` es **obligatorio**: `null` desactiva explícitamente el umbral (comportamiento por defecto de LISFLOOD-FP 8.0.3) o un número `0 < v ≤ 1` en metros activa `dg2depththresh v`, que trata como planas (sin pendiente DG2) las celdas con menos de `v` m de agua. Sin umbral, DG2 puede producir profundidades medias **negativas** en láminas finas que escurren por pendiente (el solver solo garantiza positividad en las interfaces); el lector de resultados las rechaza y la corrida termina `failed`. Con umbral desaparecen esos negativos, pero la solución cambia (en una prueba real de 900 s con 0.02 m la profundidad máxima pasó de 1.14 a 1.21 m), por lo que es una elección numérica que se registra con la corrida, no un valor físico recomendado.
 
 El sobre acepta exactamente estas siete secciones. La lluvia es hipotética, perfil temporal sintético conservativo con semilla, uniforme dentro de la ROI y cero fuera; no es precipitación observada. `closed` o `free` (FREE idealizada), terreno métrico, duración, paso inicial y frecuencia de guardado deben elegirse expresamente. Estado inicial seco y velocidad cero **no** provienen de NISAR. Infiltración no modelada; NASADEM es elevación EGM96 y **no** profundidad. La malla se expande a un rectángulo métrico completo antes de comprobar cobertura; presupuestos de celdas, lluvia, cuadros y teselas se validan antes de crear trabajo.
 
@@ -29,7 +31,7 @@ El sobre acepta exactamente estas siete secciones. La lluvia es hipotética, per
 `202` (valores ilustrativos; UUID asignado por servidor):
 
 ```json
-{"id":"6c5b38f4-9d14-4c71-912b-04ed7629d94a","state":"created","stage":"created","simulation_duration_s":2,"save_interval_s":1,"synthetic":true,"hydraulic_accuracy_validated":false,"status_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/","results_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/results/"}
+{"id":"6c5b38f4-9d14-4c71-912b-04ed7629d94a","state":"created","stage":"created","simulation_duration_s":2,"save_interval_s":1,"dg2_depth_thresh_m":null,"synthetic":true,"hydraulic_accuracy_validated":false,"status_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/","results_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/results/"}
 ```
 
 Consultar `GET status_url` con la misma sesión. `state`/`stage`: `created`, `acquiring`, `preparing`, `running`, `results`, `succeeded`, `failed`, `timed_out`. En fallo hay `error` limitado a códigos seguros (`acquisition_failed`, `preparation_failed`, `preparation_or_output_invalid`, `worker_stopped`, `worker_deadline`, `worker_launch_failed`, `preparation_timeout`, `solver_timeout` o `run_failed`); no se expone traceback ni rutas. Mostrar fallo de adquisición distinto de preparación/cobertura; los detalles de cobertura no se infieren del código general. `GET results_url` responde `409 {"errors":{"result":["Resultado no disponible."]}}` hasta éxito.

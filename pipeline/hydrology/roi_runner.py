@@ -146,7 +146,7 @@ def validate_roi_run(payload, limits):
     _keys(payload['terrain'], {'target_crs','resolution_m','resampling'})
     _keys(payload['rainfall_profile'], {'interval_count','seed','distribution'})
     _keys(payload['hydraulics'], {'manning','initial_condition','boundary','infiltration','domain_nonurban'})
-    _keys(payload['simulation'], {'duration_s','save_interval_s','initial_tstep_s'})
+    _keys(payload['simulation'], {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'})
     t, h, s, rp = (payload[k] for k in ('terrain','hydraulics','simulation','rainfall_profile'))
     crs = _validate_crs(t['target_crs'])
     resolution = _number(t['resolution_m'], 100_000)
@@ -159,6 +159,10 @@ def validate_roi_run(payload, limits):
     duration = _number(s['duration_s'], 86400)
     save = _number(s['save_interval_s'], duration)
     _number(s['initial_tstep_s'], duration)
+    # DG2 thin-depth fallback (LISFLOOD-FP `dg2depththresh`): explicit choice, null = solver default (off).
+    # It removes negative cell-average depths on thin films but changes the solution, so it is recorded.
+    if s['dg2_depth_thresh_m'] is not None:
+        _number(s['dg2_depth_thresh_m'], 1)
     frames = math.floor(duration / save) + 2
     if frames > limits['max_frames']:
         raise ValueError('cuadros exceden max_frames')
@@ -242,6 +246,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'synthetic':True,'hydraulic_accuracy_validated':False,
              'simulation_duration_s':request['simulation']['duration_s'],
              'save_interval_s':request['simulation']['save_interval_s'],
+             'dg2_depth_thresh_m':request['simulation']['dg2_depth_thresh_m'],
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+cfg['timeout_s']+30}
     _save(directory,state)
@@ -297,6 +302,23 @@ def _prepare(directory, request, cfg, provider, stage):
     return actual
 
 
+def solver_parameter_file(request):
+    """LISFLOOD-FP .par text from a validated request. All file names are constant;
+    only validated numbers are interpolated, so no untrusted directive can be injected."""
+    s, h = request['simulation'], request['hydraulics']
+    parameter = 'dg2\n'
+    if s['dg2_depth_thresh_m'] is not None:
+        # Must follow `dg2`, which resets DG2DepthThresh to its default.
+        parameter += f'dg2depththresh {s["dg2_depth_thresh_m"]}\n'
+    parameter += ('DEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
+                  f'sim_time {s["duration_s"]}\nsaveint {s["save_interval_s"]}\n'
+                  f'initial_tstep {s["initial_tstep_s"]}\nfpfric {h["manning"]}\n'
+                  'dynamicrainfile rain.nc\n')
+    if h['boundary'] == 'free':
+        parameter += 'bcifile boundary.bci\n'
+    return parameter
+
+
 def _preparation_child(directory, request, cfg, provider, stage):
     os.setsid()
     try:
@@ -338,13 +360,7 @@ def run_roi_worker(root, run_id, *, provider=None):
         actual = json.loads(stage.read_text())['extent_m']
         state.update(state='preparing',stage='preparing',computed_extent_m=actual); _save(directory,state)
         s,h = request['simulation'],request['hydraulics']
-        # All file names constant; no untrusted parameter directives.
-        parameter = ('dg2\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
-                     f'sim_time {s["duration_s"]}\nsaveint {s["save_interval_s"]}\n'
-                     f'initial_tstep {s["initial_tstep_s"]}\nfpfric {h["manning"]}\n'
-                     'dynamicrainfile rain.nc\n')
-        if h['boundary']=='free':
-            parameter += 'bcifile boundary.bci\n'
+        parameter = solver_parameter_file(request)
         work = directory/'work'; work.mkdir(mode=0o700)
         for name,source in [('terrain.dem',directory/'dg2/terrain.dem'),('terrain.dem1x',directory/'dg2/terrain.dem1x'),
                             ('terrain.dem1y',directory/'dg2/terrain.dem1y'),('rain.nc',directory/'rain.nc')]+(
