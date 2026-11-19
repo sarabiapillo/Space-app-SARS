@@ -1204,7 +1204,7 @@ export function MapCanvas({
   // Animación de los frentes de onda P y S desde el epicentro (requestAnimationFrame, sin re-render de React).
   const waveClockRef = useRef<HTMLDivElement>(null)
   const waveAnimating = Boolean(isSeismic && seismic?.simulated && seismic?.animatingWaves)
-  const waveSpeed = seismic?.waveAnimationSpeed ?? 20
+  const waveSpeed = seismic?.waveAnimationSpeed ?? 5
   const waveEpicenter = seismic?.epicenter
   const waveDepth = seismic?.depthKm ?? 20
   useEffect(() => {

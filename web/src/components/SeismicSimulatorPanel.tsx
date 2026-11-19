@@ -485,12 +485,13 @@ export function SeismicSimulatorPanel({
               <label className="seismic-wave-speed">
                 {t('Velocidad', 'Speed')}
                 <select
-                  value={seismic.waveAnimationSpeed ?? 20}
+                  value={seismic.waveAnimationSpeed ?? 5}
                   onChange={(e) => onSeismicChange({ ...seismic, waveAnimationSpeed: Number(e.target.value) })}
                 >
+                  <option value={2}>×2</option>
+                  <option value={5}>×5</option>
                   <option value={10}>×10</option>
                   <option value={20}>×20</option>
-                  <option value={50}>×50</option>
                 </select>
               </label>
             </div>
