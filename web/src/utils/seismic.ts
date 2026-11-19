@@ -178,7 +178,7 @@ export function computePga_g(
   const R = Math.sqrt(distanceEpicentralKm * distanceEpicentralKm + depthKm * depthKm)
 
   let c1 = -1.85
-  let c2 = 0.92
+  const c2 = 0.92
   let c3 = 1.15
   const c4 = 0.0032
 
@@ -448,7 +448,7 @@ export function generateSyntheticSeismogram(
 
     let a_p = 0
     let a_s = 0
-    let phase: SyntheticSeismogramPoint['phase'] = 'ambient'
+    let phase: SyntheticSeismogramPoint['phase']
 
     if (t < tP) {
       phase = 'ambient'
@@ -466,7 +466,7 @@ export function generateSyntheticSeismogram(
       // t >= tS: Arribo de onda S de corte y ondas superficiales
       const dtS = t - tS
       const riseTime = 1.8
-      let envS = 0
+      let envS: number
       if (dtS <= riseTime) {
         envS = dtS / riseTime
       } else {
