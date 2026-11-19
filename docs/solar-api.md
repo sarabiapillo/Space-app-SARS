@@ -1,165 +1,50 @@
-# Consumir el simulador solar: API de fases D/E
+# API solar: escenario geométrico idealizado
 
-La única capa disponible es **irradiancia solar directa incidente**, en W/m². No mide radiación real ni temperatura: usa NASADEM, SPA y DNI de cielo despejado climatológico. No hay absorción/reflexión/transmisión de materiales.
+> Estado: contrato de integración en desarrollo; pruebas de la versión nueva pendientes. Los ejemplos son solicitudes ilustrativas, **no** resultados medidos ni simulaciones verificadas.
 
-## Arranque local
+La única magnitud publicada es **irradiancia solar directa incidente modelada** en W/m² por área de terreno. No representa temperatura, radiación absorbida, irradiación acumulada, medición meteorológica ni condiciones en tiempo real. Los ZIP NASADEM deben tener cobertura suficiente de la ROI. Los límites de adquisición y los supuestos de terreno/atmósfera se describen en `docs/features/solar-radiation-simulator.tex`.
 
-Desde la raíz del repositorio, en el entorno Python del proyecto:
+## Solicitar una simulación
 
-```bash
-# Si faltan dependencias solares, aislarlas sin cambiar el entorno compartido:
-python -m pip install --no-deps --target data/solar-pvlib-deps -r pipeline/solar/requirements.txt
-# Versiones HTTP verificadas: Django 5.2.19 y DRF 3.18.3.
-# El entorno debe tener Django, DRF, Rasterio/GDAL, pyproj, shapely,
-# numpy, pandas, scipy, h5py, earthaccess, matplotlib y Pillow.
-export PYTHONPATH="$PWD/data/solar-pvlib-deps:$PWD:$PWD/backend"
-python backend/manage.py runserver --noreload 127.0.0.1:8000
-```
-
-La configuración normal de Django conserva `.env` (ver `.env.example`) y sus dependencias; nunca publicar sus valores. La API solar no usa tablas ni requiere migraciones propias. El proveedor puede reutilizar ZIP válidos de la caché; si faltan necesita autenticación Earthdata no interactiva configurada fuera del repositorio. No enviar credenciales Earthdata al frontend ni en el POST.
-
-**Ejecutar un único proceso local**, sin servidores multiproceso ni adquisiciones externas concurrentes sobre la misma caché. Se serializa el cálculo y una petición concurrente se rechaza, no se encola. La implementación usa un bloqueo de archivos POSIX: Windows y despliegue distribuido no están habilitados.
-
-## POST: ejecutar una simulación
-
-Ruta exacta sin barra final: `POST /api/solar/simulations`.
-
-```bash
-curl -i http://127.0.0.1:8000/api/solar/simulations \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "roi": {
-      "type": "Polygon",
-      "coordinates": [[[-93.56,16.74],[-93.54,16.74],[-93.54,16.76],[-93.56,16.76],[-93.56,16.74]]]
-    },
-    "datetime_local": "2026-11-15T12:00:00",
-    "timezone": "America/Mexico_City",
-    "intensity_percent": 50,
-    "temperature_c": 12
-  }'
-```
-
-Este GeoJSON es una **petición de ejemplo**, no una medición o resultado precalculado. La presión opcional se envía como `pressure_hpa`; si falta se estima con atmósfera estándar desde la altitud representativa NASADEM. La temperatura omitida usa 12 °C. Los números deben ser JSON numéricos finitos, no cadenas ni booleanos. La fecha local exige segundos y **no** acepta offset; la zona IANA resuelve el instante. Horas DST ambiguas/inexistentes se rechazan. No se aceptan `roi_id`, albedo, ángulos solares, irradiancia manual, paleta ni rutas a disco.
-
-Una simulación completa devuelve `201 Created`, encabezado `Location`, identificador opaco y `status: ready`; no hay `202` ni trabajos ficticios. `position` y `clear_sky` contienen los valores efectivos, métodos, fuentes y supuestos de esa corrida. `raster` describe el TIFF numérico. `preview` describe la imagen final EPSG:4326 y su escala. `layers.incident.preview_url`, `layers.incident.export_url` y `sample_url` son rutas relativas al mismo servidor.
-
-## Respuesta observada de extremo a extremo
-
-Se ejecutó el POST anterior mediante **HTTP WSGI real en loopback**, usando el ZIP NASADEM local de `n16w094`. Solo la adquisición fue sustituida por el granular local para impedir red; el resto del pipeline, exportación, vistas y muestreo fue real. Se obtuvieron **201, 200, 200, 200 y 200** para POST, detalle, PNG, TIFF y sample. No es una medición de campo ni una prueba de autenticación Earthdata. El ID siguiente es el observado localmente, no estará disponible en otro servidor.
-
-Extracto de la respuesta real (se omiten campos adicionales, no se alteran cifras):
+`POST /api/solar/simulations` con JSON:
 
 ```json
 {
-  "id": "8e1a075f7712435bab9a0292d8eb36c0",
-  "status": "ready",
-  "units": "W/m2",
-  "night": false,
-  "position": {
-    "datetime_utc": "2026-11-15T18:00:00+00:00",
-    "apparent_elevation_deg": 54.63962031088027,
-    "altitude_m": 782.1372680664062,
-    "altitude_datum": "EGM96",
-    "pressure_hpa": 922.7514462351598,
-    "temperature_c": 12.0
-  },
-  "clear_sky": {
-    "dni_clear_sky_w_m2": 885.3905049756529,
-    "dni_adjusted_w_m2": 442.69525248782645,
-    "intensity_percent": 50.0,
-    "linke_turbidity": 3.85
-  },
-  "raster": {
-    "crs": "EPSG:32615", "width": 72, "height": 74,
-    "resolution_m": [30.92222222222222, 30.92222222222222],
-    "units": "W/m2", "valid_pixels": 4968
-  },
-  "preview": {
-    "crs": "EPSG:4326", "width": 74, "height": 73,
-    "bounds_lonlat": [-93.56034941688789,16.739547709324466,-93.53927810823552,16.760334270562613],
-    "palette": "inferno", "range_w_m2": [0.0,442.69525248782645], "zero_range": false
-  },
-  "layers": {
-    "incident": {
-      "preview_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/preview/incident",
-      "export_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/export/incident"
-    }
-  },
-  "sample_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/sample"
+  "roi": {"type":"Polygon","coordinates":[[[-93.56,16.74],[-93.54,16.74],[-93.54,16.76],[-93.56,16.76],[-93.56,16.74]]]},
+  "elevation_deg": 45,
+  "azimuth_deg": 180,
+  "intensity_percent": 100
 }
 ```
 
-Para `sample?lon=-93.55&lat=16.75`, se observó:
+Solo `roi` es obligatoria; los valores predeterminados de elevación, azimut desde norte en sentido horario y factor de intensidad son **45°**, **180°** y **100 % adimensional**, respectivamente. Elevación: 0°–90°; azimut: 0°–360°; intensidad: 0–100 %. No se requiere ni admite fecha, hora o zona horaria de la simulación nueva. Los timestamps administrativos de almacenamiento no son parámetros físicos. Las fechas SAR t1/t2 no se alteran. Los campos ambientales históricos solo describen corridas antiguas y no son entradas del escenario nuevo.
 
-```json
-{"value_w_m2":400.95941162109375,"status":"valid"}
-```
+Una respuesta `201 Created` publica una corrida persistente con identificador, `position`, `clear_sky`, `raster`, `preview` y `layers`. `clear_sky.dni_adjusted_w_m2` es la DNI de entrada modelada en W/m², después del factor de intensidad; `analysis_summary.statistics.{min,max,mean}` se calcula sobre los píxeles válidos del GeoTIFF. Cuando la DNI es positiva, la razón media/DNI es adimensional y no puede exceder 1 bajo el modelo de proyección; con DNI cero no se define esa división. El manifiesto conserva ROI, parámetros efectivos, métodos y procedencia. La leyenda Inferno está ligada a `preview.range_w_m2` y se representa en W/m². Un color del PNG no es una medida numérica exacta; consultar TIFF o `/sample`.
 
-El manifiesto además conserva `request` (incluida ROI y parámetros efectivos), `transform_gdal`, bounds nativos, versión/huella del código, métodos y hashes de productos. La presión automática y su procedencia están disponibles tanto en POST como al consultar GET después de la publicación.
+## Consultas y exportación
 
-## Consultas y archivos
-
-| Método/ruta | Resultado |
+| Método/ruta | Significado |
 |---|---|
-| `GET /api/solar/simulations/{id}` | Metadatos y enlaces de la corrida |
-| `GET /api/solar/simulations/{id}/preview/incident` | `image/png`, Inferno RGBA |
-| `GET /api/solar/simulations/{id}/export/incident` | `image/tiff`, Float32 numérico |
-| `GET /api/solar/simulations/{id}/sample?lon=-93.55&lat=16.75` | Valor real del píxel TIFF en W/m² |
+| `GET /api/solar/simulations/{id}` | Metadatos de la corrida, enlaces y supuestos |
+| `GET /api/solar/simulations/{id}/preview/incident` | PNG RGBA Inferno, NoData transparente, remuestreo visual |
+| `GET /api/solar/simulations/{id}/export/incident` | GeoTIFF Float32 nativo con CRS, afín y NoData |
+| `GET /api/solar/simulations/{id}/sample?lon=...&lat=...` | Valor del píxel TIFF en W/m² o `outside_coverage` / `nodata` |
+| `GET /api/solar/simulations/{id}/analysis` | Estadísticas e histograma desde TIFF, sin extrapolar NoData |
+| `GET /api/solar/simulations/{id}/contours` | Isolíneas GeoJSON WGS84 de igual irradiancia en W/m² |
 
-`sample` utiliza WGS84 (orden **longitud, latitud**) y transforma al CRS nativo del GeoTIFF. Devuelve `status: valid` con `value_w_m2` numérico (incluido 0), o `outside_coverage` / `nodata` con `value_w_m2: null`. No extrae valores del PNG ni interpola un valor físico más preciso que el píxel.
+La ruta de isolíneas figura en `layers.incident.contours_url`. Las entidades llevan `properties.value_w_m2` y `units: W/m2`. Opcionalmente `?levels=...` pide entre 1 y 20 niveles explícitos dentro del rango del ráster. El servidor limita niveles × píxeles, vértices, tamaño GeoJSON y consultas simultáneas; puede devolver 413 ante una salida demasiado compleja y 429 si los cupos están ocupados. Las líneas no son vectores de flujo térmico ni prueba de precisión espacial subpíxel. El GeoTIFF es la fuente numérica de verdad; la consulta de píxel y las estadísticas no reconstruyen valores desde el PNG. Las series temporales, radiación difusa y mapas de temperatura no existen en este contrato. Las simulaciones históricas mantienen sus manifiestos y se leen sin migración destructiva; sus metadatos temporales describen exclusivamente aquellas corridas. **Limitación actual del cliente:** las corridas nuevas usan IDs de 32 dígitos hexadecimales, pero la rehidratación de copias del frontend exige UUID con guiones; tras recargar la página pierde el resultado solar guardado. No confundir el estado conservado en memoria entre copias con persistencia verificada tras recarga.
 
-## Superponer el PNG y representar la leyenda
+## Límites y seguridad
 
-`preview.bounds_lonlat` tiene orden `[west, south, east, north]`, deducido de **la grilla PNG final**. Para un ImageSource, las esquinas son:
+La API es sincrónica y usa almacenamiento local y bloqueo entre procesos; otro cálculo concurrente puede recibir 429. Los identificadores opacos son capacidades públicas, no autorización; no publicar corridas sensibles ni secretos Earthdata. Un TIFF nuevo se coteja contra la huella del manifiesto antes de servirlo; los históricos sin huella pueden ser legibles sin garantía equivalente. No existe validación radiométrica ni autenticidad criptográfica general del origen NASADEM. No enviar rutas del servidor en la petición. No hacer reintentos ciegos de POST tras un fallo ambiguo.
 
-```javascript
-[[west, north], [east, north], [east, south], [west, south]]
-```
+## Verificación
 
-Esta documentación no modifica el frontend. Conservar juntos PNG, bounds, escala e identificador de corrida. El PNG por sí solo no contiene CRS. La escala está en `preview.range_w_m2: [0, DNI_ajustada]`; Inferno representa `clip(G_i / DNI_ajustada, 0, 1)`. Si `zero_range: true`, usar una leyenda **0 W/m²**, sin dividir entre cero. Cero válido es opaco; NoData es transparente. Los valores numéricos se consultan en `sample` o en el TIFF.
-
-## Límites y seguridad del MVP
-
-- ROI válida Polygon/MultiPolygon, en la cobertura NASADEM, con máximo de 1.000 vértices y dos teselas fuente.
-- Caja envolvente de hasta 0,25° por eje, diámetro diagonal geodésico máximo de 30 km y estimación de hasta 500.000 píxeles (antes 0,2°, 10 km y 150.000). Se ampliaron el 2026-11-15 para permitir radios de hasta 10 km desde el panel, con medidas reales en Windows (NASADEM 30 m, centro −93.115, 16.76, 2026-06-21 10:00): radio 2 km → 131×132 px, 3 s; 5 km → 324×326 px, 13 s; 10 km → 646×650 px, 61 s y pico de ~92 MB. Estos son **presupuestos operativos**, no una garantía de uniformidad solar o validación física.
-- **Windows:** el candado entre procesos usa `fcntl.flock` en Linux y `msvcrt.locking` en Windows (`backend/solar/services.py`), así que la API también corre en desarrollo local con Windows.
-
-### Mapa de calor en la interfaz (2026-11-15)
-
-El panel **Simulador Solar & Radiación** (`web/src/components/RightPanel.tsx`, `web/src/utils/solarHeatmap.ts`):
-
-- **Radio de cálculo:** 1, 2, 3, 5, 7,5 o 10 km alrededor del centro de la zona (caja cuadrada con conversión grados↔km según la latitud).
-- **Escala:** el PNG del backend se normaliza entre 0 y el DNI ajustado. En zonas pequeñas los valores quedan en una franja estrecha (p. ej. 398–450 de 0–500 W/m² con radio 2 km) y casi no se distinguen. El navegador invierte la LUT Inferno de 256 colores (idéntica a la de matplotlib) para recuperar W/m² de cada píxel (±DNI/512, ~1 W/m²) y vuelve a colorear con dos modos: **Contraste** (p2–p98 de esa simulación) y **Absoluta** (0–DNI, comparable entre horas). La leyenda muestra marcas en W/m² y la imagen se amplía con interpolación suave.
-- **Tablero:** radiación elegida, DNI de cielo despejado y ajustado, zona (radio y km²) e irradiancia incidente mínima, máxima, mediana y media. Si se cambia la radiación después de calcular, avisa que hay que recalcular.
-- **Mapa:** opacidad fija (0,88) y remuestreo lineal; antes la opacidad dependía del deslizador de radiación y una radiación baja casi no se veía.
-- **Verificado:** con radio 5 km, los valores recuperados del PNG (p2 294, mediana 423, p98 479 W/m²) coinciden con los de `incident.tif` (293, 423, 480). Pruebas: `web/tests/solarHeatmap.test.mjs`.
-- No se permiten rutas, nombres de archivo, capas adicionales ni identificadores elegidos por el cliente. Los UUID opacos se resuelven solo bajo la raíz de almacenamiento de la API; los symlinks se rechazan.
-- Publicación íntegra de TIFF + PNG + manifiesto antes de responder `ready`; sin corridas parciales visibles.
-- **API pública de hackatón, sin autenticación ni permisos por usuario.** Conocer un ID permite consultar la corrida. Los IDs no son un sistema de autorización para información privada. Para Internet se necesitan autenticación, HTTPS, cuotas, limitación de peticiones, proxy con límites/timeout y política de retención.
-- No hay CORS abierto automático: usar el mismo origen o un proxy de desarrollo del frontend. No desactivar protecciones del servidor para resolver integraciones.
-- No hay cola durable, timeout duro de cálculo o recuperación distribuida. Las corridas consumen disco hasta que el operador aplique una política de conservación; no hay borrado arbitrario mediante la API.
-
-## Errores y configuración
-
-| HTTP | Situación | Respuesta JSON |
-|---|---|---|
-| 400 | Parámetros, ROI, fecha o zona inválidos | `error` y `code: invalid_request` |
-| 400 | Coordenadas de sample o JSON malformados | detalle de validación (`detail` o lista de errores DRF) |
-| 404 | Corrida/archivo inexistente | `detail` de recurso no encontrado |
-| 404 | ID malformado, ruta o capa no admitida | `error` y `code: not_found` |
-| 413 | Presupuesto ROI excedido | `detail` explicativo |
-| 429 | Otra ejecución ocupa el bloqueo | `detail` explicativo |
-| 503 | Proveedor, almacenamiento o cálculo no disponible | `detail` saneado, sin rutas ni credenciales |
-
-`Content-Type` de POST debe ser `application/json` (otros tipos reciben 415); un método no permitido recibe 405. No reintentar automáticamente un POST después de un fallo de red ambiguo: pudo haber terminado la corrida, y este MVP no tiene clave de idempotencia.
-
-Configurar `SOLAR_OUTPUT_ROOT` (por defecto `data/solar-runs`) y `SOLAR_NASADEM_CACHE` (por defecto `data/nasadem-cache`) con rutas del servidor, nunca desde la petición. Para reutilizar una caché existente, señalar su directorio que contiene los ZIP y recibos del proveedor. Ejemplo: `export SOLAR_NASADEM_CACHE="$PWD/data/raw/dem/nasadem_hgt/001"`. Las raíces no deben contener symlinks. No compartir la misma caché entre aplicaciones con raíces de bloqueo distintas ni con adquisiciones externas concurrentes. El código identifica las fuentes por tesela; no afirma hashes de HGT calculados por la API ni autenticidad criptográfica de bytes remotos.
-
-## Comprobaciones
+En entorno `nisar`, desde la raíz:
 
 ```bash
-PYTHONPATH=data/solar-pvlib-deps:backend pytest -q pipeline/tests/test_solar_delivery.py pipeline/tests/test_solar_api.py
-PYTHONPATH=data/solar-pvlib-deps:backend pytest -q pipeline/tests
+PYTHONPATH="$PWD/data/solar-pvlib-deps:$PWD/backend:$PWD" /home/juliox/miniforge3/envs/nisar/bin/python -m pytest -q pipeline/tests/test_solar_api.py pipeline/tests/test_solar_surface.py pipeline/tests/test_solar_analysis.py
+cd web && node --test tests/solar*.test.mjs && npm run build
 ```
 
-Las pruebas usan estado aislado y entradas sintéticas; no requieren descargas Earthdata. **Resultados finales observados:** 16 pruebas D/E aprobadas (108 advertencias) y 267 de la suite disponible aprobadas (1.545 advertencias), ambas salida 0. Incluyen regresiones RED → GREEN para exportación vacía, ausencia inicial de rutas, persistencia de ROI en GET, geometría mal anidada (400 JSON sin proveedor ni artefactos) y procedencia correcta de la temperatura predeterminada. El verificador independiente de D/E reprodujo 16/267; detectó el error geométrico y confirmó su cierre mediante recheck focalizado. La corrección posterior de procedencia de temperatura se comprobó en la suite final del padre, no se atribuye al verificador previo. El control Django de URLs pasó sin problemas. LaTeX: estructura revisada, PDF no compilado porque no hay compilador instalado. El riesgo de verificación pendiente de fase C se mantiene registrado por instrucción del usuario y no se repite ni bloquea D/E.
+La ruta absoluta del intérprete es específica del entorno de desarrollo observado; usar el Python con dependencias instaladas en otra instalación. La suite solar ejecutada durante esta migración aprobó 247 pruebas y la suite web aprobó 118; el build web y ambos documentos LaTeX compilaron. Esas pruebas no cubren el ID real sin guiones ni el listener sísmico tras cambiar de dock. La validación funcional completa en navegador, descargas e interacción de isolíneas siguen pendientes; el simulador no debe declararse terminado. La interfaz visual y la descarga Earthdata real requieren comprobación separada; no se atribuyen a las pruebas sintéticas.

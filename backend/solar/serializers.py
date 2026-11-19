@@ -7,7 +7,6 @@ from rest_framework.exceptions import ValidationError, APIException
 from shapely.geometry import shape
 
 from pipeline.solar.dem import required_nasadem_tiles
-from pipeline.solar.time import resolve_solar_inputs
 
 
 def _invalid(message):
@@ -30,17 +29,18 @@ class TooLarge(APIException):
 
 
 def validate_request(data):
-    keys = {'roi', 'datetime_local', 'timezone', 'intensity_percent', 'temperature_c', 'pressure_hpa'}
-    if not isinstance(data, dict) or set(data) - keys or not {'roi', 'datetime_local', 'timezone', 'intensity_percent'} <= set(data):
-        _invalid('Expected roi, datetime_local, timezone, intensity_percent; unknown keys forbidden')
-    numbers = {'intensity_percent': (0, 100), 'temperature_c': (-273.14, None), 'pressure_hpa': (0, None)}
+    keys = {'roi', 'elevation_deg', 'azimuth_deg', 'intensity_percent'}
+    if not isinstance(data, dict) or set(data) - keys or 'roi' not in data:
+        _invalid('Expected roi and optional elevation_deg, azimuth_deg, intensity_percent; temporal and unknown keys forbidden')
+    data = {**data, 'elevation_deg': data.get('elevation_deg', 45),
+            'azimuth_deg': data.get('azimuth_deg', 180),
+            'intensity_percent': data.get('intensity_percent', 100)}
+    numbers = {'elevation_deg': (0, 90), 'azimuth_deg': (0, 360), 'intensity_percent': (0, 100)}
     for key, (minimum, maximum) in numbers.items():
         value = data.get(key)
-        if value is None and key != 'intensity_percent':
-            continue
         if not _finite(value):
             _invalid(f'{key} must be a finite JSON number')
-        if (minimum is not None and value < minimum) or (maximum is not None and value > maximum) or (key == 'pressure_hpa' and value == 0):
+        if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
             _invalid(f'{key} outside supported range')
     roi = data['roi']
     if not isinstance(roi, dict) or set(roi) != {'type', 'coordinates'} or roi['type'] not in ('Polygon', 'MultiPolygon'):
@@ -89,11 +89,8 @@ def validate_request(data):
         tiles, _ = required_nasadem_tiles(roi, max_tiles=2)
         if len(tiles) * 3601**2 > 30_000_000:
             raise TooLarge()
-        effective = resolve_solar_inputs(data['datetime_local'], data['timezone'], altitude_m=0,
-                                         temperature_c=data.get('temperature_c'), pressure_hpa=data.get('pressure_hpa'))
     except (ValueError, TypeError, IndexError):
-        _invalid('Invalid ROI, time, timezone or atmospheric inputs')
-    return {**data, 'roi': roi, 'intensity_percent': float(data['intensity_percent']),
-            'temperature_c': effective['temperature_c'],
-            '_temperature_c_input': data.get('temperature_c'),
-            'pressure_hpa': float(data['pressure_hpa']) if data.get('pressure_hpa') is not None else None}
+        _invalid('Invalid ROI')
+    return {**data, 'roi': roi, 'elevation_deg': float(data['elevation_deg']),
+            'azimuth_deg': float(data['azimuth_deg']),
+            'intensity_percent': float(data['intensity_percent'])}
