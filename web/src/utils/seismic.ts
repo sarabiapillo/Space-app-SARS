@@ -66,6 +66,11 @@ export interface SeismicSimulationResults {
   seismicMoment_dyncm: number
   /** Vs30 (m/s) usado para el efecto de sitio en todo el escenario. */
   vs30: number
+  /** Ley de atenuación usada y su σ de ln(PGA) (null si no la publica). */
+  gmpeModel: GmpeModelId
+  gmpeSigmaLn: number | null
+  /** Avisos si el escenario sale del rango de datos del modelo. */
+  validityWarnings: string[]
   /** Datos para gráfica 2D de Atenuación (PGA vs Distancia) */
   attenuationCurve: {
     distanceKm: number
@@ -187,12 +192,112 @@ export const SASMEX_PROCESS_SEC = 3.0
 export const VS30_REF = 760
 export const B_SITE = -0.45
 
-/** Coeficientes de la ec. 11 por mecanismo (manual §5.1). */
-export const GMPE_COEFFICIENTS: Readonly<Record<SeismicMechanism, { c1: number; c2: number; c3: number; c4: number }>> = Object.freeze({
-  subduction: { c1: -1.85, c2: 0.92, c3: 1.15, c4: 0.0032 },
-  intraplate: { c1: -1.55, c2: 0.96, c3: 1.25, c4: 0.0040 },
-  crustal: { c1: -1.95, c2: 0.88, c3: 1.05, c4: 0.0028 },
+/**
+ * Ley de atenuación usada por mecanismo:
+ *  - subducción interplaca: Arroyo et al. (2010), J. Seismol. 14:769–785 (ec. 8a, tabla 2, fila PGA);
+ *  - intraplaca: García et al. (2005), BSSA 95(6):2272–2282 (ec. 2, tabla 2, PGA horizontal);
+ *  - cortical: PROVISIONAL, coeficientes del manual del 17-nov-2026 sin fuente publicada, hasta
+ *    integrar Boore et al. (2014) (sus coeficientes están en el suplemento electrónico del artículo).
+ */
+export type GmpeModelId = 'arroyo2010' | 'garcia2005' | 'manual-crustal'
+export const GMPE_BY_MECHANISM: Readonly<Record<SeismicMechanism, GmpeModelId>> = Object.freeze({
+  subduction: 'arroyo2010',
+  intraplate: 'garcia2005',
+  crustal: 'manual-crustal',
 })
+
+/** Desviación estándar total de ln(PGA): Arroyo σ = 0.75 (ln); García σ = 0.28 (log10). */
+export const GMPE_SIGMA_LN: Readonly<Record<GmpeModelId, number | null>> = Object.freeze({
+  arroyo2010: 0.75,
+  garcia2005: 0.28 * Math.LN10,
+  'manual-crustal': null,
+})
+
+/** Coeficientes corticales del manual anterior (provisionales, sin fuente publicada). */
+export const MANUAL_CRUSTAL_COEFFICIENTS = Object.freeze({ c1: -1.95, c2: 0.88, c3: 1.05, c4: 0.0028 })
+
+/**
+ * Integral exponencial E1(x) = ∫_x^∞ e^(−t)/t dt, x > 0: serie para x ≤ 1 y fracción continua
+ * (Lentz) para x > 1, como en Abramowitz y Stegun (1972) / Numerical Recipes.
+ */
+export function exponentialIntegralE1(x: number): number {
+  if (!(x > 0)) return Infinity
+  const EULER = 0.5772156649015329
+  if (x <= 1) {
+    let sum = 0
+    let term = 1
+    for (let k = 1; k < 200; k++) {
+      term *= -x / k
+      const add = term / k
+      sum += add
+      if (Math.abs(add) < 1e-17 * Math.abs(sum)) break
+    }
+    return -EULER - Math.log(x) - sum
+  }
+  const TINY = 1e-300
+  let b = x + 1
+  let c = 1 / TINY
+  let d = 1 / b
+  let h = d
+  for (let i = 1; i < 500; i++) {
+    const an = -i * i
+    b += 2
+    d = 1 / (an * d + b)
+    c = b + an / c
+    const del = c * d
+    h *= del
+    if (Math.abs(del - 1) < 1e-15) break
+  }
+  return h * Math.exp(-x)
+}
+
+/**
+ * Arroyo et al. (2010), ec. 8a con la fila PGA de la tabla 2, roca (NEHRP B), en cm/s²:
+ * ln PGA = α1 + α2·Mw + α3·ln{[E1(α4·R) − E1(α4·√(R² + r0²))] / r0²}, r0² = 1.4447e−5·e^(2.3026·Mw).
+ * R: distancia más cercana a la falla (km). El término de E1 da la saturación de campo cercano.
+ */
+export function pgaRockArroyo2010_cgs(magnitude: number, distanceKm: number): number {
+  const a1 = 2.4862, a2 = 0.9392, a3 = 0.5061, a4 = 0.0150
+  const r02 = 1.4447e-5 * Math.exp(2.3026 * magnitude)
+  const term = (exponentialIntegralE1(a4 * distanceKm) - exponentialIntegralE1(a4 * Math.sqrt(distanceKm * distanceKm + r02))) / r02
+  return Math.exp(a1 + a2 * magnitude + a3 * Math.log(term))
+}
+
+/**
+ * García et al. (2005), ec. 2 (PGA horizontal, roca), en cm/s²:
+ * log10 PGA = −0.2 + 0.59·Mw − 0.0039·R − log10 R + 0.008·H, con R = √(R_cld² + Δ²) y
+ * Δ = 0.00750·10^(0.507·Mw) (saturación de campo cercano de Atkinson y Boore, 2003). H en km.
+ */
+export function pgaRockGarcia2005_cgs(magnitude: number, faultDistanceKm: number, depthKm: number): number {
+  const delta = 0.0075 * 10 ** (0.507 * magnitude)
+  const R = Math.sqrt(faultDistanceKm * faultDistanceKm + delta * delta)
+  return 10 ** (-0.2 + 0.59 * magnitude - 0.0039 * R - Math.log10(R) + 0.008 * depthKm)
+}
+
+/** Avisos cuando el escenario sale del rango de datos del modelo usado (o si es provisional). */
+export function gmpeValidityWarnings(
+  mechanism: SeismicMechanism,
+  magnitude: number,
+  depthKm: number,
+  distanceEpicentralKm: number
+): string[] {
+  const R = Math.hypot(distanceEpicentralKm, depthKm)
+  const out: string[] = []
+  if (mechanism === 'subduction') {
+    if (magnitude < 5.0 || magnitude > 8.0) out.push('Arroyo et al. (2010) se ajustó con Mw 5.0–8.0; fuera de ese rango es extrapolación.')
+    if (R > 400) out.push('Arroyo et al. (2010) usa distancias hasta 400 km.')
+    if (depthKm > 30) out.push('Arroyo et al. (2010) es para sismos interplaca someros (≲ 30 km).')
+    out.push('Arroyo et al. (2010) es para roca en la costa del Pacífico (antearco): no representa la amplificación regional de la Faja Volcánica ni del Valle de México.')
+  } else if (mechanism === 'intraplate') {
+    if (magnitude < 5.2 || magnitude > 7.4) out.push('García et al. (2005) se ajustó con Mw 5.2–7.4; fuera de ese rango es extrapolación.')
+    if (depthKm < 35 || depthKm > 138) out.push('García et al. (2005) usa profundidades de 35 a 138 km.')
+    if (R > 400) out.push('García et al. (2005) usa distancias hasta 400 km.')
+    out.push('García et al. (2005) es para roca; excluyó las estaciones del Valle de México.')
+  } else {
+    out.push('Mecanismo cortical: coeficientes provisionales sin fuente publicada (pendiente Boore et al., 2014).')
+  }
+  return out
+}
 
 /** Vs30 representativo de cada clase de suelo (manual §5.2). */
 export const SOIL_VS30: Readonly<Record<SoilType, number>> = Object.freeze({
@@ -231,10 +336,10 @@ export function nearSourceSaturationKm(magnitude: number): number {
 }
 
 /**
- * Aceleración pico del suelo (PGA en g), ec. 11 con saturación de campo cercano:
- * ln(PGA) = c1 + c2·Mw − c3·ln(R_ef) − c4·R_ef + S_sitio, con R_ef = √(D² + h² + h_sat(Mw)²).
- * Aun con saturación, los coeficientes del manual dan más de 2.5 g junto a la fuente en sismos
- * grandes; se acota a [0.0001, 2.5] g como salvaguarda (documentado).
+ * Aceleración pico del suelo (PGA en g) = PGA en roca del modelo del mecanismo × e^(S_sitio).
+ * La fuente es puntual: como distancia a la falla se usa la hipocentral R = √(D² + h²), lo que
+ * subestima algo la PGA cerca de rupturas grandes. Cortical (provisional): manual anterior con
+ * R_ef = √(D² + h² + h_sat²). Se acota a [0.0001, 2.5] g como salvaguarda.
  */
 export function computePga_g(
   distanceEpicentralKm: number,
@@ -244,10 +349,19 @@ export function computePga_g(
   soilType: SoilType = 'intermediate',
   vs30?: number | null
 ): number {
-  const hSat = nearSourceSaturationKm(magnitude)
-  const R = Math.sqrt(distanceEpicentralKm * distanceEpicentralKm + depthKm * depthKm + hSat * hSat)
-  const { c1, c2, c3, c4 } = GMPE_COEFFICIENTS[mechanism]
-  const lnPga = c1 + c2 * magnitude - c3 * Math.log(R) - c4 * R + siteAmplification(effectiveVs30(soilType, vs30))
+  const R = Math.hypot(distanceEpicentralKm, depthKm)
+  let lnRock_g: number
+  if (mechanism === 'subduction') {
+    lnRock_g = Math.log(pgaRockArroyo2010_cgs(magnitude, R) / 980.665)
+  } else if (mechanism === 'intraplate') {
+    lnRock_g = Math.log(pgaRockGarcia2005_cgs(magnitude, R, depthKm) / 980.665)
+  } else {
+    const { c1, c2, c3, c4 } = MANUAL_CRUSTAL_COEFFICIENTS
+    const hSat = nearSourceSaturationKm(magnitude)
+    const Reff = Math.sqrt(R * R + hSat * hSat)
+    lnRock_g = c1 + c2 * magnitude - c3 * Math.log(Reff) - c4 * Reff
+  }
+  const lnPga = lnRock_g + siteAmplification(effectiveVs30(soilType, vs30))
   return Math.max(0.0001, Math.min(2.5, Math.exp(lnPga)))
 }
 
@@ -452,6 +566,9 @@ export function runSeismicSimulation(source: SeismicSource): SeismicSimulationRe
     sWaveSpeedKmS: vs,
     seismicMoment_dyncm: seismicMomentDynCm(magnitude),
     vs30,
+    gmpeModel: GMPE_BY_MECHANISM[mechanism],
+    gmpeSigmaLn: GMPE_SIGMA_LN[GMPE_BY_MECHANISM[mechanism]],
+    validityWarnings: gmpeValidityWarnings(mechanism, magnitude, depthKm, 0),
     attenuationCurve,
   }
 }

@@ -6060,8 +6060,149 @@ button:disabled {
 }
 
 .seismic-chart-card__body {
-  height: 185px;
+  height: 260px;
   width: 100%;
+}
+
+.seismic-chart-card__header {
+  position: relative;
+}
+
+.seismic-chart-expand {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.seismic-chart-expand:hover {
+  background: #f1f5f9;
+}
+
+.seismic-chart-clickable {
+  cursor: zoom-in;
+}
+
+/* Modal de gráficas sísmicas */
+.seismic-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.seismic-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1320px, 100%);
+  height: min(92vh, 1000px);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.seismic-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.seismic-modal__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.seismic-modal__sub {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.seismic-modal__body {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.seismic-modal__params,
+.seismic-modal__chart {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.seismic-modal__kpis {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.seismic-chart-card--modal .seismic-chart-card__body {
+  height: min(62vh, 640px);
+}
+
+@media (max-width: 820px) {
+  .seismic-modal__body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+}
+
+/* Epicentro por coordenadas y aviso de selección en el mapa */
+.seismic-coord-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.seismic-coord-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.seismic-coord-field input {
+  width: 84px;
+  font: inherit;
+  font-family: var(--font-mono);
+}
+
+.seismic-pick-banner {
+  margin: 0 8px;
+  padding: 5px 8px;
+  border: 1px solid #f59e0b;
+  border-radius: 3px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 11px;
 }
 
 .seismic-risk-zones-legend {
@@ -6181,6 +6322,23 @@ button:disabled {
   font-family: var(--font-mono);
   font-size: 10px;
   color: #64748b;
+}
+
+.seismic-gmpe-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+  padding: 4px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  background: #f8fafc;
+  font-size: 10.5px;
+  color: #334155;
+}
+
+.seismic-gmpe-note__warning {
+  color: #92400e;
 }
 
 .seismic-station-map-row {

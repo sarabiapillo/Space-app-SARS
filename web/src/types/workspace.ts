@@ -146,6 +146,8 @@ export interface SeismicSimulationState {
   stationVs30?: number | null
   /** Mientras es true, el siguiente clic en el mapa coloca la estación. */
   pickingStation?: boolean
+  /** Mientras es true, el siguiente clic en el mapa coloca el epicentro (sin depender de la herramienta). */
+  pickingEpicenter?: boolean
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */
