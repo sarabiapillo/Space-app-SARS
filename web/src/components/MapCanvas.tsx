@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -65,7 +66,8 @@ import {
 import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
 import { SeismicSimulatorPanel } from './SeismicSimulatorPanel'
-import { runSeismicSimulation } from '../utils/seismic'
+import { runSeismicSimulation, generateGeodesicCircle, wavefrontSurfaceRadiusKm, VP_KM_S, VS_KM_S } from '../utils/seismic'
+import { regionCenter } from '../utils/seismicScenario'
 import type {
   DockWindow,
   DockWindowKind,
@@ -176,11 +178,13 @@ const CONFIRMED_ROI_SOURCE = 'confirmed-roi-source'
 const LOCATION_PREVIEW_SOURCE = 'location-preview-source'
 const GCOV_PREVIEW_SOURCE = 'gcov-preview-source'
 const SEISMIC_SOURCE = 'seismic-source'
+const SEISMIC_WAVE_SOURCE = 'seismic-wave-source'
 const SEISMIC_EPICENTER_LAYERS = [`${SEISMIC_SOURCE}-epicenter`, `${SEISMIC_SOURCE}-pulse`]
 
 /** Anillos de afectación, estación y epicentro del escenario como GeoJSON para MapLibre. */
 function seismicFeatureCollection(state: SeismicSimulationState) {
-  const results = runSeismicSimulation({
+  // Antes de "Ejecutar simulación" solo se dibujan el epicentro y la estación (sin anillos).
+  const results = !state.simulated ? { rings: [] } : runSeismicSimulation({
     epicenter: state.epicenter,
     magnitude: state.magnitude,
     depthKm: state.depthKm,
@@ -1088,6 +1092,25 @@ export function MapCanvas({
             'circle-stroke-color': '#ef4444',
           },
         })
+        // Frentes de onda P y S animados (debajo de la estación y del epicentro).
+        map.addSource(SEISMIC_WAVE_SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addLayer({
+          id: `${SEISMIC_WAVE_SOURCE}-s-fill`,
+          type: 'fill',
+          source: SEISMIC_WAVE_SOURCE,
+          filter: ['==', ['get', 'wave'], 'S'],
+          paint: { 'fill-color': '#dc2626', 'fill-opacity': 0.08 },
+        })
+        map.addLayer({
+          id: `${SEISMIC_WAVE_SOURCE}-line`,
+          type: 'line',
+          source: SEISMIC_WAVE_SOURCE,
+          paint: {
+            'line-color': ['match', ['get', 'wave'], 'P', '#2563eb', '#dc2626'],
+            'line-width': ['match', ['get', 'wave'], 'P', 2.5, 3.5],
+            'line-opacity': 0.95,
+          },
+        })
         map.addLayer({
           id: `${SEISMIC_SOURCE}-station`,
           type: 'circle',
@@ -1169,6 +1192,65 @@ export function MapCanvas({
       ? seismicFeatureCollection(activeSeismic)
       : { type: 'FeatureCollection', features: [] })
   }, [seismic, isSeismic, mapReady])
+
+  // Contorno de la región del mapa para el simulador sísmico: recorte manual o, si no, la ROI efectiva.
+  const seismicRegionRing = useMemo<LngLat[] | null>(() => {
+    if (croppedRegion && croppedRegion.length >= 3) return croppedRegion
+    if (!effectiveRoi) return null
+    const ring = effectiveRoi.type === 'Polygon' ? effectiveRoi.coordinates[0] : effectiveRoi.coordinates[0]?.[0]
+    return ring ? ring.map(([lng, lat]) => [lng, lat] as LngLat) : null
+  }, [croppedRegion, effectiveRoi])
+
+  // Animación de los frentes de onda P y S desde el epicentro (requestAnimationFrame, sin re-render de React).
+  const waveClockRef = useRef<HTMLDivElement>(null)
+  const waveAnimating = Boolean(isSeismic && seismic?.simulated && seismic?.animatingWaves)
+  const waveSpeed = seismic?.waveAnimationSpeed ?? 20
+  const waveEpicenter = seismic?.epicenter
+  const waveDepth = seismic?.depthKm ?? 20
+  useEffect(() => {
+    const map = mapRef.current
+    const source = map?.getSource(SEISMIC_WAVE_SOURCE) as GeoJSONSource | undefined
+    if (!map || !mapReady || !source) return
+    if (!waveAnimating || !waveEpicenter) {
+      source.setData({ type: 'FeatureCollection', features: [] })
+      return
+    }
+    // Hasta dónde llega la animación: un poco más allá del anillo de percepción débil (mín. 300 km).
+    const st = seismicRef.current
+    const rings = st ? runSeismicSimulation({ ...st, epicenter: waveEpicenter }).rings : []
+    const maxKm = Math.max(300, ...rings.map((r) => r.radiusKm * 1.1))
+    const endSec = Math.hypot(maxKm, waveDepth) / VS_KM_S
+    const pauseSec = 1.5
+    let raf = 0
+    const t0 = performance.now()
+    const tick = (now: number) => {
+      const realSec = (now - t0) / 1000
+      const cycle = endSec / waveSpeed + pauseSec
+      const tSim = Math.min(endSec, (realSec % cycle) * waveSpeed)
+      const rP = Math.min(wavefrontSurfaceRadiusKm(VP_KM_S, tSim, waveDepth), maxKm * 1.6)
+      const rS = wavefrontSurfaceRadiusKm(VS_KM_S, tSim, waveDepth)
+      const features = []
+      if (rS > 0) {
+        features.push({ type: 'Feature' as const, properties: { wave: 'S' },
+          geometry: { type: 'Polygon' as const, coordinates: [generateGeodesicCircle(waveEpicenter, rS, 96)] } })
+      }
+      if (rP > 0) {
+        features.push({ type: 'Feature' as const, properties: { wave: 'P' },
+          geometry: { type: 'LineString' as const, coordinates: generateGeodesicCircle(waveEpicenter, rP, 96) } })
+      }
+      source.setData({ type: 'FeatureCollection', features })
+      if (waveClockRef.current) {
+        waveClockRef.current.textContent =
+          `t = ${tSim.toFixed(1)} s · ${tr('Onda P', 'P wave')} ${rP.toFixed(0)} km · ${tr('Onda S', 'S wave')} ${rS.toFixed(0)} km · ×${waveSpeed}`
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(raf)
+      source.setData({ type: 'FeatureCollection', features: [] })
+    }
+  }, [waveAnimating, waveSpeed, waveEpicenter, waveDepth, mapReady])
 
   // Cursor en cruz mientras se elige el epicentro o la estación en el mapa.
   const seismicPicking = Boolean(isSeismic && (seismic?.pickingEpicenter || seismic?.pickingStation))
@@ -2818,6 +2900,15 @@ export function MapCanvas({
           </div>
         )}
 
+        {waveAnimating && (
+          <div className="seismic-wave-clock" role="status" aria-live="off">
+            <span className="seismic-wave-clock__legend">
+              <i className="is-p" /> P (6.0 km/s) <i className="is-s" /> S (3.5 km/s)
+            </span>
+            <span ref={waveClockRef} />
+          </div>
+        )}
+
         {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
         {((opacity > 0 && activeDockWindow?.kind === 'map') || solar.enabled) && (
           <aside
@@ -3384,7 +3475,8 @@ export function MapCanvas({
           <SeismicSimulatorPanel
             seismic={seismic || DEFAULT_SEISMIC}
             onSeismicChange={onSeismicChange || (() => {})}
-            croppedRegion={croppedRegion}
+            croppedRegion={seismicRegionRing}
+            regionCenter={regionCenter(effectiveRoi, croppedRegion, view.centro)}
             onSelectPresetROI={onSelectPresetROI}
             onFlyToEpicenter={(coord) => {
               if (mapRef.current) {

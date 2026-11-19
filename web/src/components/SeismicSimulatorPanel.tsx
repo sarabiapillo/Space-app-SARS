@@ -26,6 +26,7 @@ import {
   sasmexAlertTimeSec,
 } from '../utils/seismic'
 import { getPolygonBoundsAndCentroid, distanceKm } from '../utils/geojson'
+import { newSeismicScenario } from '../utils/seismicScenario'
 import {
   PRESET_ROI_CATALOG,
   getRecommendedSeismicSettings,
@@ -43,6 +44,8 @@ interface SeismicSimulatorPanelProps {
   onClose: () => void
   croppedRegion?: LngLat[] | null
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  /** Centro de la región del mapa (ROI o, sin ROI, centro de la vista): ahí se crea un sismo nuevo. */
+  regionCenter?: LngLat
 }
 
 const GMPE_LABELS: Record<SeismicSimulationResults['gmpeModel'], string> = {
@@ -65,6 +68,7 @@ export function SeismicSimulatorPanel({
   onClose,
   croppedRegion,
   onSelectPresetROI,
+  regionCenter,
 }: SeismicSimulatorPanelProps) {
   const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
@@ -369,7 +373,7 @@ export function SeismicSimulatorPanel({
                 </div>
 
                 {/* Si el ROI no es el epicentro, mostrar la afectación pronosticada en este ROI */}
-                {activeRoiData.distToEpicenter > 0.5 && (
+                {seismic.simulated && activeRoiData.distToEpicenter > 0.5 && (
                   <div className="seismic-roi-metrics">
                     <div className="seismic-roi-metric-item">
                       <span title={t('Ec. 10: tS − 3 s de proceso, contado desde el origen del sismo', 'Eq. 10: tS − 3 s processing, counted from origin time')}>{t('Alerta SASMEX:', 'SASMEX Warning:')}</span>
@@ -397,11 +401,32 @@ export function SeismicSimulatorPanel({
             )}
           </div>
 
-          {/* Selector de Casos Históricos de Terremotos */}
+          {/* Escenario: un sismo NUEVO en la región del mapa; los históricos son solo referencia */}
+          <div className="seismic-scenario-name">
+            <span>
+              {t('Escenario:', 'Scenario:')} <strong>{seismic.name}</strong>
+              {seismic.autoPlaced && <em> · {t('en el centro de la región del mapa', 'at the center of the map region')}</em>}
+            </span>
+            {regionCenter && (
+              <button
+                type="button"
+                className="seismic-btn-fly"
+                onClick={() => {
+                  onSeismicChange({ ...newSeismicScenario(regionCenter, t('este mapa', 'this map')) })
+                  onFlyToEpicenter?.(regionCenter)
+                }}
+                title={t('Sismo nuevo (no histórico) en el centro de la región de este mapa', 'New (non-historical) earthquake at the center of this map region')}
+              >
+                ✚ {t('Nuevo sismo en este mapa', 'New earthquake on this map')}
+              </button>
+            )}
+          </div>
+
+          {/* Selector de Casos Históricos de Terremotos (opcional) */}
           <div className="seismic-control-group">
             <label className="seismic-label" htmlFor="seismic-preset-select">
               <Flame size={13} className="seismic-icon-amber" />
-              <span>{t('Terremotos Históricos de Referencia:', 'Historical Benchmark Earthquakes:')}</span>
+              <span>{t('Cargar un sismo histórico como referencia (opcional):', 'Load a historical earthquake as reference (optional):')}</span>
             </label>
             <select
               id="seismic-preset-select"
@@ -410,7 +435,7 @@ export function SeismicSimulatorPanel({
               onChange={(e) => handleSelectPreset(e.target.value)}
             >
               <option value="" disabled>
-                {t('-- Seleccionar evento histórico --', '-- Select historical event --')}
+                {t('— Escenario propio (sismo nuevo) —', '— Own scenario (new earthquake) —')}
               </option>
               {HISTORICAL_SEISMIC_PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -428,6 +453,55 @@ export function SeismicSimulatorPanel({
             idPrefix="seismic-panel"
           />
 
+          {/* Acciones: ejecutar o limpiar la simulación y abrir el editor de parámetros */}
+          <div className="seismic-run-row">
+            {seismic.simulated ? (
+              <button type="button" className="seismic-run-btn is-secondary"
+                onClick={() => onSeismicChange({ ...seismic, simulated: false, animatingWaves: false })}>
+                ⟲ {t('Limpiar resultados', 'Clear results')}
+              </button>
+            ) : (
+              <button type="button" className="seismic-run-btn"
+                onClick={() => onSeismicChange({ ...seismic, enabled: true, simulated: true })}>
+                ▶ {t('Ejecutar simulación', 'Run simulation')}
+              </button>
+            )}
+            <button type="button" className="seismic-run-btn is-secondary" onClick={() => setChartModalOpen(true)}>
+              ⚙ {t('Editar parámetros', 'Edit parameters')}
+            </button>
+          </div>
+
+          {/* Animación de los frentes de onda P y S en el mapa */}
+          {seismic.simulated && (
+            <div className="seismic-wave-row">
+              <button
+                type="button"
+                className={`seismic-run-btn ${seismic.animatingWaves ? 'is-secondary' : 'is-wave'}`}
+                onClick={() => onSeismicChange({ ...seismic, animatingWaves: !seismic.animatingWaves })}
+              >
+                {seismic.animatingWaves ? `⏸ ${t('Detener animación', 'Stop animation')}` : `🌊 ${t('Animar ondas P y S', 'Animate P and S waves')}`}
+              </button>
+              <label className="seismic-wave-speed">
+                {t('Velocidad', 'Speed')}
+                <select
+                  value={seismic.waveAnimationSpeed ?? 20}
+                  onChange={(e) => onSeismicChange({ ...seismic, waveAnimationSpeed: Number(e.target.value) })}
+                >
+                  <option value={10}>×10</option>
+                  <option value={20}>×20</option>
+                  <option value={50}>×50</option>
+                </select>
+              </label>
+            </div>
+          )}
+
+          {!seismic.simulated ? (
+            <div className="seismic-empty-results">
+              {t('Ajusta el epicentro y los parámetros, y pulsa «Ejecutar simulación» para calcular la aceleración, los anillos y las gráficas.',
+                'Set the epicenter and parameters, then press "Run simulation" to compute acceleration, rings and charts.')}
+            </div>
+          ) : (
+          <>
           {/* Tarjetas de Métricas de Riesgo y Radios Isosistas */}
           <div className="seismic-kpi-grid">
             <div className="seismic-kpi-card is-pga">
@@ -527,13 +601,16 @@ export function SeismicSimulatorPanel({
             </div>
           </div>
 
+          </>
+          )}
+
           {/* Nota informativa de las ecuaciones GMPE */}
           <div className="seismic-footer-info">
             <Info size={13} />
             <span>
               {t(
-                'Ecuaciones basadas en Leyes de Atenuación GMPE (Ordaz / García / Boore-Atkinson) calibradas para la Trinchera Mesoamericana. Consulte docs/latex/ecuaciones_sismo.tex para el desarrollo analítico completo.',
-                'Equations based on GMPE Attenuation Laws (Ordaz / García / Boore-Atkinson) calibrated for the Middle America Trench. See docs/latex/ecuaciones_sismo.tex for complete analytical derivation.'
+                'Atenuación: Arroyo et al. (2010) para subducción y García et al. (2005) para intraplaca, en roca; cortical provisional. Modelo ilustrativo de escenarios, no un estudio de peligro. Ver docs/latex/ecuaciones_sismo.tex.',
+                'Attenuation: Arroyo et al. (2010) for subduction and García et al. (2005) for intraslab, on rock; crustal provisional. Illustrative scenario model, not a hazard study. See docs/latex/ecuaciones_sismo.tex.'
               )}
             </span>
           </div>

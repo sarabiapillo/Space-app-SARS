@@ -49,7 +49,7 @@ export function SeismicChartModal({
       <div className="seismic-modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <div className="seismic-modal__header">
           <div>
-            <h2 id={titleId} className="seismic-modal__title">{t('Gráficas del escenario sísmico', 'Seismic scenario charts')}</h2>
+            <h2 id={titleId} className="seismic-modal__title">{t('Parámetros y gráficas del escenario sísmico', 'Seismic scenario parameters and charts')}</h2>
             <span className="seismic-modal__sub">{seismic.name}</span>
           </div>
           <button type="button" className="seismic-panel__btn-icon is-close" onClick={onClose} aria-label={t('Cerrar', 'Close')}>
@@ -64,6 +64,7 @@ export function SeismicChartModal({
               onFlyToEpicenter={onFlyToEpicenter}
               idPrefix="seismic-modal"
             />
+            {seismic.simulated ? (
             <div className="seismic-modal__kpis">
               <span>{t('PGA epicentral', 'Epicentral PGA')}: <strong>{results.epicentralPga_g.toFixed(3)} g</strong>
                 {sigma !== null && <> ({(results.epicentralPga_g * Math.exp(-sigma)).toFixed(2)}–{Math.min(2.5, results.epicentralPga_g * Math.exp(sigma)).toFixed(2)} g, 16–84 %)</>}
@@ -71,9 +72,24 @@ export function SeismicChartModal({
               <span>{t('Intensidad máx.', 'Max intensity')}: <strong>MMI {mmiToRoman(results.epicentralMmi)}</strong> ({results.epicentralMmi.toFixed(1)})</span>
               <span>{t('Atenuación', 'Attenuation')}: {gmpeLabel}</span>
               {results.validityWarnings.map((w) => <span key={w} className="seismic-gmpe-note__warning">⚠ {w}</span>)}
+              <button type="button" className="seismic-run-btn is-secondary" onClick={() => onSeismicChange({ ...seismic, simulated: false, animatingWaves: false })}>
+                ⟲ {t('Limpiar resultados', 'Clear results')}
+              </button>
             </div>
+            ) : (
+              <button type="button" className="seismic-run-btn seismic-modal__run"
+                onClick={() => onSeismicChange({ ...seismic, enabled: true, simulated: true })}>
+                ▶ {t('Ejecutar simulación', 'Run simulation')}
+              </button>
+            )}
           </aside>
           <section className="seismic-modal__chart">
+            {!seismic.simulated ? (
+              <div className="seismic-empty-results seismic-empty-results--modal">
+                {t('Todavía no hay simulación. Ajusta los parámetros a la izquierda y pulsa «Ejecutar simulación».',
+                  'No simulation yet. Adjust the parameters on the left and press "Run simulation".')}
+              </div>
+            ) : (
             <Seismic2DChart
               results={results}
               seismic={seismic}
@@ -84,6 +100,7 @@ export function SeismicChartModal({
               onStationDistanceChange={onStationDistanceChange}
               variant="modal"
             />
+            )}
           </section>
         </div>
       </div>

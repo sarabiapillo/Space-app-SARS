@@ -646,3 +646,13 @@ export function synthesizeSeismogram(
     accel_g: accel,
   }
 }
+
+/**
+ * Radio en superficie (km) del frente de una onda que sale del foco a profundidad h con velocidad v,
+ * t segundos después del origen: la esfera de radio v·t corta la superficie en √((v·t)² − h²).
+ * Antes de que el frente llegue a la superficie (v·t ≤ h) el radio es 0.
+ */
+export function wavefrontSurfaceRadiusKm(speedKmS: number, timeSec: number, depthKm: number): number {
+  const r = speedKmS * timeSec
+  return r <= depthKm ? 0 : Math.sqrt(r * r - depthKm * depthKm)
+}

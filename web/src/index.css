@@ -6068,6 +6068,11 @@ button:disabled {
   position: relative;
 }
 
+/* Espacio para el botón de ampliar, que no debe tapar la última pestaña. */
+.seismic-chart-card:not(.seismic-chart-card--modal) .seismic-chart-card__header {
+  padding-right: 30px;
+}
+
 .seismic-chart-expand {
   position: absolute;
   top: 0;
@@ -6090,6 +6095,145 @@ button:disabled {
 
 .seismic-chart-clickable {
   cursor: zoom-in;
+}
+
+.seismic-scenario-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 11.5px;
+  color: #334155;
+}
+
+.seismic-scenario-name em {
+  color: #64748b;
+}
+
+/* Animación de ondas P y S */
+.seismic-wave-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.seismic-run-btn.is-wave {
+  border-color: #1d4ed8;
+  background: #2563eb;
+}
+
+.seismic-run-btn.is-wave:hover {
+  background: #1d4ed8;
+}
+
+.seismic-wave-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #334155;
+}
+
+.seismic-wave-clock {
+  position: absolute;
+  left: 12px;
+  bottom: 40px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #0f172a;
+  pointer-events: none;
+}
+
+.seismic-wave-clock__legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #475569;
+}
+
+.seismic-wave-clock__legend i {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.seismic-wave-clock__legend i.is-p {
+  background: #2563eb;
+}
+
+.seismic-wave-clock__legend i.is-s {
+  background: #dc2626;
+}
+
+/* Ejecutar / limpiar simulación y editar parámetros */
+.seismic-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.seismic-run-btn {
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  border: 1px solid #b91c1c;
+  border-radius: 4px;
+  background: #dc2626;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seismic-run-btn:hover {
+  background: #b91c1c;
+}
+
+.seismic-run-btn.is-secondary {
+  border-color: #94a3b8;
+  background: #ffffff;
+  color: #334155;
+}
+
+.seismic-run-btn.is-secondary:hover {
+  background: #f1f5f9;
+}
+
+.seismic-modal__run {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.seismic-empty-results {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.seismic-empty-results--modal {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 300px;
+  text-align: center;
+  font-size: 14px;
 }
 
 /* Modal de gráficas sísmicas */

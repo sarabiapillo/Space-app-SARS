@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { MapCanvas } from './components/MapCanvas'
@@ -10,7 +10,6 @@ import { useRoiLayers } from './hooks/useRoiLayers'
 import { useTranslation } from './i18n/useTranslation'
 import {
   DEFAULT_FLOOD,
-  DEFAULT_SEISMIC,
   DEFAULT_SOLAR,
   MAPA_GENERAL,
   type CenterDockTab,
@@ -34,6 +33,7 @@ import type {
 import { type ScientificColormapId } from './utils/colormapLut'
 import { newId } from './utils/id'
 import { automaticCropRing, geometryToOuterRing, type AdministrativeGeometry } from './utils/roi'
+import { seismicForMap, newSeismicScenario, regionCenter, markEdited } from './utils/seismicScenario'
 import { presetToRoiPolygon, presetToCropRing, presetToEffectiveMetadata, getRecommendedSeismicSettings, type CatalogRoiPreset } from './utils/roiCatalog'
 
 function baseName(nombre: string): string {
@@ -48,7 +48,8 @@ function App() {
   const [generalOpacity, setGeneralOpacity] = useState<number>(MAPA_GENERAL.opacidadSar)
   const [generalSolar, setGeneralSolar] = useState<SolarSimulationState>(DEFAULT_SOLAR)
   const [generalFlood, setGeneralFlood] = useState<FloodSimulationState>(DEFAULT_FLOOD)
-  const [generalSeismic, setGeneralSeismic] = useState<SeismicSimulationState>(DEFAULT_SEISMIC)
+  // Sin escenario propio del mapa general hasta que el usuario lo edite (se coloca en su región).
+  const [generalSeismic, setGeneralSeismic] = useState<SeismicSimulationState | undefined>(undefined)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
   const [locationPreview, setLocationPreview] = useState<AdministrativeGeometry | null>(null)
@@ -94,6 +95,14 @@ function App() {
     ? { type: 'Polygon' as const, coordinates: [[...current.croppedRegion, current.croppedRegion[0]]] }
     : null)
   const roiLayers = useRoiLayers(analysisRegionForJob, current.id)
+  // Escenario sísmico de ESTE mapa: el guardado, o uno nuevo en su ROI (no el de otro mapa ni uno fijo).
+  const currentSeismic = useMemo(
+    () => seismicForMap({
+      nombre: current.nombre, centro: current.centro, croppedRegion: current.croppedRegion,
+      effectiveRoi: current.effectiveRoi, seismic: current.seismic,
+    }),
+    [current.nombre, current.centro, current.croppedRegion, current.effectiveRoi, current.seismic],
+  )
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 
   // Ventanas acoplables del área central (mapa normal y agua/DG2): solo cambia la vista activa,
@@ -255,7 +264,7 @@ function App() {
         effectiveRoiMetadata: metadata,
         solar: { ...DEFAULT_SOLAR, enabled: options?.simulation === 'solar' },
         flood: { ...DEFAULT_FLOOD, enabled: options?.simulation === 'flood' },
-        seismic: { ...DEFAULT_SEISMIC, enabled: options?.simulation === 'seismic', epicenter: preset.center },
+        seismic: { ...newSeismicScenario(preset.center, preset.name), enabled: options?.simulation === 'seismic' },
       }
       addMap(newCopy)
       setActiveCopyId(newCopy.id)
@@ -301,7 +310,8 @@ function App() {
     }
   }
 
-  const handleSeismicChange = (nextSeismic: SeismicSimulationState) => {
+  const handleSeismicChange = (incoming: SeismicSimulationState) => {
+    const nextSeismic = markEdited(currentSeismic, incoming)
     if (isEditing && activeCopy) {
       updateMap(activeCopy.id, {
         seismic: nextSeismic,
@@ -322,7 +332,7 @@ function App() {
         handleDockTabChange('seismic')
         if (preset) {
           const geoSettings = getRecommendedSeismicSettings(preset.state, preset.name)
-          const baseSeismic = current.seismic || DEFAULT_SEISMIC
+          const baseSeismic = currentSeismic
           handleSeismicChange({
             ...baseSeismic,
             enabled: true,
@@ -342,7 +352,7 @@ function App() {
         }
       }
     },
-    [handleDockTabChange, current.solar, current.seismic, notify, t]
+    [handleDockTabChange, current.solar, currentSeismic, notify, t]
   )
 
   const handleCropRegionChange = (polygon: LngLat[] | null) => {
@@ -449,10 +459,10 @@ function App() {
       carpeta: 'Zonas de Riesgo',
       esEditable: true,
       opacidadSar: 0,
+      // Escenario nuevo en la ROI de la copia, sin heredar el de otro mapa.
       seismic: {
-        ...(current.seismic || DEFAULT_SEISMIC),
+        ...newSeismicScenario(regionCenter(current.effectiveRoi, current.croppedRegion, current.centro), `Sismo - ${baseTitle}`),
         enabled: true,
-        epicenter: current.centro,
       },
       fechaModificacion: new Date().toISOString(),
     }
@@ -601,7 +611,7 @@ function App() {
           onCropRegionChange={handleCropRegionChange}
           onSolarChange={handleSolarChange}
           onFloodChange={handleFloodChange}
-          seismic={current.seismic || generalSeismic}
+          seismic={currentSeismic}
           onSeismicChange={handleSeismicChange}
           dockWindows={dockWindows}
           activeDockWindowId={activeDockWindow?.id ?? ''}

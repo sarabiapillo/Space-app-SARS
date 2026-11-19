@@ -165,3 +165,13 @@ test('avisos de validez fuera del rango de cada artículo', () => {
   assert.ok(gmpeValidityWarnings('intraplate', 7, 20, 100).some((w) => w.includes('35')))
   assert.ok(gmpeValidityWarnings('crustal', 7, 10, 50).some((w) => w.includes('provisional')))
 })
+
+test('radio en superficie del frente de onda: √((v·t)² − h²), 0 antes de llegar a la superficie', async () => {
+  const { wavefrontSurfaceRadiusKm } = await import('../src/utils/seismic.ts')
+  assert.equal(wavefrontSurfaceRadiusKm(6.0, 2, 20), 0)                 // 12 km < 20 km de profundidad
+  close(wavefrontSurfaceRadiusKm(6.0, 10, 20), Math.sqrt(60 * 60 - 400), 1e-12)
+  close(wavefrontSurfaceRadiusKm(3.5, 100, 15), Math.sqrt(350 * 350 - 225), 1e-12)
+  // Coherente con el tiempo de llegada: a la distancia D llega en t = √(D² + h²)/v
+  const D = 120, h = 30, t = Math.hypot(D, h) / 3.5
+  close(wavefrontSurfaceRadiusKm(3.5, t, h), D, 1e-9)
+})

@@ -58,11 +58,13 @@ Archivo & Función \\
 \path{web/src/utils/seismic.ts} & Modelo: coeficientes, $V_{s30}$, saturación, PGA, MMI, M$_0$, tiempos, alerta, bisección de radios, círculos geodésicos, escenarios históricos y sismograma sintético. \\
 \path{web/src/utils/signal.ts} & FFT, espectrograma (STFT), frecuencia dominante, duración D5--95, pico y quitar la media. \\
 \path{web/src/utils/accelerogram.ts} & Lectura de acelerogramas en texto y conversión de unidades a $g$. \\
-\path{web/src/components/SeismicSimulatorPanel.tsx} & Panel: escenario, sismos históricos, ROI, $V_{s30}$, tarjetas (PGA, M$_0$, MMI, radios). \\
-\path{web/src/components/Seismic2DChart.tsx} & Pestañas: atenuación PGA, tiempos de viaje y \emph{Sismograma y Espectrograma} con la estación. \\
+\path{web/src/components/SeismicSimulatorPanel.tsx} & Panel: sismos históricos, ROI y botones \emph{Ejecutar simulación}, \emph{Limpiar resultados} y \emph{Editar parámetros}; tras simular, tarjetas (PGA, M$_0$, MMI, radios), modelo de atenuación, avisos y gráficas. \\
+\path{web/src/components/SeismicScenarioControls.tsx} & Parámetros del escenario (epicentro por mapa o coordenadas, $M_w$, $h$, mecanismo, suelo, $V_{s30}$), compartidos por el panel y el modal. \\
+\path{web/src/components/SeismicChartModal.tsx} & Modal de gráficas: gráfica grande y parámetros editables. \\
+\path{web/src/components/Seismic2DChart.tsx} & Pestañas: atenuación PGA, tiempos de viaje y \emph{Sismograma y Espectrograma} con la estación; variantes de panel y de modal. \\
 \path{web/src/components/SeismogramSpectrogram.tsx} & Dibujo en canvas de $a(t)$ y su espectrograma con eje de tiempo común. \\
 \path{web/src/components/RealRecordCompare.tsx} & Carga y comparación con un registro real. \\
-\path{web/src/components/MapCanvas.tsx} & Anillos, epicentro y estación en MapLibre; clic para mover el epicentro o colocar la estación. \\
+\path{web/src/components/MapCanvas.tsx} & Anillos, epicentro y estación en MapLibre (\texttt{seismicFeatureCollection}); clic para colocar epicentro o estación y arrastre del epicentro. \\
 \path{web/src/types/workspace.ts} & Estado \texttt{SeismicSimulationState} guardado por mapa. \\
 \path{web/src/utils/roiCatalog.ts} & Suelo y mecanismo sugeridos para ROIs del catálogo (\texttt{getRecommendedSeismicSettings}). \\
 \bottomrule
@@ -81,7 +83,7 @@ con su espectrograma.
 Parámetro & Rango en la interfaz & Notas \\
 \midrule
 \endhead
-Epicentro $(\lambda_e,\phi_e)$ & clic en el mapa & Con la herramienta \emph{mover}, o desde un sismo histórico o una ROI. \\
+Epicentro $(\lambda_e,\phi_e)$ & cualquier punto & Botón ``Elegir en el mapa'', arrastre del punto rojo, latitud y longitud editables, herramienta \emph{mover}, sismo histórico o ROI. \\
 Magnitud $M_w$ & 4.0 a 8.8 & Paso 0.1. \\
 Profundidad focal $h$ & 5 a 120 km & Paso 1 km. \\
 Mecanismo & subducción, intraplaca, cortical & Elige los coeficientes de la GMPE. \\
@@ -381,7 +383,88 @@ En la pestaña \emph{Sismograma y Espectrograma}, el botón ``Elegir estación e
 siguiente clic coloque la estación (punto verde). La distancia se calcula con la
 ecuación~\eqref{eq:haversine} y la estación tiene su propio $V_{s30}$, que afecta a su PGA, a $f_S$ y a
 la coda. Así se puede representar un epicentro en roca y una estación en suelo lacustre, como en 1985.
-Al elegir una distancia predefinida, la estación se quita.
+Al elegir una distancia predefinida, la estación se quita. Elegir la estación desde el modal lo cierra
+para dejar libre el mapa.
+
+\section{Interfaz: simulación, gráficas, modal y epicentro}
+
+\subsection{Un sismo nuevo en el mapa elegido}
+El simulador sirve para escenarios \emph{nuevos}, no solo para repetir sismos registrados. Cada mapa
+tiene su propio escenario (\path{web/src/utils/seismicScenario.ts}):
+\begin{itemize}
+  \item si el mapa no tiene escenario guardado, se crea uno ``Sismo nuevo --- \emph{nombre del mapa}''
+        con el epicentro en el centro de su ROI (\texttt{regionCenter}: ROI efectiva, si no el recorte
+        manual, si no el centro del mapa), sin simular (\texttt{newSeismicScenario},
+        \texttt{seismicForMap});
+  \item mientras el usuario no lo edite (campo \texttt{autoPlaced}), el epicentro sigue a la ROI si ésta
+        cambia; cualquier cambio del escenario o la simulación lo fijan (\texttt{markEdited});
+  \item las copias de mapa no heredan el escenario de otro mapa, y ``Copia Sismo'' crea el escenario en
+        la ROI de la copia;
+  \item el botón \textbf{Nuevo sismo en este mapa} vuelve a colocar un escenario nuevo en el centro de la
+        región, y los sismos históricos quedan como referencia opcional.
+\end{itemize}
+Antes de este cambio, el simulador empezaba siempre en un escenario fijo en Acapulco (Guerrero) y las
+copias sin escenario mostraban el del mapa general.
+
+\subsection{Ejecutar la simulación}
+Al abrir el simulador solo se ven los parámetros y el epicentro en el mapa: no hay tarjetas de
+resultados, gráficas ni anillos. El botón \textbf{Ejecutar simulación} (campo \texttt{simulated} del
+estado) calcula y muestra la PGA, la intensidad, los radios, las gráficas y los anillos del mapa. A
+partir de ahí los resultados siguen a los parámetros en vivo. \textbf{Limpiar resultados} vuelve al
+estado sin simular, y el epicentro sigue visible para moverlo o arrastrarlo. Antes de simular, los
+anillos no se dibujan: \texttt{seismicFeatureCollection} los omite si \texttt{simulated} es falso.
+
+\subsection{Animación de las ondas P y S}
+Con la simulación ejecutada, el botón \textbf{Animar ondas P y S} dibuja en el mapa los frentes de
+onda que salen del foco: el de la onda $P$ (azul, $v_p = 6.0$\,km/s) y, detrás, el de la onda $S$ (rojo,
+$v_s = 3.5$\,km/s, con un relleno tenue). El frente es una esfera de radio $v\,t$ centrada en el foco, a
+profundidad $h$; su radio en superficie es (función \texttt{wavefrontSurfaceRadiusKm})
+\begin{equation}
+  r(t) = \begin{cases} \sqrt{(v\,t)^2 - h^2} & v\,t > h\\ 0 & v\,t \le h \end{cases}
+\end{equation}
+coherente con los tiempos de llegada: a la distancia $D$ el frente llega en $t = \sqrt{D^2 + h^2}/v$.
+La animación corre en bucle hasta que la onda $S$ pasa el anillo de percepción débil (mínimo 300\,km),
+con una pausa de 1.5\,s, a velocidad $\times10$, $\times20$ o $\times50$ (segundos simulados por segundo
+real). Un reloj en el mapa muestra el tiempo desde el origen y el radio de cada frente. Se dibuja con
+\texttt{requestAnimationFrame} directamente en la fuente de MapLibre, sin volver a renderizar la
+interfaz. Es una representación cinemática de los tiempos de llegada; no modela amplitudes ni
+reflexiones.
+
+\subsection{Gráficas y modal}
+En el panel, las gráficas miden 260\,px de alto. El botón \textbf{Editar parámetros}, el botón de
+ampliar de la gráfica o un clic sobre cualquier gráfica abren un modal (\texttt{SeismicChartModal})
+que ocupa casi toda la pantalla. Si todavía no se ha simulado, el modal muestra los parámetros y el
+botón \emph{Ejecutar simulación} en lugar de la gráfica. Ya simulado, contiene:
+\begin{itemize}
+  \item a la izquierda, los parámetros del escenario (\texttt{SeismicScenarioControls}) y un resumen con
+        la PGA epicentral y su intervalo del 16 al 84\,\%, la intensidad máxima, el modelo de atenuación
+        y sus avisos de validez;
+  \item a la derecha, la gráfica elegida en grande (unos 640\,px de alto; el sismograma y el
+        espectrograma, 210 y 250\,px), con pestañas para cambiar entre las tres.
+\end{itemize}
+El panel y el modal editan el mismo estado del escenario y comparten la pestaña y la distancia de la
+estación, así que cualquier cambio actualiza a la vez la gráfica, el panel y los anillos del mapa. El
+modal se cierra con Esc, con el botón de cerrar, con un clic fuera o al pedir elegir el epicentro o la
+estación en el mapa.
+
+\subsection{Epicentro libre}
+El epicentro se puede fijar en cualquier punto, de cuatro formas:
+\begin{enumerate}
+  \item \textbf{Elegir en el mapa:} el siguiente clic lo coloca, sin depender de la herramienta activa
+        ni del modo edición (campo \texttt{pickingEpicenter} del estado). El cursor cambia a cruz,
+        el panel muestra un aviso y Esc cancela.
+  \item \textbf{Arrastre:} sobre el punto rojo el cursor cambia a mano; al arrastrarlo, el mapa
+        recalcula y redibuja los anillos en vivo, y al soltar se guarda el epicentro (entonces se
+        actualizan el panel y las gráficas). Mientras se arrastra no se dibuja ni se desplaza el mapa;
+        al soltar se restauran el desplazamiento y el cursor que tenía la herramienta activa. Solo con
+        ratón, no con pantalla táctil.
+  \item \textbf{Coordenadas:} latitud y longitud editables, en grados decimales; se aplican con Enter o
+        al salir del campo, y un valor inválido se descarta.
+  \item La herramienta \emph{mover} en modo edición, un sismo histórico o el centro de una ROI.
+\end{enumerate}
+Elegir el epicentro y elegir la estación son excluyentes: activar uno cancela el otro, y el arrastre
+se desactiva mientras alguno de los dos está activo. Un epicentro fijado así recibe el nombre
+``Epicentro personalizado''.
 
 \section{Escenarios históricos y resultados del modelo}
 

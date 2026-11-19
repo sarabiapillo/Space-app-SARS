@@ -148,6 +148,14 @@ export interface SeismicSimulationState {
   pickingStation?: boolean
   /** Mientras es true, el siguiente clic en el mapa coloca el epicentro (sin depender de la herramienta). */
   pickingEpicenter?: boolean
+  /** true tras pulsar "Ejecutar simulación": solo entonces se muestran resultados, gráficas y anillos. */
+  simulated?: boolean
+  /** true si el sistema lo colocó en la región del mapa y el usuario aún no lo ha editado. */
+  autoPlaced?: boolean
+  /** Animación de los frentes de onda P y S en el mapa (solo con la simulación ejecutada). */
+  animatingWaves?: boolean
+  /** Velocidad de la animación: segundos simulados por segundo real (p. ej. 20). */
+  waveAnimationSpeed?: number
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */
