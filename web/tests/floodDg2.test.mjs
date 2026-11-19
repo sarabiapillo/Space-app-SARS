@@ -165,3 +165,14 @@ test('PNG download name keeps the artifact stem', async () => {
   assert.equal(pngDownloadName('roi-0001.wd.tif'), 'roi-0001.wd.png')
   assert.equal(pngDownloadName('roi.max.tif'), 'roi.max.png')
 })
+
+test('map legend depth classes match the backend preview palette exactly', async () => {
+  const { DEPTH_CLASSES } = await import('../src/utils/floodDg2.ts')
+  const { readFileSync } = await import('node:fs')
+  const python = readFileSync(new URL('../../backend/analyses/roi_flood_runs.py', import.meta.url), 'utf8')
+  const block = python.match(/_DEPTH_CLASSES = \[([\s\S]*?)\]\n/)[1]
+  const backend = [...block.matchAll(/\(([\d.]+), \((\d+), (\d+), (\d+)\)\)/g)].map(m => [Number(m[1]), [Number(m[2]), Number(m[3]), Number(m[4])]])
+  assert.equal(backend.length, 5)
+  assert.deepEqual(DEPTH_CLASSES.map(c => [c.min, c.rgb]), backend)
+  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.15, .5, 1, 2, null])
+})

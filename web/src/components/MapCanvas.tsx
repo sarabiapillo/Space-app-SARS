@@ -52,6 +52,7 @@ import {
 } from '../mocks/initialWorkspaces'
 import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
+import { FloodDepthLegend } from './FloodDepthLegend'
 import { useTranslation } from '../i18n/useTranslation.ts'
 import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
 import { geometryBounds, rectangleFromCorners, type AdministrativeGeometry } from '../utils/roi'
@@ -2750,6 +2751,11 @@ export function MapCanvas({
               t2 · {displayDate(displayScene.t2)} ▶
             </span>
           </div>
+        )}
+
+        {/* Leyenda de profundidad DG2: las mismas clases que el PNG de vista previa */}
+        {hasCurrentFloodResult && activeFlood.rasterUrl && activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo' && (
+          <FloodDepthLegend />
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Comparativo de Inundación */}

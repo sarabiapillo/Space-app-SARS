@@ -135,7 +135,11 @@ _PREVIEW_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_MAX_SOURCE_CELLS = 8_000_000
 _PREVIEW_MAX_EDGE = 2048
 _PREVIEW_MAX_CELLS = 4_000_000
-_PREVIEW_PALETTE = 'depth-003-300-v1'
+_PREVIEW_PALETTE = 'depth-classes-blues-v2'
+# Lower bound (m) and colour of each depth class, light to dark blue; below 0.03 m is transparent.
+# Keep in sync with DEPTH_CLASSES in web/src/utils/floodDg2.ts (the map legend).
+_DEPTH_CLASSES = [(.03, (198, 219, 239)), (.15, (107, 174, 214)), (.5, (33, 113, 181)),
+                  (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
 
 
 class RoiRunPreviewView(APIView):
@@ -194,11 +198,9 @@ class RoiRunPreviewView(APIView):
                 bounds = transform_bounds('EPSG:3857', 'EPSG:4326', left, bottom, right, top)
                 if not all(np.isfinite(bounds)):
                     raise ValueError('invalid bounds')
-                amount = np.clip((depth - .03) / 2.97, 0, 1)
                 rgba = np.zeros((height, width, 4), dtype='uint8')
-                rgba[:, :, 0] = 30 + (105 * amount).astype('uint8')
-                rgba[:, :, 1] = (140 * (1 - amount)).astype('uint8')
-                rgba[:, :, 2] = 220 - (150 * amount).astype('uint8')
+                for lower, colour in _DEPTH_CLASSES:
+                    rgba[depth >= lower, :3] = colour
                 rgba[:, :, 3] = np.where((valid > 0) & np.isfinite(depth) &
                                           (depth >= .03) & (depth != src.nodata), 255, 0)
                 output = io.BytesIO()
@@ -209,7 +211,7 @@ class RoiRunPreviewView(APIView):
         response['X-Preview-CRS'] = 'EPSG:3857'
         response['X-Preview-Bounds'] = ','.join(str(value) for value in bounds)
         response['X-Preview-Units'] = 'm'
-        response['X-Preview-Value-Range'] = '0.03,3'
+        response['X-Preview-Classes'] = ','.join(format(lower, 'g') for lower, _ in _DEPTH_CLASSES)
         response['Cache-Control'] = 'private, max-age=3600'
         response['ETag'] = '"' + hashlib.sha256((entry['sha256'] + ':' + _PREVIEW_PALETTE).encode()).hexdigest() + '"'
         return response

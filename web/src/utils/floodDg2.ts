@@ -46,6 +46,16 @@ export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameInd
   return {type:'FeatureCollection',features:frame.arrows.map(([lon,lat,speed,bearing])=>({type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{speed,bearing}}))}
 }
 
+/** Depth classes of the preview PNG, light to dark blue. Kept in sync with _DEPTH_CLASSES in
+ * backend/analyses/roi_flood_runs.py by a test. Below 0.03 m the image is transparent. */
+export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb: [number, number, number]}> = [
+  {min:.03,max:.15,rgb:[198,219,239]},
+  {min:.15,max:.5,rgb:[107,174,214]},
+  {min:.5,max:1,rgb:[33,113,181]},
+  {min:1,max:2,rgb:[8,81,156]},
+  {min:2,max:null,rgb:[8,48,107]},
+]
+
 /** File name for the depth preview PNG of an artifact such as `roi-0001.wd.tif`. */
 export function pngDownloadName(artifactName: string) {
   return artifactName.replace(/\.tif$/,'')+'.png'
