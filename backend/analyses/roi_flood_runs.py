@@ -108,6 +108,8 @@ class RoiRunResultsView(APIView):
             result['maximum'] = {k: v for k, v in result['maximum'].items() if k != 'file'}
             # Rain-inclusive conservation check; absent (null) for runs summarized before it existed.
             result['mass_balance'] = run['result'].get('mass_balance')
+            # Solver-velocity flow arrows (lon, lat, m/s, bearing); null for runs without voutput.
+            result['flow'] = run['result'].get('flow')
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
         except (KeyError, TypeError, ValueError):

@@ -87,9 +87,14 @@ def test_parameter_file_enables_thin_depth_threshold_right_after_dg2():
 
 def test_parameter_file_without_threshold_keeps_previous_directives():
     request = validate_roi_run(payload(), config())
-    assert solver_parameter_file(request) == ('dg2\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
+    assert solver_parameter_file(request) == ('dg2\nvoutput\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
                                               'sim_time 2\nsaveint 1\ninitial_tstep 0.1\nfpfric 0.02\n'
                                               'dynamicrainfile rain.nc\nbcifile boundary.bci\n')
+
+
+def test_parameter_file_requests_velocity_output_for_flow_arrows():
+    request = validate_roi_run({**payload(), 'simulation': {**payload()['simulation'], 'dg2_depth_thresh_m': .02}}, config())
+    assert solver_parameter_file(request).splitlines()[:3] == ['dg2', 'dg2depththresh 0.02', 'voutput']
 
 
 def test_acquisition_failure_is_terminal_and_sanitized(root):

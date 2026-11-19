@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import rasterio
 
-from pipeline.hydrology.results import read_depth_ascii, export_depth_cog, summarize_results
+from pipeline.hydrology.results import read_depth_ascii, export_depth_cog, summarize_results, flow_arrows
 
 SMOKE = Path(__file__).resolve().parents[2] / 'data/tools/lisflood-fp-8.0/runtime/smoke-t030/results'
 
@@ -31,6 +31,7 @@ def test_smoke_real_outputs_without_rerun():
     assert result['mass_balance']['max_abs_interval_error_m3'] == pytest.approx(0, abs=1e-9)
     assert any(w.startswith('Balance de masa con lluvia incluida') for w in result['warnings'])
     assert not any('getfattr' in w for w in result['warnings'])
+    assert result['flow'] is None  # the smoke run predates voutput
     json.dumps(result, allow_nan=False)
 
 
@@ -72,6 +73,65 @@ def test_unreadable_mass_file_warns_without_failing(tmp_path, body):
     result = summarize_results(tmp_path, save_interval_s=1)
     assert result['mass_balance'] is None
     assert result['warnings'] == ['Archivo .mass ilegible; balance de masa no disponible.']
+
+
+UTM_HEADER = 'ncols 2\nnrows 2\nxllcorner 500000\nyllcorner 1850000\ncellsize 30\nNODATA_value -9999\n'
+
+
+def velocity_outputs(directory, depth, vx, vy):
+    ascii_grid(directory / 'a-0000.wd', '', header=UTM_HEADER + '0 0\n0 0\n')
+    ascii_grid(directory / 'a-0000.Vx', '', header=UTM_HEADER + '0 0\n0 0\n')
+    ascii_grid(directory / 'a-0000.Vy', '', header=UTM_HEADER + '0 0\n0 0\n')
+    ascii_grid(directory / 'a-0001.wd', '', header=UTM_HEADER + depth)
+    ascii_grid(directory / 'a-0001.Vx', '', header=UTM_HEADER + vx)
+    ascii_grid(directory / 'a-0001.Vy', '', header=UTM_HEADER + vy)
+    ascii_grid(directory / 'a.max', '', header=UTM_HEADER + depth)
+
+
+@pytest.mark.parametrize('vx, vy, bearing', [('2 2\n2 2\n', '0 0\n0 0\n', 90), ('0 0\n0 0\n', '2 2\n2 2\n', 0),
+                                             ('0 0\n0 0\n', '-2 -2\n-2 -2\n', 180), ('-2 -2\n-2 -2\n', '0 0\n0 0\n', 270)])
+def test_flow_arrows_follow_solver_velocity_east_and_north(tmp_path, vx, vy, bearing):
+    # LISFLOOD-FP voutput: Vx positive east, Vy positive north (checked against downhill flow in a real DG2 run).
+    velocity_outputs(tmp_path, '.5 .5\n.5 .5\n', vx, vy)
+    flow = summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['flow']
+    assert flow['units'] == 'm/s' and flow['min_depth_m'] == .03
+    assert [f['frame_index'] for f in flow['frames']] == [0, 1]
+    assert flow['frames'][0]['arrows'] == [] and flow['frames'][0]['max_speed_m_s'] == 0
+    arrows = flow['frames'][1]['arrows']
+    assert len(arrows) == 4 and flow['frames'][1]['max_speed_m_s'] == pytest.approx(2)
+    for lon, lat, speed, direction in arrows:
+        assert speed == pytest.approx(2)
+        assert min(abs(direction - bearing), 360 - abs(direction - bearing)) < .5
+        assert -93.01 < lon < -92.99 and 16.7 < lat < 16.8
+
+
+def test_flow_arrows_ignore_thin_films(tmp_path):
+    # The 0.01 m cell carries a spurious 9 m/s thin-film speed; arrows use only cells at least 0.03 m deep.
+    velocity_outputs(tmp_path, '.01 .2\n.6 0\n', '9 1\n3 0\n', '0 0\n0 0\n')
+    arrows = summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['flow']['frames'][1]['arrows']
+    assert sorted(a[2] for a in arrows) == [1, 3]
+
+
+def test_flow_block_arrow_is_depth_weighted_and_capped(tmp_path):
+    depth = read_depth_ascii(ascii_grid(tmp_path / 'd.wd', '', header=UTM_HEADER + '.01 .2\n.6 0\n'))
+    vx, vy = np.array([[9., 1.], [3., 0.]]), np.zeros((2, 2))
+    [[lon, lat, speed, direction]] = flow_arrows(depth, vx, vy, crs='EPSG:32615', max_arrows=1)
+    assert speed == pytest.approx((.2 * 1 + .6 * 3) / .8)
+    assert min(direction, 360 - direction) == pytest.approx(90, abs=.5)
+
+
+def test_flow_is_null_without_velocity_files_or_crs(tmp_path):
+    minimal_outputs(tmp_path)
+    assert summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['flow'] is None
+    velocity_outputs(tmp_path, '.5 .5\n.5 .5\n', '1 1\n1 1\n', '0 0\n0 0\n')
+    assert summarize_results(tmp_path, save_interval_s=1)['flow'] is None
+
+
+def test_flow_rejects_velocity_grid_mismatch(tmp_path):
+    velocity_outputs(tmp_path, '.5 .5\n.5 .5\n', '1 1\n1 1\n', '0 0\n0 0\n')
+    ascii_grid(tmp_path / 'a-0001.Vy', '0 0\n0 0\n')
+    with pytest.raises(ValueError, match='velocity grid'):
+        summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')
 
 
 def test_sample_frame_indices_are_not_physical_times(tmp_path):

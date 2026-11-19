@@ -12,10 +12,16 @@ from rasterio import shutil as rio_shutil
 from rasterio.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+from pyproj import Geod, Transformer
 
 
 _HEADERS = ('ncols', 'nrows', 'xllcorner', 'yllcorner', 'cellsize', 'nodata_value')
 _FRAME = re.compile(r'^(.+)-(\d+)\.wd$')
+# Same visual threshold as the depth preview palette; thinner films give spurious HU/H speeds.
+FLOW_MIN_DEPTH_M = .03
+FLOW_MAX_ARROWS = 400
+FLOW_METHOD = ('depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H); Vx positive east, '
+               'Vy positive north; cells shallower than min_depth_m ignored')
 
 
 def _limit(max_cells):
@@ -25,6 +31,15 @@ def _limit(max_cells):
 
 def read_depth_ascii(path, max_cells=4_000_000):
     """Parsea seis encabezados ESRI exactos; nodata nunca representa lecho seco."""
+    return _read_ascii(path, max_cells, nonnegative=True)
+
+
+def read_velocity_ascii(path, max_cells=4_000_000):
+    """Same ESRI grid contract as depth, but velocity components may be negative."""
+    return _read_ascii(path, max_cells, nonnegative=False)
+
+
+def _read_ascii(path, max_cells, *, nonnegative):
     _limit(max_cells)
     path = Path(path)
     with path.open(encoding='ascii') as stream:
@@ -54,9 +69,10 @@ def read_depth_ascii(path, max_cells=4_000_000):
             try:
                 row = [float(part) for part in parts]
             except ValueError as exc:
-                raise ValueError('invalid depth value') from exc
-            if any(not math.isfinite(v) or (v != nodata and v < 0) for v in row):
-                raise ValueError('depth must be finite and nonnegative outside nodata')
+                raise ValueError('invalid depth value' if nonnegative else 'invalid velocity value') from exc
+            if any(not math.isfinite(v) or (nonnegative and v != nodata and v < 0) for v in row):
+                raise ValueError('depth must be finite and nonnegative outside nodata' if nonnegative
+                                 else 'velocity must be finite')
             rows.append(row)
         if stream.read(1):
             raise ValueError('extra ESRI ASCII data')
@@ -147,6 +163,13 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     prefix = _FRAME.fullmatch(frame_paths[0][1].name).group(1)
     if any(_FRAME.fullmatch(path.name).group(1) != prefix for _, path in frame_paths) or maxima[0].name != prefix + '.max':
         raise ValueError('frames and maximum must share a prefix')
+    velocity = {index: (path.with_suffix('.Vx'), path.with_suffix('.Vy')) for index, path in frame_paths}
+    present = [vx.is_file() and vy.is_file() for vx, vy in velocity.values()]
+    flow = None
+    if crs is not None and any(present):
+        if not all(present):
+            raise ValueError('incomplete velocity frames')
+        flow = {'units': 'm/s', 'min_depth_m': FLOW_MIN_DEPTH_M, 'method': FLOW_METHOD, 'frames': []}
     frames = []
     reference = None
     for index, path in frame_paths + [(None, maxima[0])]:
@@ -165,6 +188,13 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                 raise ValueError('nonfinite scheduled frame time')
             record.update(frame_index=index, time_s=None, scheduled_time_s=scheduled)
             frames.append(record)
+            if flow is not None:
+                vx, vy = (read_velocity_ascii(item, max_cells=max_cells) for item in velocity[index])
+                if any((item['grid'], item['nodata']) != signature for item in (vx, vy)):
+                    raise ValueError('velocity grid must match the depth grid')
+                arrows = flow_arrows(data, vx['values'], vy['values'], crs=crs)
+                flow['frames'].append({'frame_index': index, 'arrows': arrows,
+                                       'max_speed_m_s': max((a[2] for a in arrows), default=0)})
     mass = directory / (prefix + '.mass')
     balance = None
     if not mass.is_file():
@@ -180,8 +210,46 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
-            'mass_balance': balance,
+            'mass_balance': balance, 'flow': flow,
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
+
+
+def flow_arrows(depth, vx, vy, *, crs, max_arrows=FLOW_MAX_ARROWS, min_depth_m=FLOW_MIN_DEPTH_M):
+    """Aggregate solver velocities into at most ``max_arrows`` arrows ``[lon, lat, speed_m_s, bearing_deg]``.
+
+    Each square block of cells gives one arrow: its velocity is total momentum over total depth
+    (sum(h*v)/sum(h)) of cells at least ``min_depth_m`` deep, placed at their centroid. The bearing
+    is clockwise from true north, measured geodesically so grid convergence is accounted for.
+    """
+    h, nodata = depth['values'], depth['nodata']
+    rows, cols = h.shape
+    cell = depth['grid']['cellsize_m']
+    x0, y0 = depth['grid']['xllcorner'], depth['grid']['yllcorner']
+    stride = max(1, math.ceil(math.sqrt(rows * cols / max_arrows)))
+    weight = np.where((h != nodata) & (h >= min_depth_m) & (vx != nodata) & (vy != nodata), h, 0.0)
+    to_lonlat = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
+    geod = Geod(ellps='WGS84')
+    arrows = []
+    for r0 in range(0, rows, stride):
+        for c0 in range(0, cols, stride):
+            block = np.s_[r0:r0 + stride, c0:c0 + stride]
+            w = weight[block]
+            total = w.sum()
+            if total <= 0:
+                continue
+            u, v = (w * vx[block]).sum() / total, (w * vy[block]).sum() / total
+            speed = math.hypot(u, v)
+            if not speed:
+                continue
+            rr, cc = np.nonzero(w)
+            x = x0 + (c0 + cc.mean() + .5) * cell
+            y = y0 + (rows - r0 - rr.mean() - .5) * cell
+            step = cell * .1 / speed
+            lon, lat = to_lonlat.transform(x, y)
+            lon2, lat2 = to_lonlat.transform(x + u * step, y + v * step)
+            bearing = geod.inv(lon, lat, lon2, lat2)[0] % 360
+            arrows.append([round(lon, 6), round(lat, 6), round(speed, 3), round(bearing, 1)])
+    return arrows
 
 
 def mass_balance(path):

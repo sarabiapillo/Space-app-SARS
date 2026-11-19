@@ -310,6 +310,8 @@ def solver_parameter_file(request):
     if s['dg2_depth_thresh_m'] is not None:
         # Must follow `dg2`, which resets DG2DepthThresh to its default.
         parameter += f'dg2depththresh {s["dg2_depth_thresh_m"]}\n'
+    # Velocity frames (.Vx/.Vy = HU/H) for flow arrows; they do not change the depth solution.
+    parameter += 'voutput\n'
     parameter += ('DEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
                   f'sim_time {s["duration_s"]}\nsaveint {s["save_interval_s"]}\n'
                   f'initial_tstep {s["initial_tstep_s"]}\nfpfric {h["manning"]}\n'
