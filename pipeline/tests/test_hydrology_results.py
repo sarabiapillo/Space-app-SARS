@@ -26,9 +26,52 @@ def test_smoke_real_outputs_without_rerun():
     assert result['grid']['shape'] == [9, 9]
     assert result['grid']['crs'] is None
     assert result['synthetic'] is True and result['hydraulic_accuracy_validated'] is False
-    assert any('Qerror/Verror' in w for w in result['warnings'])
-    assert any('getfattr' in w for w in result['warnings'])
+    # The smoke .mass reports Verror = -0.04 exactly when 0.04 m3 of rain enters: rain-inclusive error is zero.
+    assert result['mass_balance']['rain_m3'] == pytest.approx(.08)
+    assert result['mass_balance']['max_abs_interval_error_m3'] == pytest.approx(0, abs=1e-9)
+    assert any(w.startswith('Balance de masa con lluvia incluida') for w in result['warnings'])
+    assert not any('getfattr' in w for w in result['warnings'])
     json.dumps(result, allow_nan=False)
+
+
+MASS_HEADER = 'Time         Tstep      MinTstep   NumTsteps    Area         Vol         Qin         Hds        Qout          Qerror       Verror       Rain-(Inf+Evap)\n'
+
+
+def mass_row(time, vol, verror, rain):
+    return f'{time} 1 1 1 0 {vol} 0 0 0 0 {verror} {rain}\n'
+
+
+def minimal_outputs(directory):
+    ascii_grid(directory / 'a-0000.wd', '0 0\n0 0\n')
+    ascii_grid(directory / 'a.max', '0 0\n0 0\n')
+
+
+def test_mass_balance_adds_back_rain_missing_from_swe_verror(tmp_path):
+    minimal_outputs(tmp_path)
+    (tmp_path / 'a.mass').write_text(MASS_HEADER + mass_row(100, 95, -95, 100) + mass_row(200, 190, -100, 200)
+                                     + MASS_HEADER + mass_row(300, 190, -.5, 200))
+    balance = summarize_results(tmp_path, save_interval_s=1)['mass_balance']
+    assert balance['intervals'] == 3
+    assert balance['rain_m3'] == pytest.approx(200)
+    assert balance['final_volume_m3'] == pytest.approx(190)
+    assert balance['max_abs_interval_error_m3'] == pytest.approx(5)
+    assert balance['max_abs_interval_error_relative_to_rain'] == pytest.approx(.025)
+
+
+def test_missing_mass_file_keeps_explicit_warning(tmp_path):
+    minimal_outputs(tmp_path)
+    result = summarize_results(tmp_path, save_interval_s=1)
+    assert result['mass_balance'] is None
+    assert result['warnings'] == ['Archivo .mass ausente; balance de masa no disponible.']
+
+
+@pytest.mark.parametrize('body', ['', MASS_HEADER, MASS_HEADER + '1 2 3\n', MASS_HEADER + mass_row(1, 'nan', 0, 0)])
+def test_unreadable_mass_file_warns_without_failing(tmp_path, body):
+    minimal_outputs(tmp_path)
+    (tmp_path / 'a.mass').write_text(body)
+    result = summarize_results(tmp_path, save_interval_s=1)
+    assert result['mass_balance'] is None
+    assert result['warnings'] == ['Archivo .mass ilegible; balance de masa no disponible.']
 
 
 def test_sample_frame_indices_are_not_physical_times(tmp_path):

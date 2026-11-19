@@ -95,6 +95,8 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(result.status_code, 200)
         body = result.json()
         self.assertEqual(body['time_axis']['status'], 'actual_times_unavailable')
+        self.assertIn('mass_balance', body)
+        self.assertIsNone(body['mass_balance'])  # seeded run predates the rain-inclusive balance
         self.assertEqual(len(body['artifacts']), 4)
         self.assertTrue(all('file' not in item and item['url'].startswith(status) and item['nodata'] == body['grid']['nodata'] for item in body['artifacts']))
         self.assertTrue(all(frame['time_s'] is None for frame in body['frames']))

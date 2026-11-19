@@ -106,6 +106,8 @@ class RoiRunResultsView(APIView):
                       'time_axis', 'synthetic', 'hydraulic_accuracy_validated', 'warnings')}
             result['frames'] = [{k: v for k, v in frame.items() if k != 'file'} for frame in result['frames']]
             result['maximum'] = {k: v for k, v in result['maximum'].items() if k != 'file'}
+            # Rain-inclusive conservation check; absent (null) for runs summarized before it existed.
+            result['mass_balance'] = run['result'].get('mass_balance')
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
         except (KeyError, TypeError, ValueError):

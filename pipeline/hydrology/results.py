@@ -166,11 +166,52 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
             record.update(frame_index=index, time_s=None, scheduled_time_s=scheduled)
             frames.append(record)
     mass = directory / (prefix + '.mass')
-    warnings = ['Qerror/Verror en .mass: balance pendiente, no validado.',
-                'getfattr: advertencia del smoke pendiente de investigación.']
+    balance = None
     if not mass.is_file():
-        warnings[0] = 'Archivo .mass ausente; Qerror/Verror pendientes.'
+        warnings = ['Archivo .mass ausente; balance de masa no disponible.']
+    else:
+        try:
+            balance = mass_balance(mass)
+            warnings = [f"Balance de masa con lluvia incluida: error máximo por intervalo "
+                        f"{balance['max_abs_interval_error_m3']:.3g} m³ sobre {balance['rain_m3']:.6g} m³ de lluvia; "
+                        f"mide conservación numérica, no exactitud hidráulica."]
+        except (ValueError, OSError, IndexError):
+            warnings = ['Archivo .mass ilegible; balance de masa no disponible.']
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
+            'mass_balance': balance,
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
+
+
+def mass_balance(path):
+    """Rain-inclusive volume balance from a LISFLOOD-FP ``.mass`` file.
+
+    The SWE solvers (FV1/DG2) of 8.0.3 report ``Verror = VolIn - VolOut - (vol2 - vol1)``
+    without the rain source (``swe/stats.cpp``), so during rain Verror is about minus the
+    rain added in the interval. Adding the cumulative rain increment back gives the actual
+    per-interval conservation error. Columns: Vol = 5, Verror = 10, Rain-(Inf+Evap) = 11.
+    """
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        fields = line.split()
+        if not fields or fields[0] == 'Time':
+            continue
+        if len(fields) != 12:
+            raise ValueError('unexpected .mass row')
+        values = [float(fields[i]) for i in (0, 5, 10, 11)]
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError('nonfinite .mass value')
+        rows.append(values)
+    if not rows:
+        raise ValueError('empty .mass')
+    previous_rain, errors = 0.0, []
+    for _time, _volume, verror, rain in rows:
+        errors.append(verror + (rain - previous_rain))
+        previous_rain = rain
+    worst = max(abs(e) for e in errors)
+    rain_total = rows[-1][3]
+    return {'intervals': len(rows), 'rain_m3': rain_total, 'final_volume_m3': rows[-1][1],
+            'max_abs_interval_error_m3': worst,
+            'max_abs_interval_error_relative_to_rain': worst / rain_total if rain_total > 0 else None,
+            'method': 'Verror + interval rain increment (SWE Verror omits rain in LISFLOOD-FP 8.0.3)'}
