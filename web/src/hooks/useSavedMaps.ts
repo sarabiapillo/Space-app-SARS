@@ -6,12 +6,16 @@ import {
   RAW_SCENE_IDS,
   LEGACY_CIRCLE_LABELS,
   WARN_CIRCLE_DEFAULT_LABEL,
+  DEFAULT_FLOOD,
+  DEFAULT_SEISMIC,
 } from '../mocks/initialWorkspaces'
 import {
   CARPETAS,
   type LngLat,
   type MapAnnotation,
   type SolarSimulationState,
+  type FloodSimulationState,
+  type SeismicSimulationState,
   type WorkspaceMap,
 } from '../types/workspace'
 import { buildAnnotationsGeoJSON } from '../utils/geojson'
@@ -84,17 +88,82 @@ function normalizeAnnotation(raw: unknown): MapAnnotation | null {
   return null
 }
 
-function normalizeSolar(raw: unknown): SolarSimulationState {
+function safeLocalApiUrl(value: unknown, runId?: string): string | null {
+  if (typeof value !== 'string') return null
+  if (runId === undefined) return /^\/api\/[a-zA-Z0-9/_.-]+(?:\?[a-zA-Z0-9_=&.%-]*)?$/.test(value) ? value : null
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) return null
+  return new RegExp(`^/api/solar/simulations/${runId}/(?:preview/incident|export/incident|contours|sample)$`, 'i').test(value) ? value : null
+}
+
+function solarSimulationMatchesCopy(result: Record<string, unknown> | null, roi: unknown): boolean {
+  if (!result || typeof result.id !== 'string' || !roi || typeof result.request !== 'object' || result.request === null) return false
+  return JSON.stringify((result.request as Record<string, unknown>).roi) === JSON.stringify(roi)
+}
+
+function normalizeSolar(raw: unknown, roi: unknown): SolarSimulationState {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SOLAR }
   const s = raw as Record<string, unknown>
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+  const candidateResult = asRecord(s.simulationResult)
+  const candidateId = typeof candidateResult?.id === 'string' ? candidateResult.id : ''
+  const candidateLayers = asRecord(candidateResult?.layers)
+  const incidentLayer = asRecord(candidateLayers?.incident)
+  const linksMatchRun = Boolean(candidateResult &&
+    safeLocalApiUrl(incidentLayer?.preview_url, candidateId) &&
+    safeLocalApiUrl(incidentLayer?.export_url, candidateId) &&
+    safeLocalApiUrl(incidentLayer?.contours_url, candidateId) &&
+    safeLocalApiUrl(candidateResult.sample_url, candidateId))
+  const simulationResult = linksMatchRun && solarSimulationMatchesCopy(candidateResult, roi) ? candidateResult : null
+  const runId = typeof simulationResult?.id === 'string' ? simulationResult.id : ''
+  const analysisResult = simulationResult ? asRecord(s.analysisResult) : null
+  const histogram = asRecord(analysisResult?.histogram)
+  const statistics = asRecord(analysisResult?.statistics)
+  const validAnalysis = analysisResult && analysisResult.units === 'W/m2' && isNumber(analysisResult.valid_cells) &&
+    statistics && Array.isArray(histogram?.bin_edges) && Array.isArray(histogram?.counts)
+    ? analysisResult as unknown as SolarSimulationState['analysisResult'] : null
+  const contours = simulationResult ? asRecord(s.contours) : null
+  const rasterPreviewUrl = safeLocalApiUrl(s.rasterPreviewUrl, runId)
+  const rasterBounds = Array.isArray(s.rasterBounds) && s.rasterBounds.length === 4 && s.rasterBounds.every(isNumber)
+    ? s.rasterBounds as SolarSimulationState['rasterBounds'] : null
   return {
-    // El simulador solar no aplica a un radar activo (NISAR): siempre apagado, aunque se haya guardado encendido.
-    enabled: false,
+    enabled: s.enabled === true,
     sunAngle: isNumber(s.sunAngle) ? Math.max(0, Math.min(180, s.sunAngle)) : DEFAULT_SOLAR.sunAngle,
-    radiationIntensity: isNumber(s.radiationIntensity)
-      ? Math.max(0, Math.min(100, s.radiationIntensity))
-      : DEFAULT_SOLAR.radiationIntensity,
+    elevationDeg: isNumber(s.elevationDeg) ? Math.max(0, Math.min(90, s.elevationDeg)) : DEFAULT_SOLAR.elevationDeg,
+    azimuthDeg: isNumber(s.azimuthDeg) ? ((s.azimuthDeg % 360) + 360) % 360 : DEFAULT_SOLAR.azimuthDeg,
+    radiationIntensity: isNumber(s.radiationIntensity) ? Math.max(0, Math.min(100, s.radiationIntensity)) : DEFAULT_SOLAR.radiationIntensity,
+    simulationResult: simulationResult as unknown as SolarSimulationState['simulationResult'],
+    analysisResult: validAnalysis,
+    contours: contours && contours.type === 'FeatureCollection' && Array.isArray(contours.features) ? contours as unknown as SolarSimulationState['contours'] : null,
+    showContours: s.showContours !== false,
+    selectedZoneId: typeof s.selectedZoneId === 'string' ? s.selectedZoneId : undefined,
+    rasterPreviewUrl,
+    rasterBounds,
+    showRasterOnMap: s.showRasterOnMap !== false,
+    layerOpacity: isNumber(s.layerOpacity) ? Math.max(0, Math.min(100, s.layerOpacity)) : DEFAULT_SOLAR.layerOpacity,
+    radiusKm: isNumber(s.radiusKm) ? Math.max(1, Math.min(10, s.radiusKm)) : DEFAULT_SOLAR.radiusKm,
+    heatmapMode: s.heatmapMode === 'absoluto' ? 'absoluto' : 'estirado',
   }
+}
+
+function normalizeFlood(raw: unknown): WorkspaceMap['flood'] {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const f = raw as Record<string, unknown>
+  const rasterBounds = Array.isArray(f.rasterBounds) && f.rasterBounds.length === 4 && f.rasterBounds.every(isNumber) ? f.rasterBounds as [number, number, number, number] : null
+  return { ...DEFAULT_FLOOD, ...f, enabled: f.enabled === true, rasterUrl: safeLocalApiUrl(f.rasterUrl), rasterBounds,
+    stats: typeof f.stats === 'object' && f.stats !== null ? f.stats as FloodSimulationState['stats'] : null,
+    charts: typeof f.charts === 'object' && f.charts !== null ? f.charts as FloodSimulationState['charts'] : null }
+}
+
+function normalizeSeismic(raw: unknown): WorkspaceMap['seismic'] {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const s = raw as Record<string, unknown>
+  return { ...DEFAULT_SEISMIC, ...s, enabled: s.enabled === true,
+    epicenter: isLngLat(s.epicenter) ? s.epicenter : DEFAULT_SEISMIC.epicenter,
+    magnitude: isNumber(s.magnitude) ? Math.max(0, Math.min(10, s.magnitude)) : DEFAULT_SEISMIC.magnitude,
+    depthKm: isNumber(s.depthKm) ? Math.max(0, Math.min(700, s.depthKm)) : DEFAULT_SEISMIC.depthKm,
+    mechanism: ['subduction', 'intraplate', 'crustal'].includes(String(s.mechanism)) ? s.mechanism as SeismicSimulationState['mechanism'] : DEFAULT_SEISMIC.mechanism,
+    soilType: ['rock', 'intermediate', 'soft_lacustrine'].includes(String(s.soilType)) ? s.soilType as SeismicSimulationState['soilType'] : DEFAULT_SEISMIC.soilType }
 }
 
 /** Normaliza cada copia guardada en `localStorage` para garantizar todos los campos y su GeoJSON. */
@@ -133,6 +202,8 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     typeof (rawMetadata as Record<string, unknown>).generation === 'string'
       ? rawMetadata as WorkspaceMap['effectiveRoiMetadata'] : null
 
+  const solarRoi = effectiveRoi ?? (croppedRegion ? { type: 'Polygon', coordinates: [[...croppedRegion, croppedRegion[0]]] } : null)
+
   return {
     id: m.id,
     nombre: m.nombre,
@@ -148,7 +219,9 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     croppedRegion,
     effectiveRoi,
     effectiveRoiMetadata,
-    solar: normalizeSolar(m.solar),
+    solar: normalizeSolar(m.solar, solarRoi),
+    flood: normalizeFlood(m.flood),
+    seismic: normalizeSeismic(m.seismic),
   }
 }
 

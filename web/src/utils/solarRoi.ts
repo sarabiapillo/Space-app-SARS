@@ -1,6 +1,11 @@
 import type { LngLat } from '../types/workspace'
+import type { RoiGeometry } from './roi'
 
 /** Keep the exact confirmed user polygon; backend validates its resource limits. */
+export function solarRoiGeometry(effectiveRoi: RoiGeometry | null | undefined, region: LngLat[] | null): RoiGeometry {
+  return effectiveRoi ?? confirmedSolarRoi(region)
+}
+
 export function confirmedSolarRoi(region: LngLat[] | null): { type: 'Polygon'; coordinates: LngLat[][] } {
   if (!region || region.length < 3 || region.length > 1000 || region.some(([lon, lat]) =>
     !Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90)) {
