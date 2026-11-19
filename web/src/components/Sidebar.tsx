@@ -393,7 +393,7 @@ export function Sidebar({
             <p>{t('Polarizaciones:', 'Polarizations:')} {manifest.escena.polarizaciones.join(', ')}</p>
             <code>{manifest.escena.granuleId}</code>
             {manifest.capas.map(layer => <p key={layer.id}>
-              {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% {t('de píxeles válidos en el recorte', 'valid pixels in the crop')} · {layer.pixel_m} m
+              {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% {t('de píxeles válidos en el recorte', 'valid pixels in the crop')} · {layer.pixel_m.toFixed(2)} m
             </p>)}
           </article>)}
           {roiLayers.manifests.length > 0 && <><h3>{t('Gráficas NISAR de la ROI', 'NISAR ROI charts')}</h3>
