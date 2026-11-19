@@ -50,3 +50,17 @@ test('al editar el escenario deja de ser automático; elegir en el mapa o cerrar
   assert.equal(markEdited(auto, { ...auto, pickingEpicenter: true }).autoPlaced, true)
   assert.equal(markEdited(auto, { ...auto, enabled: false }).autoPlaced, true)
 })
+
+test('sin ROI no se usa el centro del mapa ([0,0] en el mapa general, cambia al desplazarse): punto fijo en México', async () => {
+  const { DEFAULT_EPICENTER_MX } = await import('../src/utils/seismicScenario.ts')
+  const general = { nombre: 'Mapa General', centro: [0, 0], croppedRegion: null, effectiveRoi: null }
+  const s = seismicForMap(general)
+  assert.deepEqual(s.epicenter, DEFAULT_EPICENTER_MX)
+  assert.ok(s.epicenter[0] < -86 && s.epicenter[0] > -118 && s.epicenter[1] > 14 && s.epicenter[1] < 33)   // dentro de México
+})
+
+test('un escenario automático sin ROI no salta cuando se desplaza el mapa', () => {
+  const auto = newSeismicScenario([-93.1, 16.75], 'Copia')
+  const panned = { nombre: 'Copia', centro: [-80, 10], croppedRegion: null, effectiveRoi: null, seismic: auto }
+  assert.deepEqual(seismicForMap(panned).epicenter, [-93.1, 16.75])
+})

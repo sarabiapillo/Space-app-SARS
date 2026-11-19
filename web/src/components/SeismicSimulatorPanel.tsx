@@ -44,8 +44,8 @@ interface SeismicSimulatorPanelProps {
   onClose: () => void
   croppedRegion?: LngLat[] | null
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
-  /** Centro de la región del mapa (ROI o, sin ROI, centro de la vista): ahí se crea un sismo nuevo. */
-  regionCenter?: LngLat
+  /** Centro de la región del mapa (ROI o, sin ROI, centro visible del mapa): ahí se crea un sismo nuevo. */
+  getRegionCenter?: () => LngLat
 }
 
 const GMPE_LABELS: Record<SeismicSimulationResults['gmpeModel'], string> = {
@@ -68,7 +68,7 @@ export function SeismicSimulatorPanel({
   onClose,
   croppedRegion,
   onSelectPresetROI,
-  regionCenter,
+  getRegionCenter,
 }: SeismicSimulatorPanelProps) {
   const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
@@ -407,13 +407,14 @@ export function SeismicSimulatorPanel({
               {t('Escenario:', 'Scenario:')} <strong>{seismic.name}</strong>
               {seismic.autoPlaced && <em> · {t('en el centro de la región del mapa', 'at the center of the map region')}</em>}
             </span>
-            {regionCenter && (
+            {getRegionCenter && (
               <button
                 type="button"
                 className="seismic-btn-fly"
                 onClick={() => {
-                  onSeismicChange({ ...newSeismicScenario(regionCenter, t('este mapa', 'this map')) })
-                  onFlyToEpicenter?.(regionCenter)
+                  const center = getRegionCenter()
+                  onSeismicChange({ ...newSeismicScenario(center, t('este mapa', 'this map')) })
+                  onFlyToEpicenter?.(center)
                 }}
                 title={t('Sismo nuevo (no histórico) en el centro de la región de este mapa', 'New (non-historical) earthquake at the center of this map region')}
               >

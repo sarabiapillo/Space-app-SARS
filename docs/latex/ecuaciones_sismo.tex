@@ -393,15 +393,18 @@ El simulador sirve para escenarios \emph{nuevos}, no solo para repetir sismos re
 tiene su propio escenario (\path{web/src/utils/seismicScenario.ts}):
 \begin{itemize}
   \item si el mapa no tiene escenario guardado, se crea uno ``Sismo nuevo --- \emph{nombre del mapa}''
-        con el epicentro en el centro de su ROI (\texttt{regionCenter}: ROI efectiva, si no el recorte
-        manual, si no el centro del mapa), sin simular (\texttt{newSeismicScenario},
-        \texttt{seismicForMap});
+        con el epicentro en el centro de su ROI (\texttt{regionCenter}: ROI efectiva o, si no, el recorte
+        manual), sin simular (\texttt{newSeismicScenario}, \texttt{seismicForMap}). Sin ROI se usa un
+        punto fijo en la costa del Pacífico mexicano (\texttt{DEFAULT\_EPICENTER\_MX}); nunca el centro del
+        mapa, que en el mapa general es $[0, 0]$ y en las copias cambia cada vez que se desplaza la vista;
   \item mientras el usuario no lo edite (campo \texttt{autoPlaced}), el epicentro sigue a la ROI si ésta
-        cambia; cualquier cambio del escenario o la simulación lo fijan (\texttt{markEdited});
+        cambia; sin ROI no se mueve solo. Cualquier cambio del escenario o la simulación lo fijan
+        (\texttt{markEdited});
   \item las copias de mapa no heredan el escenario de otro mapa, y ``Copia Sismo'' crea el escenario en
         la ROI de la copia;
   \item el botón \textbf{Nuevo sismo en este mapa} vuelve a colocar un escenario nuevo en el centro de la
-        región, y los sismos históricos quedan como referencia opcional.
+        ROI o, sin ROI, en el centro de la parte del mapa que se está viendo; los sismos históricos
+        quedan como referencia opcional.
 \end{itemize}
 Antes de este cambio, el simulador empezaba siempre en un escenario fijo en Acapulco (Guerrero) y las
 copias sin escenario mostraban el del mapa general.

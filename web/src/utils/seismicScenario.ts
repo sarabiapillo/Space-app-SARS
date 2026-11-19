@@ -49,23 +49,35 @@ export function newSeismicScenario(center: LngLat, mapName: string): SeismicSimu
   }
 }
 
+/**
+ * Epicentro inicial cuando el mapa no tiene ROI: costa del Pacífico mexicano (Guerrero). No se usa el
+ * centro del mapa porque en el mapa general es [0, 0] y en las copias cambia cada vez que se desplaza.
+ */
+export const DEFAULT_EPICENTER_MX: LngLat = [-99.88, 16.85]
+
 interface MapLike {
   nombre: string
-  centro: LngLat
+  centro?: LngLat
   croppedRegion?: LngLat[] | null
   effectiveRoi?: RoiLike | null
   seismic?: SeismicSimulationState
 }
 
+function roiCenterOf(map: MapLike): LngLat | null {
+  const hasRoi = Boolean(map.effectiveRoi) || Boolean(map.croppedRegion && map.croppedRegion.length >= 3)
+  return hasRoi ? regionCenter(map.effectiveRoi, map.croppedRegion, DEFAULT_EPICENTER_MX) : null
+}
+
 /**
- * Escenario que corresponde a un mapa. Respeta el escenario guardado del mapa; si no hay, o si es
- * automático y no se ha simulado ni editado, lo coloca en la región actual del mapa.
+ * Escenario que corresponde a un mapa. Respeta el escenario guardado del mapa. Si no hay, crea uno
+ * nuevo en el centro de su ROI (o en DEFAULT_EPICENTER_MX sin ROI). Un escenario automático que el
+ * usuario no ha editado ni simulado sigue a la ROI si ésta cambia; sin ROI no se mueve solo.
  */
 export function seismicForMap(map: MapLike): SeismicSimulationState {
-  const center = regionCenter(map.effectiveRoi, map.croppedRegion, map.centro)
+  const roiCenter = roiCenterOf(map)
   const own = map.seismic
-  if (!own) return newSeismicScenario(center, map.nombre)
-  if (own.autoPlaced && !own.simulated) return { ...own, epicenter: center, name: `Sismo nuevo — ${map.nombre}` }
+  if (!own) return newSeismicScenario(roiCenter ?? DEFAULT_EPICENTER_MX, map.nombre)
+  if (own.autoPlaced && !own.simulated && roiCenter) return { ...own, epicenter: roiCenter, name: `Sismo nuevo — ${map.nombre}` }
   return own
 }
 

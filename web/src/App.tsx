@@ -98,10 +98,11 @@ function App() {
   // Escenario sísmico de ESTE mapa: el guardado, o uno nuevo en su ROI (no el de otro mapa ni uno fijo).
   const currentSeismic = useMemo(
     () => seismicForMap({
-      nombre: current.nombre, centro: current.centro, croppedRegion: current.croppedRegion,
+      nombre: current.nombre, croppedRegion: current.croppedRegion,
       effectiveRoi: current.effectiveRoi, seismic: current.seismic,
     }),
-    [current.nombre, current.centro, current.croppedRegion, current.effectiveRoi, current.seismic],
+    // Sin `centro`: desplazar el mapa no debe mover el epicentro.
+    [current.nombre, current.croppedRegion, current.effectiveRoi, current.seismic],
   )
   const cameraRef = useRef<MapView>({ centro: current.centro, zoom: current.zoom })
 

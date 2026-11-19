@@ -3476,7 +3476,11 @@ export function MapCanvas({
             seismic={seismic || DEFAULT_SEISMIC}
             onSeismicChange={onSeismicChange || (() => {})}
             croppedRegion={seismicRegionRing}
-            regionCenter={regionCenter(effectiveRoi, croppedRegion, view.centro)}
+            getRegionCenter={() => {
+              const c = mapRef.current?.getCenter()
+              const visible: LngLat = c ? [Number(c.lng.toFixed(4)), Number(c.lat.toFixed(4))] : view.centro
+              return regionCenter(effectiveRoi, croppedRegion, visible)
+            }}
             onSelectPresetROI={onSelectPresetROI}
             onFlyToEpicenter={(coord) => {
               if (mapRef.current) {
