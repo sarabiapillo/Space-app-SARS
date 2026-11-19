@@ -41,11 +41,13 @@ def build_flood_service_settings(project_root, environ):
     config = {
         'executable': path('EXECUTABLE', 'tools/lisflood-fp-8.0/runtime/build/lisflood'),
         'dem_executable': path('DEM_EXECUTABLE', 'tools/lisflood-fp-8.0/runtime/build/generateDG2DEM'),
-        'timeout_s': positive('TIMEOUT_S', 15, 120),
-        'preparation_timeout_s': positive('PREPARATION_TIMEOUT_S', 120, 600),
-        'max_cells': positive('MAX_CELLS', 1000, 50_000_000, integer=True),
-        'max_rain_values': positive('MAX_RAIN_VALUES', 5000, 50_000_000, integer=True),
-        'max_frames': positive('MAX_FRAMES', 5, 50_000_000, integer=True),
+        # Defaults sized for a small real NASADEM+DG2 run (measured 2026-11-19: 1680 cells x 900 s
+        # simulated took 59-69 s of solver time). Larger or longer runs end as `solver_timeout`.
+        'timeout_s': positive('TIMEOUT_S', 120, 120),
+        'preparation_timeout_s': positive('PREPARATION_TIMEOUT_S', 600, 600),
+        'max_cells': positive('MAX_CELLS', 3000, 50_000_000, integer=True),
+        'max_rain_values': positive('MAX_RAIN_VALUES', 100_000, 50_000_000, integer=True),
+        'max_frames': positive('MAX_FRAMES', 20, 50_000_000, integer=True),
         'max_tiles': positive('MAX_TILES', 2, 50_000_000, integer=True),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):

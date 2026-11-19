@@ -27,6 +27,18 @@ class ServiceSetupTests(SimpleTestCase):
                 build_flood_service_settings(PROJECT, {name: value})
             self.assertNotIn(value, str(error.exception))
 
+    def test_default_budgets_fit_a_small_real_nasadem_dg2_run(self):
+        # Measured: 1680 cells x 900 s simulated took 59-69 s of solver wall time (2026-11-19).
+        config = build_flood_service_settings(PROJECT, {})[2]
+        self.assertEqual({key: config[key] for key in ('timeout_s', 'preparation_timeout_s', 'max_cells',
+                                                      'max_rain_values', 'max_frames', 'max_tiles')},
+                         {'timeout_s': 120.0, 'preparation_timeout_s': 600.0, 'max_cells': 3000,
+                          'max_rain_values': 100_000, 'max_frames': 20, 'max_tiles': 2})
+
+    def test_environment_still_overrides_default_budgets(self):
+        config = build_flood_service_settings(PROJECT, {'FLOOD_ROI_DG2_MAX_CELLS': '1000', 'FLOOD_ROI_DG2_TIMEOUT_S': '15'})[2]
+        self.assertEqual((config['max_cells'], config['timeout_s']), (1000, 15.0))
+
     def test_local_check_never_calls_provider_or_creates_files(self):
         output = io.StringIO()
         config = build_flood_service_settings(PROJECT, {})[2]
