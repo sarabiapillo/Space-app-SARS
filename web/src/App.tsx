@@ -587,7 +587,7 @@ function App() {
 
       <div className="app__body">
         <Sidebar
-          roiLayers={confirmedROI ? roiLayers : undefined}
+          roiLayers={confirmedROI && roiLayers.key.startsWith(`${current.id}:${JSON.stringify(confirmedROI)}:`) ? roiLayers : undefined}
           maps={maps}
           activeMapId={isEditing && activeCopy ? activeCopy.id : null}
           onSelectMap={handleSelectMap}
@@ -597,6 +597,7 @@ function App() {
           onOpacityChange={handleOpacityChange}
           locationPreview={locationPreview}
           confirmedROI={confirmedROI}
+          confirmedRoiMetadata={current.effectiveRoiMetadata}
           onNotify={notify}
           onLocationPreview={setLocationPreview}
           onGcovFootprint={setGcovFootprint}
