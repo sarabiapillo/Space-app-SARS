@@ -399,6 +399,11 @@ export interface FloodRoiResult {
   warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
   /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
   flow?: FloodRoiFlow | null
+  grid?: {cellsize_m: number; shape?: [number, number]}
+  /** Chart inputs (null in older runs): depth class lower bounds (m), synthetic rain segments and the volume series. */
+  depth_classes_m?: number[] | null
+  rainfall_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
+  mass_balance?: {series?: Array<[number, number, number]>; [key: string]: unknown} | null
 }
 /** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
 export interface FloodRoiFlow {

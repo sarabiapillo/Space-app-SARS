@@ -5,6 +5,7 @@ import { floodRoiPolygon } from '../utils/floodRoi'
 import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
 import { buildRoiFloodRequest, createFloodRunController, flowArrowFeatures, pngDownloadName, type FloodDg2Form } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
+import { FloodDg2Charts } from './FloodDg2Charts'
 import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
 
 interface Props {
@@ -95,6 +96,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
       {current?.result&&<section className="ws-rain-card ws-rain-card--results"><h3>{t('Resultados DG2: profundidad (m)','DG2 results: depth (m)')}</h3><p>{t('Lluvia sintética; exactitud hidráulica NO validada. No son observaciones.','Synthetic rainfall; hydraulic accuracy NOT validated. Not observations.')}</p><p>{t('Los cuadros se ordenan por índice; el tiempo programado no es tiempo físico observado.','Frames ordered by index; scheduled time is not observed physical time.')}</p>
         <label>{t('Cuadro / máximo','Frame / maximum')}<select value={selected} onChange={e=>choose(e.target.value)}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s)`}</option>)}</select></label>
         {stats&&<dl>{(['wet_cells','valid_cells','nodata_cells','min_m','max_m'] as const).filter(key=>typeof stats[key]==='number'&&Number.isFinite(stats[key])).map(key=><div key={key}><dt>{key}</dt><dd>{String(stats[key])} {key.endsWith('_m')?'m':''}</dd></div>)}</dl>}
+        <FloodDg2Charts result={current.result} frameIndex={selectedArtifact?.frame_index}/>
         {current.result.warnings?.map((w,i)=><p key={i}>{localizeText(w)}</p>)}
         {selectedArtifact&&flood.rasterUrl&&flood.resultRoiKey===roiKey&&<p><a href={flood.rasterUrl} download={pngDownloadName(selectedArtifact.name)}>{t('Descargar imagen PNG del cuadro','Download frame PNG image')}</a> · {t('para una imagen con mapa base y flechas usa la herramienta Capturar.','for an image with basemap and arrows use the Capture tool.')}</p>}
         {selectedArtifact&&<a href={roiFloodArtifactUrl(current.run!.id,selectedArtifact.name)} download>{t('Descargar COG original (requiere sesión)','Download original COG (session required)')}</a>}

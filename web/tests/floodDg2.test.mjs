@@ -176,3 +176,33 @@ test('map legend depth classes match the backend preview palette exactly', async
   assert.deepEqual(DEPTH_CLASSES.map(c => [c.min, c.rgb]), backend)
   assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.15, .5, 1, 2, null])
 })
+
+test('DG2 chart data: hyetograph, wet area and maximum depth over time, volume balance and depth distribution', async () => {
+  const { dg2ChartData } = await import('../src/utils/floodDg2.ts')
+  const result = {
+    grid: { cellsize_m: 30 }, depth_classes_m: [.03, .15, .5, 1, 2],
+    rainfall_segments: [{ start_s: 0, end_s: 300, intensity_mm_h: 113 }, { start_s: 300, end_s: 600, intensity_mm_h: 127 }],
+    frames: [
+      { frame_index: 0, scheduled_time_s: 0, stats: { max_m: 0, depth_class_cells: [0, 0, 0, 0, 0] } },
+      { frame_index: 1, scheduled_time_s: 300, stats: { max_m: .8, depth_class_cells: [100, 10, 5, 0, 0] } },
+    ],
+    maximum: { stats: { max_m: 1.2, depth_class_cells: [120, 20, 8, 2, 0] } },
+    mass_balance: { series: [[100, 1000, 1200], [600, 20000, 24000]] },
+  }
+  const data = dg2ChartData(result, 1)
+  assert.deepEqual(data.hyetograph, { labels: ['0–5', '5–10'], mmPerHour: [113, 127] })
+  assert.deepEqual(data.evolution, { minutes: [0, 5], wetAreaHa: [0, 115 * 900 / 1e4], maxDepthM: [0, .8] })
+  assert.deepEqual(data.volume, { minutes: [100 / 60, 10], domainM3: [1000, 20000], rainM3: [1200, 24000] })
+  assert.deepEqual(data.distribution.labels, ['0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
+  assert.deepEqual(data.distribution.areaHa, [9, .9, .45, 0, 0])
+  assert.deepEqual(dg2ChartData(result, null).distribution.areaHa, [10.8, 1.8, .72, .18, 0])  // maximum
+})
+
+test('DG2 chart data is null where older runs lack the inputs', async () => {
+  const { dg2ChartData } = await import('../src/utils/floodDg2.ts')
+  const data = dg2ChartData({ grid: { cellsize_m: 30 }, frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: 0 } }], maximum: { stats: {} } }, 0)
+  assert.equal(data.hyetograph, null)
+  assert.equal(data.volume, null)
+  assert.equal(data.distribution, null)
+  assert.equal(data.evolution, null)
+})

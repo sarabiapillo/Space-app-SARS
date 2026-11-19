@@ -1,4 +1,4 @@
-import type { FloodRoiResult, FloodRoiRun } from '../api/client.ts'
+import type { FloodRoiResult, FloodRoiRun, FloodRoiStats } from '../api/client.ts'
 import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
@@ -59,6 +59,33 @@ export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb:
 /** File name for the depth preview PNG of an artifact such as `roi-0001.wd.tif`. */
 export function pngDownloadName(artifactName: string) {
   return artifactName.replace(/\.tif$/,'')+'.png'
+}
+
+const minutesLabel = (seconds: number) => String(Math.round(seconds / 60 * 100) / 100)
+
+/** Data for the four DG2 charts; each part is null when the run lacks its inputs (older runs).
+ * `frameIndex` null selects the maximum for the depth distribution. */
+export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'depth_classes_m' | 'rainfall_segments' | 'mass_balance'>, frameIndex: number | null | undefined) {
+  const cellArea = (result.grid?.cellsize_m ?? 0) ** 2
+  const classes = (stats: FloodRoiStats | undefined) => Array.isArray(stats?.depth_class_cells) ? stats.depth_class_cells as number[] : null
+  const segments = result.rainfall_segments
+  const hyetograph = segments?.length ? {labels: segments.map(s => `${minutesLabel(s.start_s)}–${minutesLabel(s.end_s)}`), mmPerHour: segments.map(s => s.intensity_mm_h)} : null
+  const counted = result.frames.every(f => classes(f.stats))
+  const evolution = counted && cellArea ? {
+    minutes: result.frames.map(f => (f.scheduled_time_s ?? 0) / 60),
+    wetAreaHa: result.frames.map(f => classes(f.stats)!.reduce((a, b) => a + b, 0) * cellArea / 1e4),
+    maxDepthM: result.frames.map(f => Number(f.stats.max_m ?? 0)),
+  } : null
+  const series = result.mass_balance?.series
+  const volume = series?.length ? {minutes: series.map(r => r[0] / 60), domainM3: series.map(r => r[1]), rainM3: series.map(r => r[2])} : null
+  const stats = frameIndex == null ? result.maximum.stats : result.frames.find(f => f.frame_index === frameIndex)?.stats
+  const cells = classes(stats)
+  const bounds = result.depth_classes_m
+  const distribution = cells && bounds && cellArea ? {
+    labels: bounds.map((low, i) => i + 1 < bounds.length ? `${low}–${bounds[i + 1]}` : `≥ ${low}`),
+    areaHa: cells.map(n => n * cellArea / 1e4),
+  } : null
+  return {hyetograph, evolution, volume, distribution}
 }
 
 /** One controller per mounted panel. Invalidation fences every async continuation and timer. */

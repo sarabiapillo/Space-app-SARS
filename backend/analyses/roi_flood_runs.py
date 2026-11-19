@@ -113,10 +113,23 @@ class RoiRunResultsView(APIView):
             result['mass_balance'] = run['result'].get('mass_balance')
             # Solver-velocity flow arrows (lon, lat, m/s, bearing); null for runs without voutput.
             result['flow'] = run['result'].get('flow')
+            # Chart inputs; null for runs summarized before depth classes existed.
+            result['depth_classes_m'] = run['result'].get('depth_classes_m')
+            result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
         except (KeyError, TypeError, ValueError):
             raise Http404 from None
+
+
+def _rainfall_segments(run):
+    """Synthetic hyetograph from the run provenance, in mm/h; null when it was not recorded."""
+    try:
+        segments = run['provenance']['rain']['profile']['segments']
+        return [{'start_s': float(item['start_s']), 'end_s': float(item['end_s']),
+                 'intensity_mm_h': float(item['intensity_m_s']) * 3.6e6} for item in segments]
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _artifact_metadata(item, run_id, nodata=None):

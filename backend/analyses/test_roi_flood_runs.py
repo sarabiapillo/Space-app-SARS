@@ -102,6 +102,10 @@ class RoiHttpTests(SimpleTestCase):
         self.assertIsNone(body['mass_balance'])  # seeded run predates the rain-inclusive balance
         self.assertIn('flow', body)
         self.assertIsNone(body['flow'])  # seeded run predates voutput flow arrows
+        # Chart inputs: synthetic rain segments in mm/h from the run provenance, and the depth class bounds.
+        self.assertEqual(body['rainfall_segments'], [{'start_s': 0.0, 'end_s': 0.5, 'intensity_mm_h': 0.002000978706862038 * 3.6e6},
+                                                     {'start_s': 0.5, 'end_s': 1.0, 'intensity_mm_h': 0.001999021293137962 * 3.6e6}])
+        self.assertIsNone(body['depth_classes_m'])  # seeded run predates depth classes
         self.assertEqual(len(body['artifacts']), 4)
         self.assertTrue(all('file' not in item and item['url'].startswith(status) and item['nodata'] == body['grid']['nodata'] for item in body['artifacts']))
         self.assertTrue(all(frame['time_s'] is None for frame in body['frames']))
@@ -129,3 +133,8 @@ class RoiHttpTests(SimpleTestCase):
         other = self.jobs / str(uuid.uuid4())
         other.symlink_to(directory, target_is_directory=True)
         self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{other.name}/').status_code, 404)
+
+    def test_preview_palette_uses_the_pipeline_depth_classes(self):
+        from analyses.roi_flood_runs import _DEPTH_CLASSES
+        from pipeline.hydrology.results import DEPTH_CLASS_BOUNDS_M
+        self.assertEqual(tuple(lower for lower, _ in _DEPTH_CLASSES), DEPTH_CLASS_BOUNDS_M)

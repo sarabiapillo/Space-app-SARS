@@ -27,6 +27,8 @@ CHANNEL_MIN_UPSLOPE_KM2 = .12
 FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H) over cells at '
                'least min_depth_m deep, outside the D8 channel network of the solver DEM (upslope area >= '
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
+# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts.
+DEPTH_CLASS_BOUNDS_M = (.03, .15, .5, 1, 2)
 _D8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
@@ -197,7 +199,8 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
             reference = signature
         elif signature != reference:
             raise ValueError('mixed grids across frames/max')
-        record = {'file': path.name, 'source_sha256': _sha(path), 'stats': data['stats']}
+        record = {'file': path.name, 'source_sha256': _sha(path),
+                  'stats': {**data['stats'], 'depth_class_cells': _depth_class_cells(data)}}
         if index is None:
             maximum = record
         else:
@@ -230,7 +233,7 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
-            'mass_balance': balance, 'flow': flow,
+            'mass_balance': balance, 'flow': flow, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
 
 
@@ -330,6 +333,13 @@ def flow_arrows(depth, vx, vy, *, crs, eligible=None, max_arrows=FLOW_MAX_ARROWS
     return arrows
 
 
+def _depth_class_cells(data):
+    """Valid cells per depth class: [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2) and >= 2 m."""
+    values = data['values'][data['values'] != data['nodata']]
+    edges = [*DEPTH_CLASS_BOUNDS_M, math.inf]
+    return [int(np.count_nonzero((values >= low) & (values < high))) for low, high in zip(edges, edges[1:])]
+
+
 def mass_balance(path):
     """Rain-inclusive volume balance from a LISFLOOD-FP ``.mass`` file.
 
@@ -360,4 +370,6 @@ def mass_balance(path):
     return {'intervals': len(rows), 'rain_m3': rain_total, 'final_volume_m3': rows[-1][1],
             'max_abs_interval_error_m3': worst,
             'max_abs_interval_error_relative_to_rain': worst / rain_total if rain_total > 0 else None,
-            'method': 'Verror + interval rain increment (SWE Verror omits rain in LISFLOOD-FP 8.0.3)'}
+            'method': 'Verror + interval rain increment (SWE Verror omits rain in LISFLOOD-FP 8.0.3)',
+            # [time_s, volume_m3 in the domain, cumulative rain_m3]; the gap is water that left the domain.
+            'series': [[t, volume, rain] for t, volume, _verror, rain in rows[::max(1, math.ceil(len(rows) / 500))]]}

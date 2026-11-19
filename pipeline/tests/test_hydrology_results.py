@@ -57,6 +57,17 @@ def test_mass_balance_adds_back_rain_missing_from_swe_verror(tmp_path):
     assert balance['final_volume_m3'] == pytest.approx(190)
     assert balance['max_abs_interval_error_m3'] == pytest.approx(5)
     assert balance['max_abs_interval_error_relative_to_rain'] == pytest.approx(.025)
+    # Chart series: time, volume in the domain and cumulative rain, one point per .mass row.
+    assert balance['series'] == [[100, 95, 100], [200, 190, 200], [300, 190, 200]]
+
+
+def test_frames_count_cells_per_depth_class_for_charts(tmp_path):
+    ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.6 2.5\n')
+    ascii_grid(tmp_path / 'a.max', '.02 .15\n1 2\n')
+    result = summarize_results(tmp_path, save_interval_s=1)
+    assert result['depth_classes_m'] == [.03, .15, .5, 1, 2]
+    assert result['frames'][0]['stats']['depth_class_cells'] == [1, 0, 1, 0, 1]
+    assert result['maximum']['stats']['depth_class_cells'] == [0, 1, 0, 1, 1]
 
 
 def test_missing_mass_file_keeps_explicit_warning(tmp_path):
