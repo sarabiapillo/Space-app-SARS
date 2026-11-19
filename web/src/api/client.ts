@@ -397,6 +397,13 @@ export interface FloodRoiResult {
   maximum: {stats: FloodRoiStats}
   artifacts: Array<{name: string; url: string; frame_index?: number | null; scheduled_time_s?: number | null}>
   warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
+  /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
+  flow?: FloodRoiFlow | null
+}
+/** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
+export interface FloodRoiFlow {
+  units: 'm/s'; min_depth_m: number; method?: string
+  frames: Array<{frame_index: number; max_speed_m_s: number; arrows: Array<[number, number, number, number]>}>
 }
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function roiRunPath(id: string) {

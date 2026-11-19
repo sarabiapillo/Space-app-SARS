@@ -3,7 +3,7 @@ import { CloudRain, ChevronDown, ChevronUp, X } from 'lucide-react'
 import type { FloodSimulationState, LngLat } from '../types/workspace'
 import { floodRoiPolygon } from '../utils/floodRoi'
 import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
-import { buildRoiFloodRequest, createFloodRunController, type FloodDg2Form } from '../utils/floodDg2'
+import { buildRoiFloodRequest, createFloodRunController, flowArrowFeatures, pngDownloadName, type FloodDg2Form } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
 
@@ -32,9 +32,11 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
     if(!value) {setView(null);return}
     setView(value)
     const {flood:prev,onFloodChange:change}=latest.current
-    if(value.rasterUrl && value.rasterBounds) change({...prev,enabled:true,rasterUrl:value.rasterUrl,rasterBounds:value.rasterBounds,showRasterOnMap:true,stats:null,charts:null,statsSource:'backend',resultRoiKey:value.roiKey})
+    const frameIndex=value.result?.artifacts.find(a=>a.name===value.artifactName)?.frame_index
+    const flowArrows=value.result?flowArrowFeatures(value.result,frameIndex):null
+    if(value.rasterUrl && value.rasterBounds) change({...prev,enabled:true,rasterUrl:value.rasterUrl,rasterBounds:value.rasterBounds,flowArrows,showFlowArrows:prev.showFlowArrows??true,showRasterOnMap:true,stats:null,charts:null,statsSource:'backend',resultRoiKey:value.roiKey})
     })
-    return ()=>{controller.current?.invalidate(); const {flood:prev,onFloodChange:change}=latest.current; if(prev.rasterUrl?.startsWith('blob:')) change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,stats:null,charts:null,resultRoiKey:undefined})}
+    return ()=>{controller.current?.invalidate(); const {flood:prev,onFloodChange:change}=latest.current; if(prev.rasterUrl?.startsWith('blob:')) change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,flowArrows:null,stats:null,charts:null,resultRoiKey:undefined})}
   },[])
   useEffect(()=>{
     if(keyRef.current===roiKey)return
@@ -42,12 +44,12 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
     controller.current?.invalidate()
     setForm(f=>({...f,useRoi:false,confirm:false}))
     const {flood:prev,onFloodChange:change}=latest.current
-    if(prev.rasterUrl || prev.resultRoiKey) change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,stats:null,charts:null,resultRoiKey:undefined})
+    if(prev.rasterUrl || prev.resultRoiKey) change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,flowArrows:null,stats:null,charts:null,resultRoiKey:undefined})
   },[roiKey])
   const set=(name:keyof Form,value:string|boolean)=>setForm(f=>({...f,[name]:value,confirm:name==='confirm' && value===true}))
   const roi=floodRoiPolygon(croppedRegion)
   const buildRequest=()=>buildRoiFloodRequest(form,roi,t)
-  const launch=async()=>{try {const req=buildRequest();const {flood:prev,onFloodChange:change}=latest.current; change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,stats:null,charts:null,resultRoiKey:undefined}); const outcome=await controller.current!.start(req,roiKey);if(outcome?.result){const first=outcome.result.artifacts.find(a=>a.frame_index===undefined||a.frame_index===null)??outcome.result.artifacts[0];if(first){await controller.current!.select(outcome.run,outcome.result,first.name,roiKey)}}}catch(e){setView({roiKey,error:e instanceof Error?e.message:String(e)})}}
+  const launch=async()=>{try {const req=buildRequest();const {flood:prev,onFloodChange:change}=latest.current; change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,flowArrows:null,stats:null,charts:null,resultRoiKey:undefined}); const outcome=await controller.current!.start(req,roiKey);if(outcome?.result){const first=outcome.result.artifacts.find(a=>a.frame_index===undefined||a.frame_index===null)??outcome.result.artifacts[0];if(first){await controller.current!.select(outcome.run,outcome.result,first.name,roiKey)}}}catch(e){setView({roiKey,error:e instanceof Error?e.message:String(e)})}}
   const choose=async(name:string)=>{if(!view?.run||!view.result)return;await controller.current!.select(view.run,view.result,name,roiKey)}
   const current=view?.roiKey===roiKey?view:null
   const selected=current?.artifactName??''
@@ -84,7 +86,9 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         <label>{t('Cuadro / máximo','Frame / maximum')}<select value={selected} onChange={e=>choose(e.target.value)}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s)`}</option>)}</select></label>
         {stats&&<dl>{(['wet_cells','valid_cells','nodata_cells','min_m','max_m'] as const).filter(key=>typeof stats[key]==='number'&&Number.isFinite(stats[key])).map(key=><div key={key}><dt>{key}</dt><dd>{String(stats[key])} {key.endsWith('_m')?'m':''}</dd></div>)}</dl>}
         {current.result.warnings?.map((w,i)=><p key={i}>{localizeText(w)}</p>)}
+        {selectedArtifact&&flood.rasterUrl&&flood.resultRoiKey===roiKey&&<p><a href={flood.rasterUrl} download={pngDownloadName(selectedArtifact.name)}>{t('Descargar imagen PNG del cuadro','Download frame PNG image')}</a> · {t('para una imagen con mapa base y flechas usa la herramienta Capturar.','for an image with basemap and arrows use the Capture tool.')}</p>}
         {selectedArtifact&&<a href={roiFloodArtifactUrl(current.run!.id,selectedArtifact.name)} download>{t('Descargar COG original (requiere sesión)','Download original COG (session required)')}</a>}
+        {current.result.flow&&flood.resultRoiKey===roiKey&&<div><button type="button" onClick={()=>latest.current.onFloodChange({...latest.current.flood,showFlowArrows:!(latest.current.flood.showFlowArrows??true)})}>{(flood.showFlowArrows??true)?t('Ocultar flechas de flujo','Hide flow arrows'):t('Mostrar flechas de flujo','Show flow arrows')}</button>{selectedArtifact&&<p>{selectedArtifact.frame_index==null?t('El máximo no tiene flechas: no corresponde a un instante.','The maximum has no arrows: it is not a single instant.'):t(`Flechas: velocidad del solver (HU/H) donde hay al menos ${current.result.flow.min_depth_m} m de agua; tamaño según rapidez, máximo ${current.result.flow.frames.find(f=>f.frame_index===selectedArtifact.frame_index)?.max_speed_m_s??0} m/s. Solución numérica, no observación.`,`Arrows: solver velocity (HU/H) where water is at least ${current.result.flow.min_depth_m} m deep; size by speed, maximum ${current.result.flow.frames.find(f=>f.frame_index===selectedArtifact.frame_index)?.max_speed_m_s??0} m/s. Numerical solution, not observation.`)}</p>}</div>}
         {flood.rasterUrl&&flood.resultRoiKey===roiKey&&<div><label>{t('Opacidad','Opacity')}<input type="range" min="10" max="100" value={flood.waterOpacity??85} onChange={e=>latest.current.onFloodChange({...latest.current.flood,waterOpacity:Number(e.target.value)})}/></label><button type="button" onClick={()=>latest.current.onFloodChange({...latest.current.flood,showRasterOnMap:!latest.current.flood.showRasterOnMap})}>{flood.showRasterOnMap?t('Ocultar capa','Hide layer'):t('Mostrar capa','Show layer')}</button><p>{t('Paleta fija: 0.03 m azul RGB(30,140,220) → 3 m rojo RGB(135,0,70); menos de 0.03 m y sin dato transparentes.','Fixed palette: 0.03 m blue RGB(30,140,220) → 3 m red RGB(135,0,70); below 0.03 m and nodata transparent.')}</p></div>}
       </section>}
     </div>}

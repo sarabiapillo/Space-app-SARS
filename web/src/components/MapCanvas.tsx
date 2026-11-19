@@ -157,6 +157,34 @@ const SOLAR_THERMAL_LAYER = 'solar-thermal-layer'
 const CROP_MASK_SOURCE = 'crop-mask-source'
 const CROP_MASK_FILL_LAYER = 'crop-mask-fill'
 const CROP_MASK_LINE_LAYER = 'crop-mask-line'
+const FLOOD_FLOW_SOURCE = 'flood-flow-arrows-source'
+const FLOOD_FLOW_LAYER = 'flood-flow-arrows-layer'
+const FLOOD_FLOW_ICON = 'flood-flow-arrow'
+
+/** North-pointing arrow icon (white with dark outline); the layer rotates it by each arrow's bearing. */
+function flowArrowIcon(): { width: number; height: number; data: Uint8ClampedArray } {
+  const size = 48
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.beginPath()
+  ctx.moveTo(24, 3)
+  ctx.lineTo(39, 22)
+  ctx.lineTo(29, 22)
+  ctx.lineTo(29, 45)
+  ctx.lineTo(19, 45)
+  ctx.lineTo(19, 22)
+  ctx.lineTo(9, 22)
+  ctx.closePath()
+  ctx.fillStyle = '#ffffff'
+  ctx.fill()
+  ctx.lineWidth = 3
+  ctx.strokeStyle = '#0b2540'
+  ctx.stroke()
+  const { data } = ctx.getImageData(0, 0, size, size)
+  return { width: size, height: size, data }
+}
 
 const ANNOTATIONS_SOURCE = 'annotations-source'
 const ANN_DANGER_FILL_LAYER = 'annotations-danger-fill'
@@ -1440,6 +1468,58 @@ export function MapCanvas({
     activeFlood.rasterBounds,
     activeFlood.showRasterOnMap,
     activeFlood.waterOpacity,
+    activeFlood.compareMode,
+    hasCurrentFloodResult,
+    activeDockWindow?.kind,
+  ])
+
+  // DG2 flow arrows (solver velocities of the selected frame), drawn above the depth raster.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const data = activeFlood.flowArrows
+    const shouldShow =
+      hasCurrentFloodResult &&
+      Boolean(data) &&
+      activeFlood.showFlowArrows !== false &&
+      !activeFlood.compareMode &&
+      activeDockWindow?.kind !== 'sismo'
+    if (!shouldShow) {
+      if (map.getLayer(FLOOD_FLOW_LAYER)) map.setLayoutProperty(FLOOD_FLOW_LAYER, 'visibility', 'none')
+      return
+    }
+    try {
+      if (!map.hasImage(FLOOD_FLOW_ICON)) map.addImage(FLOOD_FLOW_ICON, flowArrowIcon())
+      const source = map.getSource(FLOOD_FLOW_SOURCE) as GeoJSONSource | undefined
+      if (source) source.setData(data!)
+      else map.addSource(FLOOD_FLOW_SOURCE, { type: 'geojson', data: data! })
+      if (!map.getLayer(FLOOD_FLOW_LAYER)) {
+        map.addLayer(
+          {
+            id: FLOOD_FLOW_LAYER,
+            type: 'symbol',
+            source: FLOOD_FLOW_SOURCE,
+            layout: {
+              'icon-image': FLOOD_FLOW_ICON,
+              'icon-rotate': ['get', 'bearing'],
+              'icon-rotation-alignment': 'map',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              // Arrow size grows with speed (m/s) and saturates at 3 m/s.
+              'icon-size': ['interpolate', ['linear'], ['get', 'speed'], 0, 0.35, 1, 0.65, 3, 1],
+            },
+          },
+          map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
+        )
+      }
+      map.setLayoutProperty(FLOOD_FLOW_LAYER, 'visibility', 'visible')
+    } catch (err) {
+      console.warn('No se pudieron dibujar las flechas de flujo:', err)
+    }
+  }, [
+    mapReady,
+    activeFlood.flowArrows,
+    activeFlood.showFlowArrows,
     activeFlood.compareMode,
     hasCurrentFloodResult,
     activeDockWindow?.kind,

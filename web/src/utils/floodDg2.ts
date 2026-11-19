@@ -1,4 +1,5 @@
 import type { FloodRoiResult, FloodRoiRun } from '../api/client.ts'
+import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
 export interface FloodDg2Form {
@@ -26,6 +27,19 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   // LISFLOOD-FP `dg2depththresh`: null only when the user explicitly disables it; the API caps it at 1 m.
   const thinDepth=form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
   return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:'dry_zero_velocity',boundary:form.boundary,infiltration:'unsupported',domain_nonurban:true},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth}}
+}
+
+/** Solver-velocity arrows of one frame as GeoJSON; null for the maximum or runs without velocities. */
+export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameIndex: number | null | undefined): FlowArrowCollection | null {
+  if(frameIndex==null) return null
+  const frame=result.flow?.frames.find(f=>f.frame_index===frameIndex)
+  if(!frame) return null
+  return {type:'FeatureCollection',features:frame.arrows.map(([lon,lat,speed,bearing])=>({type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{speed,bearing}}))}
+}
+
+/** File name for the depth preview PNG of an artifact such as `roi-0001.wd.tif`. */
+export function pngDownloadName(artifactName: string) {
+  return artifactName.replace(/\.tif$/,'')+'.png'
 }
 
 /** One controller per mounted panel. Invalidation fences every async continuation and timer. */

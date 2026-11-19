@@ -121,3 +121,32 @@ test('request builder rejects a missing or out-of-range thin-depth threshold unl
     assert.throws(() => buildRoiFloodRequest(filledForm({thinDepth,thinDepthOff:false}), square, tr), /Umbral de lámina delgada DG2/)
   }
 })
+
+test('flow arrows for the selected frame become GeoJSON points with speed and bearing', async () => {
+  const { flowArrowFeatures } = await import('../src/utils/floodDg2.ts')
+  const result = { flow: { units: 'm/s', min_depth_m: .03, frames: [
+    { frame_index: 0, max_speed_m_s: 0, arrows: [] },
+    { frame_index: 1, max_speed_m_s: 2.5, arrows: [[-93.29, 16.67, 2.5, 90], [-93.28, 16.68, .4, 181.5]] },
+  ] } }
+  assert.deepEqual(flowArrowFeatures(result, 1), { type: 'FeatureCollection', features: [
+    { type: 'Feature', geometry: { type: 'Point', coordinates: [-93.29, 16.67] }, properties: { speed: 2.5, bearing: 90 } },
+    { type: 'Feature', geometry: { type: 'Point', coordinates: [-93.28, 16.68] }, properties: { speed: .4, bearing: 181.5 } },
+  ] })
+  assert.deepEqual(flowArrowFeatures(result, 0), { type: 'FeatureCollection', features: [] })
+})
+
+test('no flow arrows for the maximum, a missing frame, or runs without solver velocities', async () => {
+  const { flowArrowFeatures } = await import('../src/utils/floodDg2.ts')
+  const result = { flow: { units: 'm/s', min_depth_m: .03, frames: [{ frame_index: 1, max_speed_m_s: 1, arrows: [[0, 0, 1, 0]] }] } }
+  assert.equal(flowArrowFeatures(result, null), null)
+  assert.equal(flowArrowFeatures(result, undefined), null)
+  assert.equal(flowArrowFeatures(result, 7), null)
+  assert.equal(flowArrowFeatures({ flow: null }, 1), null)
+  assert.equal(flowArrowFeatures({}, 1), null)
+})
+
+test('PNG download name keeps the artifact stem', async () => {
+  const { pngDownloadName } = await import('../src/utils/floodDg2.ts')
+  assert.equal(pngDownloadName('roi-0001.wd.tif'), 'roi-0001.wd.png')
+  assert.equal(pngDownloadName('roi.max.tif'), 'roi.max.png')
+})
