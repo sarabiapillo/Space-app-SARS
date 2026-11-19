@@ -421,7 +421,8 @@ def run_roi_worker(root, run_id, *, provider=None):
         if not outputs.is_dir() or outputs.is_symlink() or any(p.is_symlink() or not p.is_file() for p in outputs.iterdir()):
             raise ValueError('invalid solver output')
         state.update(state='results',stage='results'); _save(directory,state)
-        summary = summarize_results(outputs,save_interval_s=s['save_interval_s'],crs=request['terrain']['target_crs'],max_cells=cfg['max_cells'])
+        summary = summarize_results(outputs,save_interval_s=s['save_interval_s'],crs=request['terrain']['target_crs'],max_cells=cfg['max_cells'],
+                                    initial_depth=work/'initial.wd' if _still_water(request) else None)
         if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
             raise ValueError('output budget exceeded')
         artifacts=[]

@@ -403,6 +403,8 @@ export interface FloodRoiResult {
 /** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
 export interface FloodRoiFlow {
   units: 'm/s'; min_depth_m: number; method?: string
+  /** Overflow-only arrows (absent in older runs): D8 channel threshold and arrow cap. */
+  channel_min_upslope_km2?: number; max_arrows?: number
   frames: Array<{frame_index: number; max_speed_m_s: number; arrows: Array<[number, number, number, number]>}>
 }
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import math
 from pathlib import Path
 import re
@@ -17,11 +18,16 @@ from pyproj import Geod, Transformer
 
 _HEADERS = ('ncols', 'nrows', 'xllcorner', 'yllcorner', 'cellsize', 'nodata_value')
 _FRAME = re.compile(r'^(.+)-(\d+)\.wd$')
-# Same visual threshold as the depth preview palette; thinner films give spurious HU/H speeds.
-FLOW_MIN_DEPTH_M = .03
-FLOW_MAX_ARROWS = 400
-FLOW_METHOD = ('depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H); Vx positive east, '
-               'Vy positive north; cells shallower than min_depth_m ignored')
+# Arrows show overflow only: water at least FLOW_MIN_DEPTH_M deep outside the channel network
+# (D8 upslope area >= CHANNEL_MIN_UPSLOPE_KM2, the same rule as the terrapulseai_v2 simulator) and
+# outside the initial sea. Thin films also give spurious HU/H speeds, another reason for the depth floor.
+FLOW_MIN_DEPTH_M = .15
+FLOW_MAX_ARROWS = 150
+CHANNEL_MIN_UPSLOPE_KM2 = .12
+FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H) over cells at '
+               'least min_depth_m deep, outside the D8 channel network of the solver DEM (upslope area >= '
+               'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
+_D8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
 def _limit(max_cells):
@@ -149,7 +155,7 @@ def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_00
             'crs': projected.to_string(), 'units': 'm'}
 
 
-def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_000):
+def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_000, initial_depth=None):
     """Ordena cuadros por índice; solo calcula tiempos programados, no tiempos físicos."""
     if (isinstance(save_interval_s, bool) or not isinstance(save_interval_s, (int, float)) or
             not math.isfinite(save_interval_s) or save_interval_s <= 0):
@@ -169,10 +175,19 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     velocity = {index: (path.with_suffix('.Vx'), path.with_suffix('.Vy')) for index, path in frame_paths}
     present = [vx.is_file() and vy.is_file() for vx, vy in velocity.values()]
     flow = None
-    if crs is not None and any(present):
+    dem_path = directory / (prefix + '.dem')
+    if crs is not None and any(present) and dem_path.is_file():
         if not all(present):
             raise ValueError('incomplete velocity frames')
-        flow = {'units': 'm/s', 'min_depth_m': FLOW_MIN_DEPTH_M, 'method': FLOW_METHOD, 'frames': []}
+        flow = {'units': 'm/s', 'min_depth_m': FLOW_MIN_DEPTH_M, 'channel_min_upslope_km2': CHANNEL_MIN_UPSLOPE_KM2,
+                'max_arrows': FLOW_MAX_ARROWS, 'method': FLOW_METHOD, 'frames': []}
+        dem = read_signed_ascii(dem_path, max_cells=max_cells)
+        eligible = (dem['values'] != dem['nodata']) & ~channel_network(dem)
+        grids = [dem]
+        if initial_depth is not None:
+            start = read_depth_ascii(initial_depth, max_cells=max_cells)
+            eligible &= ~((start['values'] != start['nodata']) & (start['values'] > 0))
+            grids.append(start)
     frames = []
     reference = None
     for index, path in frame_paths + [(None, maxima[0])]:
@@ -195,7 +210,9 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                 vx, vy = (read_velocity_ascii(item, max_cells=max_cells) for item in velocity[index])
                 if any((item['grid'], item['nodata']) != signature for item in (vx, vy)):
                     raise ValueError('velocity grid must match the depth grid')
-                arrows = flow_arrows(data, vx['values'], vy['values'], crs=crs)
+                if any(item['grid'] != signature[0] for item in grids):
+                    raise ValueError('DEM and initial depth grids must match the depth grid')
+                arrows = flow_arrows(data, vx['values'], vy['values'], crs=crs, eligible=eligible)
                 flow['frames'].append({'frame_index': index, 'arrows': arrows,
                                        'max_speed_m_s': max((a[2] for a in arrows), default=0)})
     mass = directory / (prefix + '.mass')
@@ -217,11 +234,66 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
 
 
-def flow_arrows(depth, vx, vy, *, crs, max_arrows=FLOW_MAX_ARROWS, min_depth_m=FLOW_MIN_DEPTH_M):
+def channel_network(dem, min_upslope_km2=CHANNEL_MIN_UPSLOPE_KM2):
+    """Cells whose D8 (steepest descent) upslope area, the cell included, reaches ``min_upslope_km2``.
+
+    Same area rule as the terrapulseai_v2 simulator, but pits are filled first (priority-flood):
+    unfilled, a 30 m NASADEM network breaks at every small pit (1 channel cell of 1680 in a real run,
+    59 after filling), and water ponded in a filled pit counts as outside the channel.
+    """
+    nodata = dem['nodata']
+    rows, cols = dem['values'].shape
+    cell = dem['grid']['cellsize_m']
+    valid = dem['values'] != nodata
+    z = fill_pits(dem['values'], valid)
+    padded = np.pad(np.where(valid, z, np.inf), 1, constant_values=np.inf)
+    slopes = np.stack([(z - padded[1 + dr:1 + dr + rows, 1 + dc:1 + dc + cols]) / (cell * math.hypot(dr, dc))
+                       for dr, dc in _D8])
+    best = slopes.argmax(axis=0)
+    drains = valid & (slopes.max(axis=0) > 0)
+    index = np.arange(rows * cols).reshape(rows, cols)
+    shift = np.array([dr * cols + dc for dr, dc in _D8])
+    receiver = np.where(drains, index + shift[best], -1).ravel()
+    area = np.where(valid, 1.0, 0.0).ravel()
+    for i in np.argsort(np.where(valid, z, -np.inf).ravel(), kind='stable')[::-1]:
+        if receiver[i] >= 0:
+            area[receiver[i]] += area[i]
+    return valid & (area.reshape(rows, cols) * cell * cell / 1e6 >= min_upslope_km2)
+
+
+def fill_pits(z, valid, epsilon=1e-4):
+    """Priority-flood depression filling (Barnes et al. 2014) seeded from the grid edges and nodata.
+
+    Each filled cell is raised to at least ``epsilon`` above the cell it was reached from, so
+    filled flats still drain toward their spill point.
+    """
+    rows, cols = z.shape
+    filled = np.where(valid, z, -np.inf).astype('float64')
+    seen = ~valid.copy()
+    queue = []
+    for r in range(rows):
+        for c in range(cols):
+            edge = r in (0, rows - 1) or c in (0, cols - 1) or any(
+                0 <= r + dr < rows and 0 <= c + dc < cols and not valid[r + dr, c + dc] for dr, dc in _D8)
+            if valid[r, c] and edge:
+                seen[r, c] = True
+                heapq.heappush(queue, (filled[r, c], r, c))
+    while queue:
+        level, r, c = heapq.heappop(queue)
+        for dr, dc in _D8:
+            rr, cc = r + dr, c + dc
+            if 0 <= rr < rows and 0 <= cc < cols and not seen[rr, cc]:
+                seen[rr, cc] = True
+                filled[rr, cc] = max(filled[rr, cc], level + epsilon)
+                heapq.heappush(queue, (filled[rr, cc], rr, cc))
+    return filled
+
+
+def flow_arrows(depth, vx, vy, *, crs, eligible=None, max_arrows=FLOW_MAX_ARROWS, min_depth_m=FLOW_MIN_DEPTH_M):
     """Aggregate solver velocities into at most ``max_arrows`` arrows ``[lon, lat, speed_m_s, bearing_deg]``.
 
     Each square block of cells gives one arrow: its velocity is total momentum over total depth
-    (sum(h*v)/sum(h)) of cells at least ``min_depth_m`` deep, placed at their centroid. The bearing
+    (sum(h*v)/sum(h)) of ``eligible`` cells at least ``min_depth_m`` deep, placed at their centroid. The bearing
     is clockwise from true north, measured geodesically so grid convergence is accounted for.
     """
     h, nodata = depth['values'], depth['nodata']
@@ -229,7 +301,10 @@ def flow_arrows(depth, vx, vy, *, crs, max_arrows=FLOW_MAX_ARROWS, min_depth_m=F
     cell = depth['grid']['cellsize_m']
     x0, y0 = depth['grid']['xllcorner'], depth['grid']['yllcorner']
     stride = max(1, math.ceil(math.sqrt(rows * cols / max_arrows)))
-    weight = np.where((h != nodata) & (h >= min_depth_m) & (vx != nodata) & (vy != nodata), h, 0.0)
+    keep = (h != nodata) & (h >= min_depth_m) & (vx != nodata) & (vy != nodata)
+    if eligible is not None:
+        keep &= eligible
+    weight = np.where(keep, h, 0.0)
     to_lonlat = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
     geod = Geod(ellps='WGS84')
     arrows = []
