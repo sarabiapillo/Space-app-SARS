@@ -624,7 +624,7 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
   ]
 }
 
-export type CenterDockTab = 'map' | 'rain-dg2' | 'seismic'
+export type CenterDockTab = 'map' | 'rain-dg2' | 'seismic' | 'solar'
 
 
 /**

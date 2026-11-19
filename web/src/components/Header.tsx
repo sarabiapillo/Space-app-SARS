@@ -171,6 +171,7 @@ export function Header({
   const isEditing = viewMode === 'editado' && canShowEdited
   const hasFirstScene = Boolean(roiLayers?.manifests[0])
   const hasSecondScene = Boolean(roiLayers?.manifests[1])
+  const isSolarCopy = solar.enabled && activeDockTab === 'solar'
   const [logoFailed, setLogoFailed] = useState(false)
   const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false)
   const [hoveredGroup, setHoveredGroup] = useState<'gamma0' | 'sigma0' | null>(null)
@@ -216,7 +217,7 @@ export function Header({
           >
             {t('Archivo', 'File')}
           </button>
-          <button
+          {!isSolarCopy && <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
@@ -228,8 +229,8 @@ export function Header({
             title={t('Alternar escenas GCOV de la ROI confirmada', 'Switch between GCOV acquisitions for the confirmed ROI')}
           >
             {t('Escenas GCOV', 'GCOV scenes')}
-          </button>
-          <button
+          </button>}
+          {!isSolarCopy && <button
             type="button"
             role="menuitem"
             className="ws-menubar__item"
@@ -245,7 +246,7 @@ export function Header({
             title={t('Alternar calibración radiométrica RTC γ⁰ / elipsoidal σ⁰', 'Switch between RTC γ⁰ and ellipsoidal σ⁰ radiometric corrections')}
           >
             {t('Procesamiento SAR', 'SAR processing')}
-          </button>
+          </button>}
           <button
             type="button"
             role="menuitem"
@@ -280,16 +281,18 @@ export function Header({
         </div>
 
         <div className="ws-menubar__title">
-          <span className="ws-menubar__app-badge">NISAR L2</span>
+          <span className="ws-menubar__app-badge">{isSolarCopy ? t('SOLAR', 'SOLAR') : 'NISAR L2'}</span>
           <span>
-            {roiLayers ? t('TerraPulse AI — ROI seleccionada · NISAR GCOV', 'TerraPulse AI — Selected ROI · NISAR GCOV') : t('TerraPulse AI — Delimita y confirma una ROI', 'TerraPulse AI — Delineate and confirm an ROI')}
+            {isSolarCopy
+              ? t('TerraPulse AI — Radiación solar idealizada', 'TerraPulse AI — Idealized solar radiation')
+              : roiLayers ? t('TerraPulse AI — ROI seleccionada · NISAR GCOV', 'TerraPulse AI — Selected ROI · NISAR GCOV') : t('TerraPulse AI — Delimita y confirma una ROI', 'TerraPulse AI — Delineate and confirm an ROI')}
           </span>
         </div>
 
         <div className="ws-menubar__right">
-          <div className="ws-menubar__status">
+          {!isSolarCopy && <div className="ws-menubar__status">
             {roiLayers ? <><span>{t('Banda L (24 cm · Frec. A)', 'L-band (24 cm · Freq A)')}</span><span>|</span><span>{t('Madurez:', 'Data maturity:')} {roiLayers.manifests[0]?.escena.madurez_catalogo ?? localizeText('Pendiente')}</span></> : <span>{localizeText('Sin datos calculados para una ROI')}</span>}
-          </div>
+          </div>}
 
           <button
             type="button"
@@ -352,7 +355,7 @@ export function Header({
               <Plus size={14} strokeWidth={2.5} />
               <span>{t('Duplicar Mapa', 'Duplicate Map')}</span>
             </button>
-            {hasConfirmedROI && (
+            {hasConfirmedROI && !isSolarCopy && (
               <>
                 {onDuplicateWithHeatmap && (
                   <button
@@ -393,6 +396,7 @@ export function Header({
           <span className="ws-ribbon__label">{t('Espacio de Trabajo', 'Workspace')}</span>
         </div>
 
+        {!isSolarCopy && activeDockTab === 'map' && <>
         {/* Sección 2: Capas GCOV (Frequency A) + Escala de Color */}
         <div className="ws-ribbon__group">
           <div className="ws-ribbon__controls">
@@ -585,6 +589,7 @@ export function Header({
           </div>
           <span className="ws-ribbon__label">{t('Comparador Temporal t1/t2', 'Temporal comparison t1/t2')}</span>
         </div>
+        </>}
         </div>
 
         <div className="ws-ribbon__bottom-groups">
@@ -608,16 +613,15 @@ export function Header({
 
             <button
               type="button"
-              className={`ws-ribbon__btn ws-ribbon__btn--solar ${solar.enabled ? 'is-active' : ''}`}
-              disabled={!hasConfirmedROI}
+              className={`ws-ribbon__btn ws-ribbon__btn--solar ${isSolarCopy ? 'is-active' : ''}`}
               onClick={() => {
-                onDockTabChange('map')
-                onSolarChange({ ...solar, enabled: !solar.enabled })
+                onDockTabChange('solar')
+                onSolarChange({ ...solar, enabled: true })
               }}
-              title={t('Activar/desactivar Simulador Solar con radiación directa incidente (Inferno)', 'Enable/disable Solar Simulator with incident direct irradiance (Inferno)')}
+              title={t('Abrir pestaña de Simulación Solar con radiación directa incidente (Inferno)', 'Open Solar Simulator tab with incident direct irradiance (Inferno)')}
             >
               <Sun size={14} />
-              <span>{solar.enabled ? `Solar ON (${solar.radiationIntensity}%)` : t('Simulador Solar', 'Solar Simulator')}</span>
+              <span>{t('Simulador de radiación solar', 'Solar irradiance simulator')}</span>
             </button>
 
             <button
