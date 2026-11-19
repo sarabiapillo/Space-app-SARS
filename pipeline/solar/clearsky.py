@@ -17,6 +17,53 @@ from pipeline.solar.position import compute_solar_position
 _MODEL = "Ineichen/Perez (pvlib.clearsky.ineichen; perez_enhancement=False)"
 _LINKE_DATASET = "pvlib LinkeTurbidities.h5"
 _LINKE_INTERPOLATION = "daily interpolation using UTC day of year"
+REFERENCE_EXTRATERRESTRIAL_DNI_W_M2 = 1361.0
+REFERENCE_LINKE_TURBIDITY = 3.0
+_REFERENCE_PROVENANCE = ("fixed idealized reference: nominal solar irradiance I0=1361 W/m2; "
+                        "Linke turbidity=3; pvlib Ineichen; Kasten-Young 1989 air mass; "
+                        "no date, seasonal correction, or Linke climatology lookup")
+
+
+def compute_reference_dni(*, elevation_deg, altitude_m, pressure_pa, intensity_percent):
+    """Modeled idealized DNI from fixed explicit constants, never an observation."""
+    values = (elevation_deg, altitude_m, pressure_pa, intensity_percent)
+    if any(isinstance(v, bool) or not isinstance(v, Real) or not math.isfinite(float(v)) for v in values):
+        raise ValueError("reference DNI inputs must be finite real numbers")
+    elevation, altitude, pressure, percent = map(float, values)
+    if not 0 <= elevation <= 90 or pressure <= 0 or not 0 <= percent <= 100:
+        raise ValueError("reference DNI input outside supported range")
+    if elevation == 0:
+        relative = absolute = None
+        dni = 0.0
+    else:
+        zenith = 90.0 - elevation
+        relative = _scalar(pvlib.atmosphere.get_relative_airmass(zenith, model="kastenyoung1989"), "relative air mass")
+        absolute = _scalar(pvlib.atmosphere.get_absolute_airmass(relative, pressure=pressure), "absolute air mass")
+        dni = _scalar(pvlib.clearsky.ineichen(
+            apparent_zenith=zenith, airmass_absolute=absolute,
+            linke_turbidity=REFERENCE_LINKE_TURBIDITY, altitude=altitude,
+            dni_extra=REFERENCE_EXTRATERRESTRIAL_DNI_W_M2,
+            perez_enhancement=False,
+        )["dni"], "idealized DNI")
+        if dni < 0:
+            raise ValueError("Ineichen returned negative DNI")
+    return {
+        "model": "idealized-ineichen-reference-v1", "dni_units": "W/m2",
+        "dni_clear_sky_w_m2": dni, "dni_adjusted_w_m2": dni*percent/100.0,
+        "intensity_percent": percent, "night": elevation == 0,
+        "airmass_relative": relative, "airmass_absolute": absolute,
+        "linke_turbidity": REFERENCE_LINKE_TURBIDITY if elevation > 0 else None,
+        "dni_extra_w_m2": REFERENCE_EXTRATERRESTRIAL_DNI_W_M2,
+        "reference_provenance": _REFERENCE_PROVENANCE,
+        "pvlib_version": pvlib.__version__,
+        "pressure_pa": pressure,
+        "atmospheric_provenance": {
+            "dni_extra": "fixed nominal 1361 W/m2; not day-of-year dependent",
+            "linke_turbidity": "fixed reference constant 3; not an observed or climatological lookup",
+            "airmass": "Kasten-Young 1989 relative air mass; absolute mass corrected by pressure_pa",
+            "dni": "pvlib Ineichen modeled clear-sky direct normal irradiance; not measured",
+        },
+    }
 
 
 def _finite_number(value, name):
@@ -98,7 +145,8 @@ def compute_clear_sky_dni(
     if instant.tzinfo is None:
         raise ValueError("phase A datetime_utc must be timezone-aware")
     times = pd.DatetimeIndex([instant.tz_convert("UTC")])
-    night = apparent_elevation <= 0.0
+    geometric_elevation = _finite_number(position.get("geometric_elevation_deg"), "geometric elevation")
+    night = geometric_elevation <= 0.0
     common = {
         **position,
         "model": _MODEL,

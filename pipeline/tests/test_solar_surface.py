@@ -80,6 +80,36 @@ def _prepared_plane(shape, *, slope_north, slope_east=0.0, base=100.0):
     )
 
 
+def test_final_surface_mask_excludes_pixel_centers_outside_concave_roi(monkeypatch):
+    prepared = _prepared_plane((20, 20), slope_north=0.0)
+    monkeypatch.setattr(surface, 'prepare_dem', lambda paths, roi: prepared)
+    result = surface.compute_incident_irradiance(
+        roi=_CONCAVE, provider=_Provider({'synthetic': object()}),
+        elevation_deg=45, azimuth_deg=180)
+    # (col=10,row=5) is inside the ROI bbox but in the concave notch.
+    assert not result['valid_mask'][5, 10]
+    assert np.isnan(result['incident_w_m2'][5, 10])
+
+
+def test_idealized_geometry_recalculates_dni_and_azimuth_projection_without_time(monkeypatch):
+    prepared = _prepared_plane((20, 20), slope_north=0.0, slope_east=0.001)
+    monkeypatch.setattr(surface, 'prepare_dem', lambda paths, roi: prepared)
+    provider = _Provider({'synthetic': object()})
+    east = surface.compute_incident_irradiance(
+        roi=_CONCAVE, provider=provider, elevation_deg=45, azimuth_deg=90)
+    west = surface.compute_incident_irradiance(
+        roi=_CONCAVE, provider=provider, elevation_deg=45, azimuth_deg=270)
+    high = surface.compute_incident_irradiance(
+        roi=_CONCAVE, provider=provider, elevation_deg=60, azimuth_deg=90)
+    assert east['clear_sky']['dni_adjusted_w_m2'] == west['clear_sky']['dni_adjusted_w_m2']
+    assert high['clear_sky']['dni_adjusted_w_m2'] != east['clear_sky']['dni_adjusted_w_m2']
+    assert not np.allclose(east['incident_w_m2'][east['valid_mask']],
+                           west['incident_w_m2'][west['valid_mask']])
+    assert 'datetime_utc' not in east['position']
+    assert east['position']['elevation_deg'] == 45
+    assert east['position']['azimuth_deg'] == 90
+
+
 def test_flat_horizontal_incident_matches_sine_elevation(monkeypatch):
     provider = _small_dem(monkeypatch, {"n00e000": _zip_hgt("n00e000", np.full((9, 9), 100, dtype=np.int16))})
     result = surface.compute_incident_irradiance(
@@ -247,6 +277,28 @@ def test_east_slope_with_off_meridian_sun_matches_analytic_dot_product(monkeypat
     core[:, :2] = False
     core[:, -2:] = False
     assert np.allclose(result["incident_w_m2"][core], expected, rtol=1e-6)
+
+
+def test_geometric_night_zeros_incident_with_apparent_sun_above_horizon(monkeypatch):
+    provider = _small_dem(monkeypatch, {"n00e000": _zip_hgt("n00e000", np.full((9, 9), 100, dtype=np.int16))})
+    original = surface.solar_position_from_prepared
+
+    def refracted_position(*args, **kwargs):
+        position = original(*args, **kwargs)
+        return {**position, "geometric_elevation_deg": -0.2,
+                "apparent_elevation_deg": 0.1, "apparent_zenith_deg": 89.9,
+                "night": False}
+
+    monkeypatch.setattr(surface, "solar_position_from_prepared", refracted_position)
+    result = surface.compute_incident_irradiance(
+        roi=_CONCAVE, datetime_local="2024-06-01T12:00:00", timezone_name="UTC",
+        provider=provider, intensity_percent=100,
+    )
+    assert result["valid_mask"].any()
+    assert result["position"]["apparent_elevation_deg"] > 0
+    assert result["night"] is True
+    assert result["clear_sky"]["dni_adjusted_w_m2"] == 0
+    assert np.all(result["incident_w_m2"][result["valid_mask"]] == 0)
 
 
 def test_night_zeros_valid_pixels_and_preserves_negative_elevation(monkeypatch):
