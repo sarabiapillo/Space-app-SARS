@@ -390,6 +390,57 @@ export async function runSolarSimulation(
   return res.json()
 }
 
+export interface FloodRoiRun { id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean }
+export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
+export interface FloodRoiResult {
+  frames: Array<{frame_index: number; scheduled_time_s: number | null; time_s: null; stats: FloodRoiStats}>
+  maximum: {stats: FloodRoiStats}
+  artifacts: Array<{name: string; url: string; frame_index?: number | null; scheduled_time_s?: number | null}>
+  warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
+}
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function roiRunPath(id: string) {
+  if (!uuidPattern.test(id)) throw new Error('ID de corrida inválido')
+  return `/api/flood-roi-runs/${id}/`
+}
+export function roiFloodArtifactUrl(id: string, name: string) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.tif$/.test(name) || name.includes('..')) throw new Error('Nombre de artefacto inválido')
+  return `${roiRunPath(id)}artifacts/${name}/`
+}
+function csrfCookie() {
+  return typeof document === 'undefined' ? '' : decodeURIComponent(document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('csrftoken='))?.slice(10) ?? '')
+}
+async function roiResponse(path: string, init: RequestInit = {}) {
+  const response = await fetch(path, {credentials:'same-origin', ...init})
+  if (!response.ok) {
+    if (response.status===401 || response.status===403) throw new Error('Sesión requerida o CSRF vencido. Inicia sesión en /admin/login/ y vuelve a intentar.')
+    const body = await response.json().catch(()=>null)
+    const errors = body?.errors && typeof body.errors === 'object' ? Object.values(body.errors).flat() : []
+    const detail = errors.find((v): v is string => typeof v==='string') ?? (typeof body?.detail==='string' ? body.detail : null)
+    throw new Error(detail ?? (response.status===503 ? 'Servicio DG2 no disponible (HTTP 503).' : `Error HTTP ${response.status}`))
+  }
+  return response
+}
+export async function startRoiFlood(req: unknown, signal?: AbortSignal): Promise<FloodRoiRun> {
+  const res = await roiResponse('/api/flood-scenarios/roi/start/', {method:'POST',signal,headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRFToken':csrfCookie()},body:JSON.stringify(req)})
+  if (res.status!==202) throw new Error('Respuesta de inicio DG2 inválida')
+  const run = await res.json() as FloodRoiRun
+  roiRunPath(run.id)
+  return run
+}
+export async function getRoiFloodStatus(id: string, signal?: AbortSignal): Promise<FloodRoiRun> {
+  return (await roiResponse(roiRunPath(id),{signal,headers:{Accept:'application/json'}})).json()
+}
+export async function getRoiFloodResults(id: string, signal?: AbortSignal): Promise<FloodRoiResult> {
+  return (await roiResponse(`${roiRunPath(id)}results/`,{signal,headers:{Accept:'application/json'}})).json()
+}
+export async function getRoiFloodPreview(id: string, name: string, signal?: AbortSignal) {
+  const res = await roiResponse(`${roiFloodArtifactUrl(id,name)}preview/`,{signal})
+  const raw=res.headers.get('X-Preview-Bounds')?.split(',').map(Number)
+  if (res.headers.get('X-Preview-CRS')!=='EPSG:3857' || res.headers.get('X-Preview-Units')!=='m' || !res.headers.get('content-type')?.startsWith('image/png') || raw?.length!==4 || !raw.every(Number.isFinite) || raw[0]<-180 || raw[2]>180 || raw[1]<-90 || raw[3]>90 || raw[0]>=raw[2] || raw[1]>=raw[3]) throw new Error('Metadatos de preview inválidos')
+  return {blob:await res.blob(),bounds:raw as [number,number,number,number]}
+}
+
 export interface FloodRainfallInput {
   amount?: number
   unit?: 'mm'

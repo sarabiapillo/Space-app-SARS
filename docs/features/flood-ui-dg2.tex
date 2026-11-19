@@ -1,0 +1,74 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\begin{document}
+\title{Interfaz de inundación ROI con DG2}
+\author{TerraPulse AI}
+\maketitle
+
+\section{Objetivo}
+El panel inicia corridas ROI DG2 mediante la API autenticada; no sustituye errores por cálculos locales. No muestra riesgo, caudal, velocidades ni ecuaciones atribuidas a una corrida sin datos que los respalden.
+
+\section{Uso}
+\begin{enumerate}
+\item Seleccione un polígono ROI del mapa. Proporcione por separado un dominio GeoJSON Polygon EPSG:4326 que cubra la ROI, o acepte expresamente usar la ROI como dominio computacional. Esa elección no la convierte en cuenca.
+\item Capture CRS métrico, resolución, remuestreo (nearest o bilinear), Manning, frontera libre o cerrada y declaración no urbana.
+\item Capture lámina y duración de lluvia, semilla e intervalos del perfil sintético, duración de simulación (máximo 86400 s), intervalo de guardado y paso inicial.
+\item Confirme las hipótesis antes de iniciar manualmente. Inicio seco, velocidad cero e infiltración no modelada son hipótesis explícitas. Los campos se dejan vacíos: no se infieren valores físicos.
+\end{enumerate}
+
+\section{Implementación}
+\texttt{web/src/components/RainDg2Panel.tsx} toma la ROI del estado del mapa; \texttt{web/src/api/client.ts} envía POST con sesión y CSRF y consulta estado hasta éxito, fracaso o tiempo límite. \texttt{web/src/utils/floodDg2.ts} cancela solicitudes, invalida respuestas al cambiar ROI o desmontar y libera las URL de objetos.
+
+Solo tras éxito consulta resultados y solicita la preview del artefacto seleccionado. La PNG RGBA reproyectada a EPSG:3857 se coloca en la fuente image existente de MapLibre mediante los límites EPSG:4326 de \texttt{X-Preview-Bounds}. El COG original queda para descarga autenticada, no se usa como imagen. La escala fija va de 0.03 m RGB(30,140,220) a 3 m RGB(135,0,70); valores menores y nodata son transparentes.
+
+Los cuadros se eligen por índice; el tiempo programado no es tiempo físico observado. Se muestran únicamente conteos y extremos de profundidad disponibles. La identidad del cuadro, raster, estadísticas y descarga cambian juntos solo cuando la preview termina correctamente. Si falla, se conserva la selección previa y se muestra el error. Si la sesión falla se indica \texttt{/admin/login/}; el proxy Vite sirve esa ruta en desarrollo.
+
+\section{Limitaciones}
+La lluvia es sintética y la exactitud hidráulica no está validada. No hay ejecución real NASADEM ni DG2 verificada aquí ni certificación de fidelidad física. La PNG no sustituye el COG científico. La descarga requiere sesión del propietario; los artefactos no son públicos. El panel no recupera corridas anteriores al volver a abrirlo.
+
+\section{Verificación}
+\subsection{Comandos reproducibles}
+Desde la raíz del repositorio, use el entorno conda \texttt{nisar} para backend:
+\begin{verbatim}
+PYTHONPATH=backend:. conda run --no-capture-output -n nisar \
+  python backend/manage.py test \
+  analyses.test_roi_flood_runs analyses.test_flood_preview \
+  analyses.test_flood_runs analyses.test_flood_service --verbosity 1
+cd web
+node --test tests/*.test.mjs
+npm run build
+npm run lint
+\end{verbatim}
+Las pruebas usan respuestas aisladas; ninguna inicia adquisición Earthdata ni trabajos DG2 reales.
+
+\subsection{Resultados automatizados observados}
+\begin{itemize}
+\item Backend: 14 de 14 pruebas aprobadas con el runner Django y conda \texttt{nisar}.
+\item Node: 90 de 90 pruebas aprobadas después de recuperar dependencias; build y revisión de espacios con código 0. El build advierte sobre tamaño del bundle y futura carga nativa de configuración Vite.
+\item Dos regresiones RED a GREEN: remuestreo cubic incompatible y selección desalineada ante fallo de preview. Recheck independiente limitado B1/B2: 2 de 2 aprobadas, código 0. Una preparación previa falló por copia temporal ausente; su única autocorrección quedó registrada en el documento ODD.
+\item Verificación HTTP independiente: seis pruebas aisladas de sesión, CSRF, propietario y hash aprobadas.
+\item Lint: código 1 por cuatro errores preexistentes, fuera de alcance: \texttt{ScientificFiguresViewer.tsx:27} y \texttt{seismic.ts:181,451,469}, además de seis advertencias. No se modificaron esos archivos.
+\end{itemize}
+
+\subsection{Recuperación y aislamiento de herramientas}
+Un intento de preparar navegador sin manifiesto local hizo que npm resolviera el proyecto padre y alterara dependencias ignoradas. Los manifiestos rastreados no cambiaron. Con autorización específica, el padre preservó una copia de 13733 entradas y reconstruyó 191 paquetes mediante npm ci desde el lockfile. El backup es exclusivamente POSTincidente: no acredita el estado anterior y se conserva.
+
+La verificación independiente T6 reanudada aprobó hashes de ambos manifiestos, versiones y metadatos SRI/URLs de los 191 paquetes instalados, con 32 opcionales ausentes y sin Playwright en las dependencias del proyecto. Los metadatos SRI se compararon; no se recalcularon hashes de tarballs. Se verificaron las 13733 entradas del backup por contenido, modos y enlaces, sin diferencias.
+
+La exclusión local \texttt{.browser-check/**} impide analizar o versionar herramientas y backups, sin cambiar reglas de lint. Git no ignora ninguno de los 50 archivos fuente y ESLint no ignora ninguno de los 49 archivos de código. T6 no ejecutó suites, builds ni mantenimiento y no modificó el workspace. Los comandos exactos y su evidencia se conservaron localmente; el resultado está resumido en \texttt{odd/tasks/flood-ui-dg2.md}.
+
+npm informó siete vulnerabilidades moderadas del lockfile; no se ejecutó audit fix ni se cambiaron versiones. La preparación de navegador se reanuda únicamente en un paquete local explícito, con prefijo absoluto y sandbox habilitado; nunca dentro de las dependencias del proyecto.
+
+\subsection{Prueba visual con navegador aislado}
+Chromium arrancó con sandbox habilitado y la aplicación real montó el panel DG2 bajo React StrictMode, con fixtures HTTP sintéticos identificados. No se ejecutaron NASADEM ni DG2 reales.
+
+Un intento anterior terminó en la aserción de visibilidad porque el guion exigía el valor explícito visible. MapLibre devuelve undefined para una propiedad de layout nunca definida, y el panel agrega la capa sin ella; era un defecto del guion, no del producto. Con autorización humana se corrigió la aserción, que ahora acepta undefined o visible y además comprueba la carga efectiva: fuente cargada, imagen decodificada de 2x2 y URL blob seleccionada. Esa ejecución aprobó 54 aserciones y se detuvo en el escenario de respuesta tardía, sin solicitud de estado tras el segundo POST.
+
+Una segunda autorización permitió llevar ese escenario al viewport amplio y registrar diagnósticos. La ejecución final terminó con código 0: 63 aserciones aprobadas, todos los criterios aprobados (máximo y dos cuadros, selección coherente, preview 403 que conserva el resultado comprometido, reemplazo, fencing por cambio de ROI con respuesta tardía, desmontaje y remontaje, revocación de blobs y capturas amplia y compacta), sin errores de página. Los hashes de manifiestos y lock instalado siguieron intactos.
+
+Observaciones de la inspección: el stub de teselas base usa el mismo PNG que el ráster, por lo que la captura amplia no distingue visualmente la capa (la carga se demuestra por aserciones). En la captura compacta de 390 px el panel DG2 no es visible, lo que sugiere un defecto de diseño responsive fuera del alcance S2/S3. El reloj del proceso retrocedió unos 32 s durante la ejecución final; un salto de reloj es una explicación plausible, no demostrada, del fallo anterior de respuesta tardía. Un blob anterior a las previews DG2 quedó sin revocar; probablemente pertenece a la capa SAR, sin atribución demostrada.
+
+Checks del padre tras la prueba: backend 14 de 14, Node 90 de 90 y build aprobados; lint conserva únicamente los cuatro errores preexistentes en archivos fuera de alcance. No se generó PDF porque no hay compilador LaTeX disponible.
+\section{Traspaso a otro agente}
+El punto de entrada vigente es \texttt{odd/tasks/flood-ui-dg2.md} (registro hasta L50). La rama es \texttt{feature/flood-ui-dg2}, HEAD \texttt{bd04617}, con frontend sin commit. T1, T5, T6 y T7 están completas y T3 descartada; T2 y T4 esperan únicamente la decisión humana de crear los commits separados de frontend y soporte, sin push, PR ni merge. La evidencia local está en \texttt{web/.browser-check/tooling/} (\texttt{results.json}, \texttt{run.log}, capturas, reportes e historial); es material ignorado y no está garantizado en otro clone. El backup POSTincidente bajo \texttt{recovery/} sigue intocable.
+\end{document}
