@@ -11,7 +11,7 @@ import {
   Filler,
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
-import { Activity, Clock, Waves } from 'lucide-react'
+import { Activity, Clock, Waves, Maximize2 } from 'lucide-react'
 import {
   type SeismicSimulationResults,
   synthesizeSeismogram,
@@ -34,17 +34,36 @@ ChartJS.register(
   Filler
 )
 
+export type SeismicChartMode = 'pga' | 'travelTime' | 'waveform'
+
 interface Seismic2DChartProps {
   results: SeismicSimulationResults
   /** Estado del escenario: permite elegir la estación receptora en el mapa. */
   seismic?: SeismicSimulationState
   onSeismicChange?: (next: SeismicSimulationState) => void
+  /** Pestaña y distancia de estación controladas desde fuera (panel y modal comparten estado). */
+  mode?: SeismicChartMode
+  onModeChange?: (mode: SeismicChartMode) => void
+  stationDistanceKm?: number
+  onStationDistanceChange?: (km: number) => void
+  /** 'modal': gráficas grandes; 'panel': compacto, con botón y clic para ampliar. */
+  variant?: 'panel' | 'modal'
+  onExpand?: (mode: SeismicChartMode) => void
 }
 
-export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DChartProps) {
+export function Seismic2DChart({
+  results, seismic, onSeismicChange, mode, onModeChange, stationDistanceKm: stationProp, onStationDistanceChange,
+  variant = 'panel', onExpand,
+}: Seismic2DChartProps) {
   const { t } = useTranslation()
-  const [chartMode, setChartMode] = useState<'pga' | 'travelTime' | 'waveform'>('pga')
-  const [stationDistanceKm, setStationDistanceKm] = useState<number>(120)
+  const [modeState, setModeState] = useState<SeismicChartMode>('pga')
+  const [stationState, setStationState] = useState<number>(120)
+  const chartMode = mode ?? modeState
+  const setChartMode = (m: SeismicChartMode) => { setModeState(m); onModeChange?.(m) }
+  const stationDistanceKm = stationProp ?? stationState
+  const setStationDistanceKm = (km: number) => { setStationState(km); onStationDistanceChange?.(km) }
+  const isModal = variant === 'modal'
+  const canExpand = !isModal && Boolean(onExpand)
 
   const labels = results.attenuationCurve.map((d) => `${d.distanceKm} km`)
 
@@ -254,7 +273,7 @@ export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DC
   ]
 
   return (
-    <div className="seismic-chart-card">
+    <div className={`seismic-chart-card ${isModal ? 'seismic-chart-card--modal' : ''}`}>
       <div className="seismic-chart-card__header">
         <div className="seismic-chart-card__tabs">
           <button
@@ -282,6 +301,17 @@ export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DC
             <span>{t('Sismograma y Espectrograma', 'Seismogram & Spectrogram')}</span>
           </button>
         </div>
+        {canExpand && (
+          <button
+            type="button"
+            className="seismic-chart-expand"
+            onClick={() => onExpand?.(chartMode)}
+            title={t('Ampliar gráfica y ajustar parámetros', 'Enlarge chart and adjust parameters')}
+            aria-label={t('Ampliar gráfica', 'Enlarge chart')}
+          >
+            <Maximize2 size={13} />
+          </button>
+        )}
       </div>
 
       {chartMode === 'waveform' && (
@@ -309,7 +339,7 @@ export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DC
               <button
                 type="button"
                 className={`seismic-station-btn ${seismic.pickingStation ? 'is-active' : ''}`}
-                onClick={() => onSeismicChange({ ...seismic, pickingStation: !seismic.pickingStation })}
+                onClick={() => onSeismicChange({ ...seismic, pickingStation: !seismic.pickingStation, pickingEpicenter: false })}
                 title={t('El siguiente clic en el mapa coloca la estación receptora', 'The next map click places the receiver station')}
               >
                 📍 {seismic.pickingStation
@@ -390,12 +420,20 @@ export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DC
 
       {chartMode === 'waveform' ? (
         <>
-          <SeismogramSpectrogram
-            accel_g={seismogram.accel_g}
-            sampleRateHz={seismogram.sampleRateHz}
-            markers={markers}
-            ariaLabel={t('Sismograma sintético y espectrograma', 'Synthetic seismogram and spectrogram')}
-          />
+          <div
+            className={canExpand ? 'seismic-chart-clickable' : undefined}
+            onClick={canExpand ? () => onExpand?.('waveform') : undefined}
+            title={canExpand ? t('Clic para ampliar', 'Click to enlarge') : undefined}
+          >
+            <SeismogramSpectrogram
+              accel_g={seismogram.accel_g}
+              sampleRateHz={seismogram.sampleRateHz}
+              markers={markers}
+              traceHeight={isModal ? 210 : 120}
+              specHeight={isModal ? 250 : 130}
+              ariaLabel={t('Sismograma sintético y espectrograma', 'Synthetic seismogram and spectrogram')}
+            />
+          </div>
           <p className="seismic-chart-footer-note">
             {t('Espectrograma: potencia de a(t) por frecuencia (ventana de Hann de 5.1 s, inferno, dB bajo el máximo). Onda P ≈ {p1}–{p2} Hz; onda S fundamental {fs} Hz según el suelo. Modelo analítico ilustrativo (50 muestras/s), no un registro.',
               'Spectrogram: power of a(t) by frequency (5.1 s Hann window, inferno, dB below max). P-wave ≈ {p1}–{p2} Hz; S-wave fundamental {fs} Hz by soil. Illustrative analytic model (50 samples/s), not a record.',
@@ -404,7 +442,11 @@ export function Seismic2DChart({ results, seismic, onSeismicChange }: Seismic2DC
           <RealRecordCompare synthetic={seismogram} />
         </>
       ) : (
-        <div className="seismic-chart-card__body">
+        <div
+          className={`seismic-chart-card__body ${canExpand ? 'seismic-chart-clickable' : ''}`}
+          onClick={canExpand ? () => onExpand?.(chartMode) : undefined}
+          title={canExpand ? t('Clic para ampliar', 'Click to enlarge') : undefined}
+        >
           {chartMode === 'pga' ? (
             <Line data={pgaChartData} options={pgaChartOptions} />
           ) : (

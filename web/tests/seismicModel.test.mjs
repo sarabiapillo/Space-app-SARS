@@ -1,8 +1,14 @@
-// Modelo sísmico según docs/sismo.pdf (docs/latex/ecuaciones_sismo.tex).
+// Modelo sísmico (docs/latex/ecuaciones_sismo.tex): GMPE de Arroyo et al. (2010) y García et al. (2005).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  GMPE_COEFFICIENTS,
+  MANUAL_CRUSTAL_COEFFICIENTS,
+  GMPE_BY_MECHANISM,
+  exponentialIntegralE1,
+  pgaRockArroyo2010_cgs,
+  pgaRockGarcia2005_cgs,
+  gmpeValidityWarnings,
+  GMPE_SIGMA_LN,
   SOIL_VS30,
   siteAmplification,
   effectiveVs30,
@@ -19,12 +25,6 @@ import {
 
 const close = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} ≠ ${b}`)
 
-test('coeficientes GMPE por mecanismo (§5.1)', () => {
-  assert.deepEqual(GMPE_COEFFICIENTS.subduction, { c1: -1.85, c2: 0.92, c3: 1.15, c4: 0.0032 })
-  assert.deepEqual(GMPE_COEFFICIENTS.intraplate, { c1: -1.55, c2: 0.96, c3: 1.25, c4: 0.0040 })
-  assert.deepEqual(GMPE_COEFFICIENTS.crustal, { c1: -1.95, c2: 0.88, c3: 1.05, c4: 0.0028 })
-})
-
 test('efecto de sitio S = −0.45·ln(Vs30/760), 0 en roca (§5.2)', () => {
   close(siteAmplification(760), 0)
   close(siteAmplification(1200), 0)
@@ -34,19 +34,6 @@ test('efecto de sitio S = −0.45·ln(Vs30/760), 0 en roca (§5.2)', () => {
   assert.deepEqual(SOIL_VS30, { rock: 760, intermediate: 450, soft_lacustrine: 100 })
   assert.equal(effectiveVs30('soft_lacustrine'), 100)
   assert.equal(effectiveVs30('rock', 300), 300)
-})
-
-test('ln(PGA) = c1 + c2·Mw − c3·ln R_ef − c4·R_ef + S (ec. 11 con saturación), por mecanismo', () => {
-  for (const mech of ['subduction', 'intraplate', 'crustal']) {
-    const { c1, c2, c3, c4 } = GMPE_COEFFICIENTS[mech]
-    const R = Math.sqrt(150 ** 2 + 20 ** 2 + nearSourceSaturationKm(7.0) ** 2)
-    const expected = Math.exp(c1 + c2 * 7.0 - c3 * Math.log(R) - c4 * R + siteAmplification(450))
-    close(computePga_g(150, 7.0, 20, mech, 'intermediate'), expected, 1e-12)
-  }
-  // Vs30 explícito manda sobre la clase de suelo
-  const R = Math.sqrt(100 ** 2 + 10 ** 2 + nearSourceSaturationKm(7) ** 2)
-  close(computePga_g(100, 7, 10, 'subduction', 'rock', 200),
-    Math.exp(-1.85 + 0.92 * 7 - 1.15 * Math.log(R) - 0.0032 * R + siteAmplification(200)), 1e-12)
 })
 
 test('momento sísmico M0 = 10^(1.5(Mw+10.7)) dyn·cm (ec. 1)', () => {
@@ -102,17 +89,79 @@ test('MMI de Wald et al. (1999) continua: corte donde se cruzan las dos rectas (
   for (let gal = 0.5; gal < 2000; gal *= 1.1) { const m = pgaToMmi(gal / 980.665); assert.ok(m >= prev); prev = m }
 })
 
-test('saturación de campo cercano: R_ef = √(D² + h² + h_sat(M)²), h_sat = 10^(−0.405+0.235·M)', () => {
-  close(nearSourceSaturationKm(7), 10 ** (-0.405 + 0.235 * 7), 1e-12)
-  const { c1, c2, c3, c4 } = GMPE_COEFFICIENTS.subduction
-  const Reff = Math.sqrt(0 + 15 * 15 + nearSourceSaturationKm(6) ** 2)
-  close(computePga_g(0, 6, 15, 'subduction', 'rock'), Math.exp(c1 + c2 * 6 - c3 * Math.log(Reff) - c4 * Reff), 1e-12)
-  // Lejos de la fuente el término casi no cambia el resultado (< 3 % a 300 km)
-  const far = computePga_g(300, 8.1, 15, 'subduction', 'rock')
-  const R = Math.hypot(300, 15)
-  const noSat = Math.exp(c1 + c2 * 8.1 - c3 * Math.log(R) - c4 * R)
-  assert.ok(Math.abs(far / noSat - 1) < 0.03, `${far / noSat}`)
-  // Decrece con la distancia (la bisección de radios lo necesita)
-  let prev = Infinity
-  for (let d = 0; d <= 1500; d += 5) { const v = computePga_g(d, 8.1, 15, 'subduction', 'soft_lacustrine'); assert.ok(v <= prev); prev = v }
+
+test('integral exponencial E1 (valores de tabla)', () => {
+  close(exponentialIntegralE1(0.1), 1.8229239584, 1e-9)
+  close(exponentialIntegralE1(0.5), 0.5597735948, 1e-9)
+  close(exponentialIntegralE1(1), 0.2193839344, 1e-9)
+  close(exponentialIntegralE1(2), 0.0489005107, 1e-9)
+  close(exponentialIntegralE1(5), 0.0011482956, 1e-9)
+})
+
+test('un modelo publicado por mecanismo; cortical provisional', () => {
+  assert.deepEqual(GMPE_BY_MECHANISM, { subduction: 'arroyo2010', intraplate: 'garcia2005', crustal: 'manual-crustal' })
+  assert.deepEqual(MANUAL_CRUSTAL_COEFFICIENTS, { c1: -1.95, c2: 0.88, c3: 1.05, c4: 0.0028 })
+  close(GMPE_SIGMA_LN.arroyo2010, 0.75, 1e-12)
+  close(GMPE_SIGMA_LN.garcia2005, 0.28 * Math.LN10, 1e-12)
+  assert.equal(GMPE_SIGMA_LN['manual-crustal'], null)
+})
+
+test('Arroyo et al. (2010), ec. 8a con la fila PGA de la tabla 2', () => {
+  const [a1, a2, a3, a4] = [2.4862, 0.9392, 0.5061, 0.0150]
+  const M = 7.3, R = 60
+  const r02 = 1.4447e-5 * Math.exp(2.3026 * M)
+  const term = (exponentialIntegralE1(a4 * R) - exponentialIntegralE1(a4 * Math.sqrt(R * R + r02))) / r02
+  close(pgaRockArroyo2010_cgs(M, R), Math.exp(a1 + a2 * M + a3 * Math.log(term)), 1e-9)
+  // Figura 9a del artículo: Mw 8.0 a ~20 km ≈ 380–390 cm/s²
+  const near = pgaRockArroyo2010_cgs(8.0, 20.8)
+  assert.ok(near > 340 && near < 430, `${near}`)
+})
+
+test('García et al. (2005), ec. 2: log PGA = −0.2 + 0.59·Mw − 0.0039·R − log R + 0.008·H', () => {
+  const M = 7.0, Rcld = 120, H = 60
+  const delta = 0.0075 * 10 ** (0.507 * M)
+  const R = Math.sqrt(Rcld * Rcld + delta * delta)
+  close(pgaRockGarcia2005_cgs(M, Rcld, H), 10 ** (-0.2 + 0.59 * M - 0.0039 * R - Math.log10(R) + 0.008 * H), 1e-9)
+})
+
+test('computePga_g usa el modelo del mecanismo, en roca, más el efecto de sitio', () => {
+  // Subducción: R hipocentral; resultado en g
+  const R = Math.hypot(100, 20)
+  close(computePga_g(100, 7.5, 20, 'subduction', 'rock'), pgaRockArroyo2010_cgs(7.5, R) / 980.665, 1e-12)
+  close(computePga_g(100, 7.5, 20, 'subduction', 'rock', 200),
+    pgaRockArroyo2010_cgs(7.5, R) / 980.665 * Math.exp(siteAmplification(200)), 1e-12)
+  // Intraplaca: R hipocentral como distancia a la falla, H = profundidad
+  close(computePga_g(80, 7.1, 57, 'intraplate', 'rock'), pgaRockGarcia2005_cgs(7.1, Math.hypot(80, 57), 57) / 980.665, 1e-12)
+  // Cortical provisional: coeficientes del manual con saturación de Yenier y Atkinson
+  const { c1, c2, c3, c4 } = MANUAL_CRUSTAL_COEFFICIENTS
+  const Reff = Math.sqrt(150 ** 2 + 10 ** 2 + nearSourceSaturationKm(7) ** 2)
+  close(computePga_g(150, 7, 10, 'crustal', 'intermediate'),
+    Math.exp(c1 + c2 * 7 - c3 * Math.log(Reff) - c4 * Reff + siteAmplification(450)), 1e-12)
+})
+
+test('valores epicentrales razonables con los modelos publicados (sin llegar al tope de 2.5 g)', () => {
+  const p1985 = computePga_g(0, 8.1, 15, 'subduction', 'rock')
+  const pPuebla = computePga_g(0, 7.1, 57, 'intraplate', 'rock')
+  assert.ok(p1985 > 0.3 && p1985 < 0.7, `${p1985}`)
+  assert.ok(pPuebla > 0.15 && pPuebla < 0.4, `${pPuebla}`)
+})
+
+test('la PGA decrece con la distancia en los tres mecanismos (la bisección lo necesita)', () => {
+  for (const [mech, h] of [['subduction', 15], ['intraplate', 57], ['crustal', 10]]) {
+    let prev = Infinity
+    for (let d = 0; d <= 1500; d += 5) {
+      const v = computePga_g(d, 8.1, h, mech, 'soft_lacustrine')
+      assert.ok(v <= prev, `${mech} ${d}`)
+      prev = v
+    }
+  }
+})
+
+test('avisos de validez fuera del rango de cada artículo', () => {
+  assert.ok(gmpeValidityWarnings('subduction', 7.5, 20, 100).every((w) => w.includes('antearco')))   // solo el alcance
+  assert.ok(gmpeValidityWarnings('subduction', 8.5, 20, 100).some((w) => w.includes('Mw')))
+  assert.ok(gmpeValidityWarnings('subduction', 7, 20, 500).some((w) => w.includes('400')))
+  assert.ok(gmpeValidityWarnings('intraplate', 8.2, 45, 100).some((w) => w.includes('7.4')))
+  assert.ok(gmpeValidityWarnings('intraplate', 7, 20, 100).some((w) => w.includes('35')))
+  assert.ok(gmpeValidityWarnings('crustal', 7, 10, 50).some((w) => w.includes('provisional')))
 })

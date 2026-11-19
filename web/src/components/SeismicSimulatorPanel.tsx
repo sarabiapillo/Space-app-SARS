@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Activity,
   X,
@@ -18,14 +18,12 @@ import type { LngLat, SeismicSimulationState } from '../types/workspace'
 import {
   HISTORICAL_SEISMIC_PRESETS,
   runSeismicSimulation,
-  type SeismicMechanism,
-  type SoilType,
+  type SeismicSimulationResults,
   computePga_g,
   pgaToMmi,
   mmiToRoman,
   SOIL_VS30,
   sasmexAlertTimeSec,
-  siteAmplification,
 } from '../utils/seismic'
 import { getPolygonBoundsAndCentroid, distanceKm } from '../utils/geojson'
 import {
@@ -33,7 +31,9 @@ import {
   getRecommendedSeismicSettings,
   type CatalogRoiPreset,
 } from '../utils/roiCatalog'
-import { Seismic2DChart } from './Seismic2DChart'
+import { Seismic2DChart, type SeismicChartMode } from './Seismic2DChart'
+import { SeismicScenarioControls } from './SeismicScenarioControls'
+import { SeismicChartModal } from './SeismicChartModal'
 import { useTranslation } from '../i18n/useTranslation'
 
 interface SeismicSimulatorPanelProps {
@@ -43,6 +43,12 @@ interface SeismicSimulatorPanelProps {
   onClose: () => void
   croppedRegion?: LngLat[] | null
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+}
+
+const GMPE_LABELS: Record<SeismicSimulationResults['gmpeModel'], string> = {
+  arroyo2010: 'Arroyo et al. (2010), interplaca',
+  garcia2005: 'García et al. (2005), intraplaca',
+  'manual-crustal': 'Cortical provisional (sin fuente publicada)',
 }
 
 /** 1.26e+28 → "1.26×10²⁸" para el momento sísmico. */
@@ -63,6 +69,22 @@ export function SeismicSimulatorPanel({
   const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [isExpandedFull, setIsExpandedFull] = useState(false)
+  // Gráficas: pestaña y distancia de estación compartidas entre el panel y el modal.
+  const [chartMode, setChartMode] = useState<SeismicChartMode>('pga')
+  const [stationDistanceKm, setStationDistanceKm] = useState(120)
+  const [chartModalOpen, setChartModalOpen] = useState(false)
+  const closeChartModal = useCallback(() => setChartModalOpen(false), [])
+  const picking = Boolean(seismic.pickingEpicenter || seismic.pickingStation)
+
+  // Esc cancela la elección de epicentro o estación en el mapa.
+  useEffect(() => {
+    if (!picking) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onSeismicChange({ ...seismic, pickingEpicenter: false, pickingStation: false })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [picking, seismic, onSeismicChange])
 
   // Ejecución del modelo analítico de propagación de ondas
   const simulationResults = useMemo(() => {
@@ -196,6 +218,29 @@ export function SeismicSimulatorPanel({
           </button>
         </div>
       </div>
+
+      {picking && (
+        <div className="seismic-pick-banner" role="status">
+          {seismic.pickingEpicenter
+            ? t('Haz clic en el mapa para colocar el epicentro. Esc cancela.', 'Click on the map to place the epicenter. Esc cancels.')
+            : t('Haz clic en el mapa para colocar la estación. Esc cancela.', 'Click on the map to place the station. Esc cancels.')}
+        </div>
+      )}
+
+      {chartModalOpen && (
+        <SeismicChartModal
+          mode={chartMode}
+          onModeChange={setChartMode}
+          onClose={closeChartModal}
+          seismic={seismic}
+          onSeismicChange={onSeismicChange}
+          onFlyToEpicenter={onFlyToEpicenter}
+          results={simulationResults}
+          stationDistanceKm={stationDistanceKm}
+          onStationDistanceChange={setStationDistanceKm}
+          gmpeLabel={GMPE_LABELS[simulationResults.gmpeModel]}
+        />
+      )}
 
       {!isCollapsed && (
         <div className="seismic-panel__body">
@@ -375,135 +420,13 @@ export function SeismicSimulatorPanel({
             </select>
           </div>
 
-          {/* Epicentro Coordenadas y Centrado */}
-          <div className="seismic-control-group">
-            <div className="seismic-epicenter-row">
-              <div className="seismic-epicenter-badge">
-                <MapPin size={13} className="seismic-icon-red" />
-                <span>
-                  {t('Epicentro:', 'Epicenter:')} <strong>{seismic.epicenter[1].toFixed(3)}°N, {seismic.epicenter[0].toFixed(3)}°W</strong>
-                </span>
-              </div>
-              <button
-                type="button"
-                className="seismic-btn-fly"
-                onClick={() => onFlyToEpicenter?.(seismic.epicenter)}
-                title={t('Centrar la cámara del mapa en el epicentro', 'Center map camera on epicenter')}
-              >
-                {t('Centrar Mapa', 'Center Map')}
-              </button>
-            </div>
-          </div>
-
-          {/* Controles de Magnitud y Profundidad */}
-          <div className="seismic-sliders-grid">
-            <div className="seismic-slider-box">
-              <div className="seismic-slider-header">
-                <span>{t('Magnitud (Mw):', 'Magnitude (Mw):')}</span>
-                <strong className="seismic-val-highlight">{seismic.magnitude.toFixed(1)}</strong>
-              </div>
-              <input
-                type="range"
-                min="4.0"
-                max="8.8"
-                step="0.1"
-                className="seismic-slider"
-                value={seismic.magnitude}
-                onChange={(e) =>
-                  onSeismicChange({ ...seismic, magnitude: parseFloat(e.target.value), name: `Personalizado Mw ${e.target.value}` })
-                }
-              />
-              <div className="seismic-slider-range-labels">
-                <span>4.0</span>
-                <span>6.0</span>
-                <span>7.5</span>
-                <span>8.8</span>
-              </div>
-            </div>
-
-            <div className="seismic-slider-box">
-              <div className="seismic-slider-header">
-                <span>{t('Profundidad Focal (h):', 'Focal Depth (h):')}</span>
-                <strong className="seismic-val-highlight">{seismic.depthKm} km</strong>
-              </div>
-              <input
-                type="range"
-                min="5"
-                max="120"
-                step="1"
-                className="seismic-slider"
-                value={seismic.depthKm}
-                onChange={(e) =>
-                  onSeismicChange({ ...seismic, depthKm: parseInt(e.target.value, 10) })
-                }
-              />
-              <div className="seismic-slider-range-labels">
-                <span>5 km</span>
-                <span>30 km</span>
-                <span>60 km</span>
-                <span>120 km</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Selectores de Mecanismo Tectónico y Tipo de Suelo */}
-          <div className="seismic-dropdowns-row">
-            <div className="seismic-select-item">
-              <label className="seismic-sublabel" htmlFor="seismic-mechanism">
-                {t('Mecanismo Tectónico:', 'Tectonic Mechanism:')}
-              </label>
-              <select
-                id="seismic-mechanism"
-                className="seismic-select"
-                value={seismic.mechanism}
-                onChange={(e) =>
-                  onSeismicChange({ ...seismic, mechanism: e.target.value as SeismicMechanism })
-                }
-              >
-                <option value="subduction">{t('Subducción (Trinchera / Interplaca)', 'Subduction (Trench / Interplate)')}</option>
-                <option value="intraplate">{t('Intraplaca (Profundo / Cocos)', 'Intraplate (Deep / Cocos slab)')}</option>
-                <option value="crustal">{t('Cortical (Somero / Fallas)', 'Crustal (Shallow / Faults)')}</option>
-              </select>
-            </div>
-
-            <div className="seismic-select-item">
-              <label className="seismic-sublabel" htmlFor="seismic-soil">
-                {t('Tipo de Suelo (Efecto Vs30):', 'Soil Type (Vs30 Effect):')}
-              </label>
-              <select
-                id="seismic-soil"
-                className="seismic-select"
-                value={seismic.soilType}
-                onChange={(e) => {
-                  const soilType = e.target.value as SoilType
-                  onSeismicChange({ ...seismic, soilType, vs30: SOIL_VS30[soilType] })
-                }}
-              >
-                <option value="rock">{t('Roca Firme (Vs30 > 760 m/s)', 'Hard Rock (Vs30 > 760 m/s)')}</option>
-                <option value="intermediate">{t('Suelo Firme/Aluvial (360-760 m/s)', 'Stiff Soil/Alluvial (360-760 m/s)')}</option>
-                <option value="soft_lacustrine">{t('Suelo Blando Lacustre (< 180 m/s, CDMX)', 'Soft Lacustrine (< 180 m/s, CDMX)')}</option>
-              </select>
-              <label className="seismic-sublabel seismic-vs30-row" htmlFor="seismic-vs30">
-                <span>Vs30 [m/s]</span>
-                <input
-                  id="seismic-vs30"
-                  type="number"
-                  min="80"
-                  max="1500"
-                  step="10"
-                  className="seismic-vs30-input"
-                  value={simulationResults.vs30}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    if (v >= 80 && v <= 1500) onSeismicChange({ ...seismic, vs30: v })
-                  }}
-                />
-                <span className="seismic-vs30-site" title={t('S_sitio = −0.45·ln(Vs30/760); 0 en roca (Vs30 ≥ 760)', 'S_site = −0.45·ln(Vs30/760); 0 on rock (Vs30 ≥ 760)')}>
-                  S = {siteAmplification(simulationResults.vs30).toFixed(2)} (×{Math.exp(siteAmplification(simulationResults.vs30)).toFixed(2)})
-                </span>
-              </label>
-            </div>
-          </div>
+          {/* Epicentro (mapa o coordenadas), magnitud, profundidad, mecanismo y suelo */}
+          <SeismicScenarioControls
+            seismic={seismic}
+            onSeismicChange={onSeismicChange}
+            onFlyToEpicenter={onFlyToEpicenter}
+            idPrefix="seismic-panel"
+          />
 
           {/* Tarjetas de Métricas de Riesgo y Radios Isosistas */}
           <div className="seismic-kpi-grid">
@@ -551,13 +474,37 @@ export function SeismicSimulatorPanel({
             </div>
           </div>
 
+          {/* Modelo de atenuación usado, incertidumbre y validez */}
+          <div className="seismic-gmpe-note">
+            <span>
+              {t('Atenuación:', 'Attenuation:')} <strong>{GMPE_LABELS[simulationResults.gmpeModel]}</strong>
+              {simulationResults.gmpeSigmaLn !== null && (
+                <> · {t('PGA epicentral 16–84 %:', 'Epicentral PGA 16–84 %:')}{' '}
+                  {(simulationResults.epicentralPga_g * Math.exp(-simulationResults.gmpeSigmaLn)).toFixed(2)}–
+                  {Math.min(2.5, simulationResults.epicentralPga_g * Math.exp(simulationResults.gmpeSigmaLn)).toFixed(2)} g</>
+              )}
+            </span>
+            {simulationResults.validityWarnings.map((w) => (
+              <span key={w} className="seismic-gmpe-note__warning">⚠ {w}</span>
+            ))}
+          </div>
+
           {/* Gráfica 2D de Atenuación y Propagación de Ondas */}
           <div className="seismic-chart-section">
             <div className="seismic-section-label">
               <Layers size={13} />
               <span>{t('Gráfica 2D: Propagación de Ondas y Atenuación en Suelo', '2D Plot: Wave Propagation & Soil Attenuation')}</span>
             </div>
-            <Seismic2DChart results={simulationResults} seismic={seismic} onSeismicChange={onSeismicChange} />
+            <Seismic2DChart
+              results={simulationResults}
+              seismic={seismic}
+              onSeismicChange={onSeismicChange}
+              mode={chartMode}
+              onModeChange={setChartMode}
+              stationDistanceKm={stationDistanceKm}
+              onStationDistanceChange={setStationDistanceKm}
+              onExpand={(m) => { setChartMode(m); setChartModalOpen(true) }}
+            />
           </div>
 
           {/* Desglose de Radios de Afectación Concéntricos */}

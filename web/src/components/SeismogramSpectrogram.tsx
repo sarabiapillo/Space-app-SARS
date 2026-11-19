@@ -19,13 +19,13 @@ interface Props {
   maxFreqHz?: number
   /** Rango dinámico del espectrograma (dB bajo el máximo). */
   dynamicRangeDb?: number
+  /** Alturas (px) de la traza y del espectrograma. */
+  traceHeight?: number
+  specHeight?: number
   ariaLabel: string
 }
 
 const M = { left: 50, right: 56, top: 8, gap: 26, bottom: 30 }
-const TRACE_H = 120
-const SPEC_H = 130
-const HEIGHT = M.top + TRACE_H + M.gap + SPEC_H + M.bottom
 
 function niceStep(span: number, maxTicks: number): number {
   for (const s of [0.5, 1, 2, 5, 10, 15, 20, 30, 60, 120, 300]) if (span / s <= maxTicks) return s
@@ -33,8 +33,12 @@ function niceStep(span: number, maxTicks: number): number {
 }
 
 export function SeismogramSpectrogram({
-  accel_g, sampleRateHz, startSec = 0, markers, color = '#dc2626', maxFreqHz = 15, dynamicRangeDb = 60, ariaLabel,
+  accel_g, sampleRateHz, startSec = 0, markers, color = '#dc2626', maxFreqHz = 15, dynamicRangeDb = 60,
+  traceHeight = 120, specHeight = 130, ariaLabel,
 }: Props) {
+  const TRACE_H = traceHeight
+  const SPEC_H = specHeight
+  const HEIGHT = M.top + TRACE_H + M.gap + SPEC_H + M.bottom
   const { t } = useTranslation()
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -199,7 +203,7 @@ export function SeismogramSpectrogram({
       ctx.fillText(`${tt}`, xx, specTop + SPEC_H + 5)
     }
     ctx.fillText(t('Tiempo [s]', 'Time [s]'), M.left + plotW / 2, specTop + SPEC_H + 17)
-  }, [width, accel_g, sampleRateHz, startSec, markers, color, maxFreqHz, dynamicRangeDb, spec, lut, t])
+  }, [width, accel_g, sampleRateHz, startSec, markers, color, maxFreqHz, dynamicRangeDb, spec, lut, t, TRACE_H, SPEC_H, HEIGHT])
 
   return (
     <div ref={wrapRef} className="seismo-spectro">

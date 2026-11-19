@@ -176,6 +176,43 @@ const CONFIRMED_ROI_SOURCE = 'confirmed-roi-source'
 const LOCATION_PREVIEW_SOURCE = 'location-preview-source'
 const GCOV_PREVIEW_SOURCE = 'gcov-preview-source'
 const SEISMIC_SOURCE = 'seismic-source'
+const SEISMIC_EPICENTER_LAYERS = [`${SEISMIC_SOURCE}-epicenter`, `${SEISMIC_SOURCE}-pulse`]
+
+/** Anillos de afectación, estación y epicentro del escenario como GeoJSON para MapLibre. */
+function seismicFeatureCollection(state: SeismicSimulationState) {
+  const results = runSeismicSimulation({
+    epicenter: state.epicenter,
+    magnitude: state.magnitude,
+    depthKm: state.depthKm,
+    name: state.name,
+    mechanism: state.mechanism,
+    soilType: state.soilType,
+    vs30: state.vs30,
+  })
+  const ringFeatures = results.rings.map((ring) => ({
+    type: 'Feature' as const,
+    geometry: { type: 'Polygon' as const, coordinates: [ring.polygon] },
+    properties: {
+      isEpicenter: false,
+      isRing: true,
+      level: ring.level,
+      color: ring.color,
+      fillColor: ring.fillColor,
+      mmi: ring.mmi,
+      radiusKm: ring.radiusKm,
+    },
+  }))
+  ringFeatures.sort((a, b) => b.properties.radiusKm - a.properties.radiusKm)
+  const stationFeatures = state.station
+    ? [{ type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: state.station }, properties: { isStation: true } }]
+    : []
+  const epicenterFeature = {
+    type: 'Feature' as const,
+    geometry: { type: 'Point' as const, coordinates: state.epicenter },
+    properties: { isEpicenter: true },
+  }
+  return { type: 'FeatureCollection' as const, features: [...ringFeatures, ...stationFeatures, epicenterFeature] }
+}
 
 const BASE_STYLE: StyleSpecification = {
   version: 8,
@@ -446,6 +483,8 @@ export function MapCanvas({
   const seismicRef = useRef(seismic)
   const isSeismicRef = useRef(isSeismic)
   const onSeismicChangeRef = useRef(onSeismicChange)
+  // Arrastre del epicentro: posición provisional mientras se mueve (null = sin arrastre).
+  const epicenterDragRef = useRef<{ coord: LngLat; moved: boolean; panWasEnabled: boolean } | null>(null)
   const draftFreehandRef = useRef<LngLat[]>([])
   const draftCircleRef = useRef<{
     kind: 'peligro' | 'advertencia'
@@ -567,7 +606,48 @@ export function MapCanvas({
       onViewChangeRef.current?.(current, { userInitiated: !programmatic })
     })
 
+    const hitsEpicenter = (point: MapMouseEvent['point']) => {
+      const layers = SEISMIC_EPICENTER_LAYERS.filter((id) => map.getLayer(id))
+      return layers.length > 0 && map.queryRenderedFeatures(point, { layers }).length > 0
+    }
+    // Cursor que tenía el lienzo antes de pasar por el epicentro (lo pone la herramienta activa).
+    let cursorBeforeEpicenter: string | null = null
+    const restoreCursor = () => {
+      if (cursorBeforeEpicenter !== null) map.getCanvas().style.cursor = cursorBeforeEpicenter
+      cursorBeforeEpicenter = null
+    }
+    const canDragEpicenter = () => {
+      const st = seismicRef.current
+      return Boolean(isSeismicRef.current && st && !st.pickingEpicenter && !st.pickingStation)
+    }
+    const finishEpicenterDrag = () => {
+      const drag = epicenterDragRef.current
+      if (!drag) return false
+      epicenterDragRef.current = null
+      if (drag.panWasEnabled) map.dragPan.enable()
+      restoreCursor()
+      window.removeEventListener('mouseup', finishEpicenterDrag)
+      const st = seismicRef.current
+      if (drag.moved && st) {
+        onSeismicChangeRef.current?.({
+          ...st, enabled: true, epicenter: drag.coord, name: tr('Epicentro personalizado', 'Custom epicenter'),
+        })
+      }
+      return true
+    }
+
     const onMouseDown = (e: MapMouseEvent) => {
+      // Arrastrar el epicentro tiene prioridad sobre las herramientas de dibujo.
+      if (canDragEpicenter() && hitsEpicenter(e.point)) {
+        e.preventDefault()
+        const panWasEnabled = map.dragPan.isEnabled()
+        if (panWasEnabled) map.dragPan.disable()
+        epicenterDragRef.current = { coord: seismicRef.current!.epicenter, moved: false, panWasEnabled }
+        if (cursorBeforeEpicenter === null) cursorBeforeEpicenter = map.getCanvas().style.cursor
+        map.getCanvas().style.cursor = 'grabbing'
+        window.addEventListener('mouseup', finishEpicenterDrag)
+        return
+      }
       if (!isEditingRef.current) return
       const tool = activeToolRef.current
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
@@ -590,6 +670,24 @@ export function MapCanvas({
     }
 
     const onMouseMove = (e: MapMouseEvent) => {
+      const drag = epicenterDragRef.current
+      if (drag) {
+        const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
+        epicenterDragRef.current = { ...drag, coord, moved: true }
+        const st = seismicRef.current
+        const source = map.getSource(SEISMIC_SOURCE) as GeoJSONSource | undefined
+        if (st && source) source.setData(seismicFeatureCollection({ ...st, epicenter: coord }))
+        return
+      }
+      if (canDragEpicenter()) {
+        const over = hitsEpicenter(e.point)
+        if (over && cursorBeforeEpicenter === null) {
+          cursorBeforeEpicenter = map.getCanvas().style.cursor
+          map.getCanvas().style.cursor = 'grab'
+        } else if (!over) {
+          restoreCursor()
+        }
+      }
       if (!isEditingRef.current || !isPointerDownRef.current) return
       const tool = activeToolRef.current
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
@@ -617,6 +715,7 @@ export function MapCanvas({
     }
 
     const finishPointerStroke = () => {
+      if (finishEpicenterDrag()) return
       if (!isPointerDownRef.current) return
       isPointerDownRef.current = false
       const tool = activeToolRef.current
@@ -655,6 +754,14 @@ export function MapCanvas({
       const currentSeismic = seismicRef.current
       if (isSeismicRef.current && currentSeismic?.pickingStation) {
         onSeismicChangeRef.current?.({ ...currentSeismic, station: coord, pickingStation: false })
+        return
+      }
+      // Epicentro libre: con el modo "Elegir en el mapa", cualquier clic lo coloca.
+      if (isSeismicRef.current && currentSeismic?.pickingEpicenter) {
+        onSeismicChangeRef.current?.({
+          ...currentSeismic, enabled: true, epicenter: coord, pickingEpicenter: false,
+          name: tr('Epicentro personalizado', 'Custom epicenter'),
+        })
         return
       }
       if (!isEditingRef.current) return
@@ -1058,65 +1165,19 @@ export function MapCanvas({
     const activeSeismic = seismic || DEFAULT_SEISMIC
     const shouldShow = isSeismic || Boolean(seismic?.enabled)
 
-    if (shouldShow && activeSeismic) {
-      const results = runSeismicSimulation({
-        epicenter: activeSeismic.epicenter,
-        magnitude: activeSeismic.magnitude,
-        depthKm: activeSeismic.depthKm,
-        name: activeSeismic.name,
-        mechanism: activeSeismic.mechanism,
-        soilType: activeSeismic.soilType,
-        vs30: activeSeismic.vs30,
-      })
-
-      const ringFeatures = results.rings.map((ring) => ({
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [ring.polygon],
-        },
-        properties: {
-          isEpicenter: false,
-          isRing: true,
-          level: ring.level,
-          color: ring.color,
-          fillColor: ring.fillColor,
-          mmi: ring.mmi,
-          radiusKm: ring.radiusKm,
-        },
-      }))
-      ringFeatures.sort((a, b) => b.properties.radiusKm - a.properties.radiusKm)
-
-      const epicenterFeature = {
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Point' as const,
-          coordinates: activeSeismic.epicenter,
-        },
-        properties: {
-          isEpicenter: true,
-        },
-      }
-
-      const stationFeatures = activeSeismic.station
-        ? [{
-            type: 'Feature' as const,
-            geometry: { type: 'Point' as const, coordinates: activeSeismic.station },
-            properties: { isStation: true },
-          }]
-        : []
-
-      source.setData({
-        type: 'FeatureCollection',
-        features: [...ringFeatures, ...stationFeatures, epicenterFeature],
-      })
-    } else {
-      source.setData({
-        type: 'FeatureCollection',
-        features: [],
-      })
-    }
+    source.setData(shouldShow && activeSeismic
+      ? seismicFeatureCollection(activeSeismic)
+      : { type: 'FeatureCollection', features: [] })
   }, [seismic, isSeismic, mapReady])
+
+  // Cursor en cruz mientras se elige el epicentro o la estación en el mapa.
+  const seismicPicking = Boolean(isSeismic && (seismic?.pickingEpicenter || seismic?.pickingStation))
+  useEffect(() => {
+    const canvas = mapRef.current?.getCanvas()
+    if (!canvas || !mapReady) return
+    canvas.style.cursor = seismicPicking ? 'crosshair' : ''
+    return () => { canvas.style.cursor = '' }
+  }, [seismicPicking, mapReady])
 
   const displayScene = hasAnalysisRoi ? {
     ...escena,

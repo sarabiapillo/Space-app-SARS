@@ -40,8 +40,9 @@ el peligro sísmico de un sitio ni para sustituir a un registro.
 \end{itemize}
 \textbf{No hace:}
 \begin{itemize}
-  \item No usa datos NISAR ni registros sísmicos para calibrarse. Los coeficientes de la GMPE no tienen
-        una fuente publicada verificada (sección~\ref{sec:limitaciones}).
+  \item No usa datos NISAR. La atenuación de los sismos de subducción e intraplaca viene de dos
+        estudios publicados con registros mexicanos (Arroyo et al., 2010; García et al., 2005); la del
+        mecanismo cortical sigue siendo provisional (sección~\ref{sec:limitaciones}).
   \item No modela directividad, geometría de la falla, efectos topográficos ni variabilidad aleatoria
         (no hay desviación estándar: cada escenario da un único valor).
   \item No es un sistema de alerta ni un estudio de peligro sísmico.
@@ -139,55 +140,78 @@ la ventana $\Delta t$.
 \section{Movimiento del suelo (GMPE)}
 \label{sec:gmpe}
 
-\subsection{Ecuación}
-Función \texttt{computePga\_g}, con PGA en $g$ ($1\,g = 980.665$\,cm/s$^2$):
+\subsection{Modelo por mecanismo}
+Función \texttt{computePga\_g}. Cada mecanismo usa una ley de atenuación distinta
+(\texttt{GMPE\_BY\_MECHANISM}); todas dan la PGA en \emph{roca}, a la que se suma el efecto de sitio:
 \begin{equation}
-  \ln \mathrm{PGA} = c_1 + c_2 M_w - c_3 \ln R_{\mathrm{ef}} - c_4 R_{\mathrm{ef}} + S_{\mathrm{sitio}},
-  \qquad
-  R_{\mathrm{ef}} = \sqrt{D^2 + h^2 + h_{\mathrm{sat}}(M_w)^2}.
+  \ln \mathrm{PGA}_{\mathrm{sitio}} = \ln \mathrm{PGA}_{\mathrm{roca}}(M_w, R, h) + S_{\mathrm{sitio}}(V_{s30}),
+  \qquad R = \sqrt{D^2 + h^2}.
   \label{eq:gmpe}
 \end{equation}
-El resultado se acota a $[0.0001,\ 2.5]\,g$ (ver~\ref{sec:tope}).
-
-\subsection{Coeficientes por mecanismo}
-Constante \texttt{GMPE\_COEFFICIENTS}, valores del manual anterior (\S5.1):
+La fuente es puntual: como ``distancia a la falla'' se usa la distancia hipocentral $R$. En sismos
+grandes, la distancia real a la ruptura es menor, así que cerca de la fuente el modelo tiende a
+subestimar la PGA. El resultado se acota a $[0.0001,\ 2.5]\,g$ como salvaguarda.
 
 \begin{table}[h]
 \centering
-\begin{tabular}{lrrrr}
+\small
+\begin{tabular}{llll}
 \toprule
-Mecanismo & $c_1$ & $c_2$ & $c_3$ & $c_4$ (km$^{-1}$) \\
+Mecanismo & Modelo & Datos del artículo & $\sigma$ de $\ln$ PGA \\
 \midrule
-Subducción interplaca & $-1.85$ & 0.92 & 1.15 & 0.0032 \\
-Intraplaca (placa de Cocos) & $-1.55$ & 0.96 & 1.25 & 0.0040 \\
-Cortical somero & $-1.95$ & 0.88 & 1.05 & 0.0028 \\
+Subducción interplaca & Arroyo et al.\ (2010) & $M_w$ 5.0--8.0, $R$ 20--400 km, roca, antearco & 0.75 \\
+Intraplaca & García et al.\ (2005) & $M_w$ 5.2--7.4, $H$ 35--138 km, $R \le 400$ km, roca & $0.28\ln 10 = 0.645$ \\
+Cortical & provisional (manual anterior) & sin fuente publicada & --- \\
 \bottomrule
 \end{tabular}
-\caption{Coeficientes de la ecuación~\eqref{eq:gmpe}. No tienen una fuente publicada verificada.}
+\caption{Leyes de atenuación por mecanismo. Fuera de su rango, la interfaz muestra un aviso
+(\texttt{gmpeValidityWarnings}).}
 \end{table}
 
-\subsection{Saturación de campo cercano}
-Sin un término de saturación, la ecuación~\eqref{eq:gmpe} con $R$ hipocentral da valores imposibles
-junto a la fuente (14.5\,$g$ en el epicentro del escenario de 1985). Se adopta el término de
-distancia efectiva de Yenier y Atkinson (2015), que representa la extensión finita de la ruptura;
-función \texttt{nearSourceSaturationKm}:
+\subsection{Subducción interplaca: Arroyo et al.\ (2010)}
+Ecuación 8a del artículo con la fila PGA de su tabla~2 (función \texttt{pgaRockArroyo2010\_cgs}),
+PGA en cm/s$^2$, roca NEHRP B:
 \begin{equation}
-  h_{\mathrm{sat}}(M_w) = 10^{-0.405 + 0.235\,M_w}\ \text{km}
-  \qquad (M_w\,7.1 \rightarrow 18.3\ \text{km};\ M_w\,8.1 \rightarrow 31.5\ \text{km}).
+  \ln \mathrm{PGA} = \alpha_1 + \alpha_2 M_w + \alpha_3 \ln\!\left[\frac{E_1(\alpha_4 R) - E_1\!\left(\alpha_4\sqrt{R^2 + r_0^2}\right)}{r_0^2}\right],
+  \qquad r_0^2 = 1.4447\times10^{-5}\,e^{2.3026\,M_w},
 \end{equation}
-Ese término fue calibrado con otro modelo de atenuación: aquí es una aproximación de la forma
-funcional, no una calibración. Lejos de la fuente casi no cambia el resultado (menos de 3\,\% a 300\,km
-para $M_w$\,8.1, verificado en las pruebas).
+con $\alpha_1 = 2.4862$, $\alpha_2 = 0.9392$, $\alpha_3 = 0.5061$ y $\alpha_4 = 0.0150$. $E_1$ es la
+integral exponencial $E_1(x) = \int_x^\infty e^{-t}/t\,dt$ (función \texttt{exponentialIntegralE1}: serie
+para $x \le 1$ y fracción continua para $x > 1$; Abramowitz y Stegun, 1972). La forma proviene de una
+fuente circular finita de radio $r_0$: el término de $E_1$ produce por sí mismo la saturación de campo
+cercano. Verificación: para $M_w$\,8.0 a 20.8\,km da 376\,cm/s$^2$, coherente con la figura~9a del
+artículo (unos 380\,cm/s$^2$).
 
-\subsection{Tope de 2.5\,g}
-\label{sec:tope}
-Aun con saturación, cinco de los seis escenarios históricos superan 2.5\,$g$ en el epicentro
-(tabla~\ref{tab:escenarios}); el tope de 2.5\,$g$ se mantiene como salvaguarda. Que el tope actúe tan
-seguido indica que los coeficientes sobrestiman el movimiento cerca de la fuente
-(sección~\ref{sec:limitaciones}).
+\textbf{Alcance:} sitios en roca de la región de antearco (costa del Pacífico, de Colima a Oaxaca). Los
+autores excluyeron las estaciones de la Faja Volcánica Transmexicana y del Valle de México, donde hay
+amplificaciones regionales que esta ecuación no representa.
+
+\subsection{Intraplaca: García et al.\ (2005)}
+Ecuación~2 del artículo (PGA horizontal, tabla~2; función \texttt{pgaRockGarcia2005\_cgs}), en cm/s$^2$:
+\begin{equation}
+  \log_{10}\mathrm{PGA} = -0.2 + 0.59\,M_w - 0.0039\,R' - \log_{10} R' + 0.008\,H,
+  \qquad R' = \sqrt{R_{\mathrm{cld}}^2 + \Delta^2},\quad \Delta = 0.00750\cdot 10^{0.507\,M_w},
+\end{equation}
+donde $H$ es la profundidad focal (km) y $\Delta$ el término de saturación de Atkinson y Boore (2003).
+Como $R_{\mathrm{cld}}$ se usa la distancia hipocentral $R$. \textbf{Alcance:} roca, sismos de falla
+normal a profundidad intermedia del centro de México; sin estaciones del Valle de México.
+
+\subsection{Cortical: provisional}
+\label{sec:cortical}
+El mecanismo cortical conserva la ecuación y los coeficientes del manual anterior
+($c_1 = -1.95$, $c_2 = 0.88$, $c_3 = 1.05$, $c_4 = 0.0028$\,km$^{-1}$; constante
+\texttt{MANUAL\_CRUSTAL\_COEFFICIENTS}) con el término de saturación de Yenier y Atkinson (2015):
+\begin{equation}
+  \ln \mathrm{PGA}_{\mathrm{roca}} = c_1 + c_2 M_w - c_3 \ln R_{\mathrm{ef}} - c_4 R_{\mathrm{ef}},
+  \qquad R_{\mathrm{ef}} = \sqrt{R^2 + h_{\mathrm{sat}}^2},\quad h_{\mathrm{sat}} = 10^{-0.405 + 0.235 M_w}\ \text{km}.
+\end{equation}
+Estos coeficientes no tienen fuente publicada y llegan al tope de 2.5\,$g$ cerca de la fuente. El
+reemplazo previsto es Boore et al.\ (2014), cuyo artículo da las ecuaciones pero publica los
+coeficientes en un suplemento electrónico que todavía no se ha integrado.
 
 \subsection{Efecto de sitio}
-Funciones \texttt{siteAmplification} y \texttt{effectiveVs30}:
+Funciones \texttt{siteAmplification} y \texttt{effectiveVs30}. Los tres modelos son para roca; el
+efecto de sitio es el del manual anterior, \textbf{sin fuente publicada}:
 \begin{equation}
   S_{\mathrm{sitio}} =
   \begin{cases}
@@ -208,9 +232,15 @@ Suelo firme / aluvial & 450 & 0.236 & 1.27 \\
 Suelo blando lacustre (CDMX) & 100 & 0.913 & 2.49 \\
 \bottomrule
 \end{tabular}
-\caption{Valores representativos (\texttt{SOIL\_VS30}). El manual anterior decía que el suelo lacustre
-``cuadruplica'' la aceleración; con su propia ecuación el factor es 2.49.}
+\caption{Valores representativos (\texttt{SOIL\_VS30}). Un factor lineal por $V_{s30}$ no reproduce la
+resonancia de las arcillas del lago de la Ciudad de México, que amplifica mucho más en torno a
+0.5\,Hz.}
 \end{table}
+
+\subsection{Incertidumbre}
+Una GMPE predice la mediana. Con la $\sigma$ publicada, el panel muestra el intervalo del 16 al 84\,\%
+de la PGA epicentral, $[\mathrm{PGA}\,e^{-\sigma},\ \mathrm{PGA}\,e^{\sigma}]$ (constante
+\texttt{GMPE\_SIGMA\_LN}). Para el mecanismo cortical provisional no hay $\sigma$.
 
 \section{Intensidad Mercalli}
 
@@ -364,18 +394,19 @@ calcula el módulo con su suelo predefinido; \textbf{no son valores observados}.
 \setlength{\tabcolsep}{3pt}
 \begin{tabular}{lrrllrrl}
 \toprule
-Escenario & $M_w$ & $h$ (km) & Mecanismo & Suelo & PGA ep.\ sin tope & PGA ep. & Radios (km) \\
+Escenario & $M_w$ & $h$ (km) & Modelo & $V_{s30}$ & PGA ep. & 16--84\,\% & Radios (km) \\
 \midrule
-Michoacán 1985 & 8.1 & 15 & subducción & 450 & 5.16\,$g$ & 2.50\,$g$ & 218 / 364 / 612 / 998 \\
-Puebla--Morelos 2017 & 7.1 & 57 & intraplaca & 760 & 0.91\,$g$ & 0.91\,$g$ & 95 / 187 / 352 / 625 \\
-Tehuantepec 2017 & 8.2 & 45 & intraplaca & 760 & 2.91\,$g$ & 2.50\,$g$ & 190 / 309 / 506 / 810 \\
-Acapulco 2021 & 7.1 & 10 & subducción & 450 & 3.88\,$g$ & 2.50\,$g$ & 127 / 235 / 442 / 793 \\
-Coalcomán 2022 & 7.7 & 15 & subducción & 450 & 4.41\,$g$ & 2.50\,$g$ & 178 / 309 / 542 / 914 \\
-Mexicali 2010 & 7.2 & 10 & cortical & 760 & 2.97\,$g$ & 2.50\,$g$ & 127 / 250 / 493 / 905 \\
+Michoacán 1985$^\ast$ & 8.1 & 15 & Arroyo & 450 & 0.60\,$g$ & 0.28--1.27 & 31 / 82 / 175 / 330 \\
+Puebla--Morelos 2017 & 7.1 & 57 & García & 760 & 0.25\,$g$ & 0.13--0.47 & -- / 74 / 171 / 314 \\
+Tehuantepec 2017$^\ast$ & 8.2 & 45 & García & 760 & 0.30\,$g$ & 0.16--0.58 & -- / 131 / 253 / 413 \\
+Acapulco 2021 & 7.1 & 10 & Arroyo & 450 & 0.57\,$g$ & 0.27--1.21 & 16 / 46 / 113 / 246 \\
+Coalcomán 2022 & 7.7 & 15 & Arroyo & 450 & 0.55\,$g$ & 0.26--1.16 & 24 / 66 / 149 / 296 \\
+Mexicali 2010 & 7.2 & 10 & cortical prov. & 760 & 2.50\,$g$ (tope) & --- & 127 / 250 / 493 / 905 \\
 \bottomrule
 \end{tabular}
-\caption{Resultados del modelo. Suelo como $V_{s30}$ en m/s. Radios de las zonas destructiva, de daño,
-de percepción moderada y de percepción débil.}
+\caption{Resultados del modelo. Radios de las zonas destructiva, de daño, de percepción moderada y de
+percepción débil (``--'': la PGA epicentral no alcanza ese umbral). $^\ast$Fuera del rango de magnitudes
+del artículo (extrapolación).}
 \label{tab:escenarios}
 \end{table}
 
@@ -384,18 +415,23 @@ estación a 350\,km:
 
 \begin{table}[h]
 \centering
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrr}
 \toprule
-$V_{s30}$ estación & PGA & MMI & $f$ dominante & D5--95 & $t_S$ \\
+$V_{s30}$ estación & PGA & MMI & $f$ dominante & D5--95 \\
 \midrule
-760 m/s & 0.104\,$g$ (102 gal) & 5.7 (VI) & 2.20 Hz & 13.3 s & 100.1 s \\
-450 m/s & 0.131\,$g$ (129 gal) & 6.1 (VI) & 1.30 Hz & 19.1 s & 100.1 s \\
-100 m/s & 0.258\,$g$ (253 gal) & 7.1 (VII) & 0.52 Hz & 33.4 s & 100.1 s \\
+760 m/s & 0.003\,$g$ (3 gal) & 2.1 (II) & 2.20 Hz & 13.3 s \\
+450 m/s & 0.004\,$g$ (4 gal) & 2.3 (II) & 1.30 Hz & 19.1 s \\
+100 m/s & 0.008\,$g$ (8 gal) & 3.0 (III) & 0.52 Hz & 33.4 s \\
 \bottomrule
 \end{tabular}
-\caption{El suelo lacustre amplifica la PGA unas 2.5 veces, baja la frecuencia a la resonancia de
-cuenca y alarga el movimiento fuerte. Cifras del modelo, no observadas.}
+\caption{Cifras del modelo, no observadas.}
 \end{table}
+
+Estas cifras son mucho menores que el daño ocurrido en 1985 en la Ciudad de México. No es un error de
+cálculo: la Ciudad de México está fuera del alcance de Arroyo et al.\ (2010), que excluye la Faja
+Volcánica y el Valle de México por sus amplificaciones regionales, y el término de sitio por $V_{s30}$
+no reproduce la resonancia del lago. El ejemplo sirve para mostrar el efecto cualitativo del suelo
+(frecuencia y duración), no para estimar el movimiento en la ciudad.
 
 \section{Correcciones respecto al manual del 17 de noviembre de 2026}
 
@@ -409,7 +445,12 @@ cuenca y alarga el movimiento fuerte. Cifras del modelo, no observadas.}
         ecuación~\eqref{eq:alerta} rotulada ``desde el origen'' y, aparte, la ventana $t_S - t_P$.
   \item \textbf{Estación:} el manual decía que la elige el usuario; antes solo había una distancia.
   \item \textbf{MMI discontinua:} el corte pasó de 4.22 a 66.4\,cm/s$^2$.
-  \item \textbf{Saturación:} se añadió $h_{\mathrm{sat}}(M_w)$; el tope de 2.5\,$g$, que el manual no
+  \item \textbf{Leyes de atenuación publicadas (18 de noviembre de 2026):} los coeficientes de
+        subducción e intraplaca del manual no tenían fuente y llevaban la PGA epicentral al tope de
+        2.5\,$g$ en cinco de seis escenarios. Se sustituyeron por Arroyo et al.\ (2010) y García et
+        al.\ (2005); el mecanismo cortical queda provisional (sección~\ref{sec:cortical}).
+  \item \textbf{Saturación:} en el mecanismo cortical se añadió $h_{\mathrm{sat}}(M_w)$ de Yenier y
+        Atkinson (2015); los modelos publicados traen la suya. El tope de 2.5\,$g$, que el manual no
         mencionaba, queda documentado.
   \item \textbf{Muestreo del sismograma:} de unas 5 a 50 muestras por segundo.
   \item \textbf{Clic del mapa:} mover el epicentro usaba una copia antigua del estado y deshacía otros
@@ -425,14 +466,18 @@ cuenca y alarga el movimiento fuerte. Cifras del modelo, no observadas.}
 \label{sec:limitaciones}
 
 \begin{itemize}
-  \item \textbf{Coeficientes sin fuente verificada.} El manual atribuye la GMPE a ``Ordaz, García,
-        Boore--Atkinson'', pero no cita las publicaciones ni los coeficientes coinciden con una ecuación
-        publicada que se haya verificado. Que el tope de 2.5\,$g$ actúe en cinco de seis escenarios indica
-        que sobrestiman el movimiento cerca de la fuente. Para resultados cuantitativos conviene sustituirla
-        por una GMPE publicada para México, tomando los coeficientes directamente del artículo.
-  \item \textbf{Saturación aproximada:} $h_{\mathrm{sat}}$ proviene de otro modelo.
-  \item \textbf{Sin variabilidad:} una GMPE real tiene una desviación estándar de un factor 2 o más; aquí
-        cada escenario da un único valor.
+  \item \textbf{Alcance de los modelos publicados:} roca en la costa del Pacífico (Arroyo) y roca en
+        el centro de México sin el Valle de México (García). No representan la amplificación de la
+        Faja Volcánica ni del lago de la Ciudad de México.
+  \item \textbf{Cortical provisional:} coeficientes sin fuente y saturación tomada de otro modelo, hasta
+        integrar Boore et al.\ (2014).
+  \item \textbf{Efecto de sitio sin fuente:} el término por $V_{s30}$ ($b = -0.45$) viene del manual
+        anterior; un factor lineal no reproduce la resonancia de suelos blandos.
+  \item \textbf{Distancia:} fuente puntual y distancia hipocentral en lugar de la distancia a la
+        ruptura, que subestima la PGA cerca de sismos grandes.
+  \item \textbf{Incertidumbre:} el mapa y los anillos usan la mediana; la dispersión real es grande
+        (un factor de 2 en una desviación estándar) y solo se informa como intervalo de la PGA
+        epicentral.
   \item \textbf{Un solo $V_{s30}$ para los anillos} y fuente puntual: sin directividad ni geometría de la
         ruptura.
   \item \textbf{Sismograma analítico:} reproduce rasgos cualitativos (llegadas, frecuencia por suelo,
@@ -449,8 +494,11 @@ Magnitud & Función o constante (\path{web/src/utils/}) \\
 \endhead
 $M_0$ & \texttt{seismicMomentDynCm} (\path{seismic.ts}) \\
 $D$, $R$ & \texttt{haversineDistanceKm}; \texttt{Math.sqrt(D*D + h*h)} \\
-$h_{\mathrm{sat}}$ & \texttt{nearSourceSaturationKm} \\
-PGA & \texttt{computePga\_g}, \texttt{GMPE\_COEFFICIENTS} \\
+$h_{\mathrm{sat}}$ (cortical) & \texttt{nearSourceSaturationKm} \\
+PGA & \texttt{computePga\_g}, \texttt{GMPE\_BY\_MECHANISM}, \texttt{GMPE\_SIGMA\_LN}, \texttt{gmpeValidityWarnings} \\
+Arroyo et al.\ (2010) & \texttt{pgaRockArroyo2010\_cgs}, \texttt{exponentialIntegralE1} \\
+García et al.\ (2005) & \texttt{pgaRockGarcia2005\_cgs} \\
+Cortical provisional & \texttt{MANUAL\_CRUSTAL\_COEFFICIENTS} \\
 $S_{\mathrm{sitio}}$, $V_{s30}$ & \texttt{siteAmplification}, \texttt{effectiveVs30}, \texttt{SOIL\_VS30} \\
 MMI & \texttt{pgaToMmi}, \texttt{MMI\_BREAKPOINT\_GAL}, \texttt{mmiToRoman} \\
 $t_P$, $t_S$, $\Delta t$ & \texttt{VP\_KM\_S}, \texttt{VS\_KM\_S} en \texttt{runSeismicSimulation} y \texttt{synthesizeSeismogram} \\
@@ -467,8 +515,10 @@ Registro real & \texttt{parseAccelerogram}, \texttt{toAccelG} (\path{accelerogra
 
 Desde \path{web/}: \texttt{node --test tests/}.
 \begin{itemize}
-  \item \path{tests/seismicModel.test.mjs}: coeficientes, $S_{\mathrm{sitio}}$ (760, 450, 100\,m/s),
-        ecuación~\eqref{eq:gmpe} con saturación por mecanismo, $M_0$, alerta (88.5\,s a 320\,km),
+  \item \path{tests/seismicModel.test.mjs}: $E_1$ contra valores de tabla, ecuaciones de Arroyo y García
+        tal como están en los artículos (y la figura~9a de Arroyo), modelo por mecanismo, PGA decreciente
+        con la distancia, avisos de validez, $S_{\mathrm{sitio}}$ (760, 450, 100\,m/s), $M_0$, alerta
+        (88.5\,s a 320\,km),
         $f_S$ por $V_{s30}$, estación con su $V_{s30}$, MMI continua y coherente con los umbrales, PGA
         decreciente con la distancia y orden de los radios.
   \item \path{tests/seismicSignal.test.mjs}: muestreo a 50\,Hz, ausencia de señal antes de $t_P$, pico
@@ -480,6 +530,20 @@ reproduzca sismos reales.
 
 \section*{Referencias}
 \begin{itemize}
+  \item Abramowitz, M. y Stegun, I.~A. (1972). \emph{Handbook of Mathematical Functions}. Dover, Nueva
+        York.
+  \item Arroyo, D., García, D., Ordaz, M., Mora, M.~A. y Singh, S.~K. (2010). Strong ground-motion
+        relations for Mexican interplate earthquakes. \emph{Journal of Seismology}, 14, 769--785.
+        doi:10.1007/s10950-010-9200-0.
+  \item Atkinson, G.~M. y Boore, D.~M. (2003). Empirical ground-motion relations for subduction-zone
+        earthquakes and their application to Cascadia and other regions. \emph{Bulletin of the
+        Seismological Society of America}, 93, 1703--1729.
+  \item Boore, D.~M., Stewart, J.~P., Seyhan, E. y Atkinson, G.~M. (2014). NGA-West2 equations for
+        predicting PGA, PGV, and 5\,\% damped PSA for shallow crustal earthquakes. \emph{Earthquake
+        Spectra}, 30(3), 1057--1085. doi:10.1193/070113EQS184M. (Pendiente de integrar.)
+  \item García, D., Singh, S.~K., Herráiz, M., Ordaz, M. y Pacheco, J.~F. (2005). Inslab earthquakes of
+        Central Mexico: peak ground-motion parameters and response spectra. \emph{Bulletin of the
+        Seismological Society of America}, 95(6), 2272--2282. doi:10.1785/0120050072.
   \item Arias, A. (1970). A measure of earthquake intensity. En R.~J.~Hansen (ed.), \emph{Seismic Design
         for Nuclear Power Plants}, MIT Press, 438--483.
   \item Hanks, T.~C. y Kanamori, H. (1979). A moment magnitude scale. \emph{Journal of Geophysical
