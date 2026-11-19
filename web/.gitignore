@@ -8,6 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+# Local browser tooling, evidence and preserved recovery dependencies
+.browser-check/
 dist
 dist-ssr
 *.local
