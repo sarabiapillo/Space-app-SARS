@@ -48,8 +48,10 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, payload(), format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual(start.call_args.args, ('1', payload()))
-        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','boundary','initial_condition','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(response.json()['dg2_depth_thresh_m'])
+        self.assertEqual(response.json()['boundary'], {s: {'type': 'free'} for s in ('north', 'east', 'south', 'west')})
+        self.assertEqual(response.json()['initial_condition'], 'dry_zero_velocity')
         self.assertEqual(response.json()['state'], 'created')
         self.assertEqual(self.alice.get(response.json()['results_url']).status_code, 409)
         self.assertEqual(self.bob.get(response.json()['status_url']).status_code, 404)
@@ -89,8 +91,9 @@ class RoiHttpTests(SimpleTestCase):
             self.assertNotEqual(client.get(results).status_code, 200)
             self.assertNotEqual(client.get(download).status_code, 200)
         # Runs recorded before the threshold existed ran with the solver default (off): reported as null.
-        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','boundary','initial_condition','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(self.alice.get(status).json()['dg2_depth_thresh_m'])
+        self.assertIsNone(self.alice.get(status).json()['boundary'])  # seeded run predates per-side boundaries
         result = self.alice.get(results)
         self.assertEqual(result.status_code, 200)
         body = result.json()

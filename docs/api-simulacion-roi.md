@@ -24,14 +24,31 @@ El servicio se configura por entorno, con rutas y hashes fijados en el servidor,
 
 `simulation.dg2_depth_thresh_m` es **obligatorio**: `null` desactiva explícitamente el umbral (comportamiento por defecto de LISFLOOD-FP 8.0.3) o un número `0 < v ≤ 1` en metros activa `dg2depththresh v`, que trata como planas (sin pendiente DG2) las celdas con menos de `v` m de agua. Sin umbral, DG2 puede producir profundidades medias **negativas** en láminas finas que escurren por pendiente (el solver solo garantiza positividad en las interfaces); el lector de resultados las rechaza y la corrida termina `failed`. Con umbral desaparecen esos negativos, pero la solución cambia (en una prueba real de 900 s con 0.02 m la profundidad máxima pasó de 1.14 a 1.21 m), por lo que es una elección numérica que se registra con la corrida, no un valor físico recomendado.
 
-El sobre acepta exactamente estas siete secciones. La lluvia es hipotética, perfil temporal sintético conservativo con semilla, uniforme dentro de la ROI y cero fuera; no es precipitación observada. `closed` o `free` (FREE idealizada), terreno métrico, duración, paso inicial y frecuencia de guardado deben elegirse expresamente. Estado inicial seco y velocidad cero **no** provienen de NISAR. Infiltración no modelada; NASADEM es elevación EGM96 y **no** profundidad. La malla se expande a un rectángulo métrico completo antes de comprobar cobertura; presupuestos de celdas, lluvia, cuadros y teselas se validan antes de crear trabajo.
+El sobre acepta exactamente estas siete secciones. La lluvia es hipotética, perfil temporal sintético conservativo con semilla, uniforme dentro de la ROI y cero fuera; no es precipitación observada. La frontera (ver abajo), terreno métrico, duración, paso inicial y frecuencia de guardado deben elegirse expresamente. El estado inicial (seco, o mar en reposo al nivel fijo) y la velocidad cero **no** provienen de NISAR. Infiltración no modelada; NASADEM es elevación EGM96 y **no** profundidad. La malla se expande a un rectángulo métrico completo antes de comprobar cobertura; presupuestos de celdas, lluvia, cuadros y teselas se validan antes de crear trabajo.
+
+### Frontera por lado y mar en reposo
+
+`hydraulics.boundary` acepta `"closed"` o `"free"` (los cuatro lados iguales, como antes) o un objeto con exactamente `north`, `east`, `south` y `west`, cada uno `{"type":"closed"}`, `{"type":"free"}` o `{"type":"fixed_level","level_m":<m>}`:
+
+```json
+"hydraulics": {"manning":0.05,"initial_condition":"still_water_at_fixed_level","infiltration":"unsupported","domain_nonurban":true,
+  "boundary":{"north":{"type":"closed"},"east":{"type":"free"},"south":{"type":"fixed_level","level_m":0},"west":{"type":"closed"}}}
+```
+
+- **closed:** no se escribe línea en el `.bci`; LISFLOOD-FP la trata como pared reflejante.
+- **free:** `FREE` transmisiva idealizada. DG2 ignora la pendiente de `FREE`.
+- **fixed_level:** `HFIX`, superficie libre fija `level_m` en metros sobre el datum vertical del DEM (NASADEM: EGM96); en el borde `h = max(0, level − z)`. `|level_m| ≤ 10000`.
+
+`hydraulics.initial_condition` es `"dry_zero_velocity"` o `"still_water_at_fixed_level"`. La segunda exige al menos un lado `fixed_level` y el mismo nivel en todos ellos: las celdas con elevación media bajo ese nivel y conectadas (4 vecinos) a una celda de borde de un lado de nivel fijo arrancan con `H = nivel − z` y pendientes `H1x = −Z1x`, `H1y = −Z1y` (superficie libre plana), mediante `startfile initial.wd` de DG2. Las depresiones interiores no conectadas quedan secas.
+
+Comprobado con el solver sobre el DEM real de la corrida NASADEM (577 celdas bajo 845.25 m, sin lluvia, 300 s): **sin** `startfile`, el lado `HFIX` no llenó nada (0 % del volumen a los 300 s), porque en DG2 8.0.3 la frontera copia la velocidad interior y un dominio seco en reposo no recibe flujo de masa; **con** `startfile`, el mar conservó el 100 % del volumen, la superficie quedó a ±3 cm del nivel y la rapidez donde hay al menos 0.15 m fue ≤ 0.23 m/s. El ajuste residual ocurre en la orilla (celdas parcialmente sumergidas, mojado y secado de DG2). Por eso, si el nivel está sobre el terreno, conviene iniciar con el mar lleno. NASADEM no tiene batimetría: con nivel 0 sobre un mar plano a 0 m la profundidad inicial es cero y el lado `HFIX` actúa como sumidero a nivel del mar. El estado de la corrida devuelve `boundary` (lados normalizados) e `initial_condition`; ambos son `null` en corridas anteriores a esta función.
 
 ## Respuestas y animación
 
 `202` (valores ilustrativos; UUID asignado por servidor):
 
 ```json
-{"id":"6c5b38f4-9d14-4c71-912b-04ed7629d94a","state":"created","stage":"created","simulation_duration_s":2,"save_interval_s":1,"dg2_depth_thresh_m":null,"synthetic":true,"hydraulic_accuracy_validated":false,"status_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/","results_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/results/"}
+{"id":"6c5b38f4-9d14-4c71-912b-04ed7629d94a","state":"created","stage":"created","simulation_duration_s":2,"save_interval_s":1,"dg2_depth_thresh_m":null,"boundary":{"north":{"type":"free"},"east":{"type":"free"},"south":{"type":"free"},"west":{"type":"free"}},"initial_condition":"dry_zero_velocity","synthetic":true,"hydraulic_accuracy_validated":false,"status_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/","results_url":"/api/flood-roi-runs/6c5b38f4-9d14-4c71-912b-04ed7629d94a/results/"}
 ```
 
 Consultar `GET status_url` con la misma sesión. `state`/`stage`: `created`, `acquiring`, `preparing`, `running`, `results`, `succeeded`, `failed`, `timed_out`. En fallo hay `error` limitado a códigos seguros (`acquisition_failed`, `preparation_failed`, `preparation_or_output_invalid`, `worker_stopped`, `worker_deadline`, `worker_launch_failed`, `preparation_timeout`, `solver_timeout` o `run_failed`); no se expone traceback ni rutas. Mostrar fallo de adquisición distinto de preparación/cobertura; los detalles de cobertura no se infieren del código general. `GET results_url` responde `409 {"errors":{"result":["Resultado no disponible."]}}` hasta éxito.

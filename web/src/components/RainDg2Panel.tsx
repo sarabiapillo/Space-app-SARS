@@ -15,7 +15,7 @@ interface Props {
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   onClose?: () => void
 }
-const initial: FloodDg2Form = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundary:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false}
+const initial: FloodDg2Form = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false}
 type Form = FloodDg2Form
 export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSelectPresetROI,onClose}:Props) {
   const {t,localizeText} = useTranslation()
@@ -70,7 +70,12 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         {field('crs',t('CRS métrico del terreno (EPSG:...)','Metric terrain CRS (EPSG:...)'),'text')}{field('resolution',t('Resolución terreno (m)','Terrain resolution (m)'))}
         <label>{t('Remuestreo','Resampling')}<select value={form.resampling} onChange={e=>set('resampling',e.target.value)}><option value="">—</option>{['nearest','bilinear'].map(v=><option key={v}>{v}</option>)}</select></label>
         {field('manning',t('Manning n','Manning n'))}<p>{t('Inicio seco y velocidad cero; infiltración no modelada.','Dry initial condition and zero velocity; infiltration not modeled.')}</p>
-        <label>{t('Frontera','Boundary')}<select value={form.boundary} onChange={e=>set('boundary',e.target.value)}><option value="">—</option><option value="free">free</option><option value="closed">closed</option></select></label>
+        <fieldset style={{border:'none',padding:0,margin:'6px 0'}}><legend>{t('Frontera por lado','Boundary per side')}</legend>
+          {([['boundaryNorth',t('Norte','North')],['boundaryEast',t('Este','East')],['boundarySouth',t('Sur','South')],['boundaryWest',t('Oeste','West')]] as const).map(([key,label])=><label key={key} style={{display:'block'}}>{label} <select value={form[key]} onChange={e=>set(key,e.target.value)}><option value="">—</option><option value="closed">{t('cerrada (pared)','closed (wall)')}</option><option value="free">{t('libre (FREE)','free (FREE)')}</option><option value="fixed_level">{t('nivel fijo (HFIX)','fixed level (HFIX)')}</option></select></label>)}
+          {field('seaLevel',t('Nivel del mar fijo (m, EGM96; mismo para todos los lados de nivel fijo)','Fixed sea level (m, EGM96; same for every fixed-level side)'))}
+          <label style={{display:'block'}}><input type="checkbox" checked={form.stillWater} onChange={e=>set('stillWater',e.target.checked)}/>{t('Iniciar con el mar lleno al nivel fijo (celdas bajo ese nivel conectadas al lado de nivel fijo).','Start with the sea filled to the fixed level (cells below it connected to the fixed-level side).')}</label>
+          <p>{t('En DG2 un lado de nivel fijo no llena un dominio seco: si el nivel está sobre el terreno, inicia con el mar lleno. NASADEM no tiene batimetría: con nivel 0 sobre un mar plano a 0 m la profundidad inicial es cero.','In DG2 a fixed-level side does not fill a dry domain: if the level is above the terrain, start with the sea filled. NASADEM has no bathymetry: at level 0 over a flat 0 m sea the initial depth is zero.')}</p>
+        </fieldset>
         <label style={{display:'block'}}><input type="checkbox" checked={form.nonurban} onChange={e=>set('nonurban',e.target.checked)}/>{t('Declaro que el dominio es no urbano','I declare the domain nonurban')}</label>
         {field('amount',t('Lluvia hipotética (mm)','Hypothetical rainfall (mm)'))}{field('rainDuration',t('Duración lluvia (s)','Rainfall duration (s)'))}{field('seed',t('Semilla del perfil sintético (entero no negativo)','Synthetic profile seed (nonnegative integer)'))}{field('intervals',t('Número de intervalos','Interval count'))}
         {field('duration',t('Duración de simulación (s, máximo 86400)','Simulation duration (s, max 86400)'))}{field('save',t('Intervalo solicitado de guardado (s)','Requested save interval (s)'))}{field('tstep',t('Paso inicial (s)','Initial timestep (s)'))}

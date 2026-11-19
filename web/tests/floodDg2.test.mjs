@@ -101,15 +101,30 @@ test('controller invalidation aborts stale ROI and revokes object URLs; no resul
 const { buildRoiFloodRequest } = await import('../src/utils/floodDg2.ts')
 const tr = es => es
 const square = {type:'Polygon',coordinates:[[[-93.3,16.67],[-93.29,16.67],[-93.29,16.68],[-93.3,16.68],[-93.3,16.67]]]}
-const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundary:'free',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
+const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
 
 test('request builder keeps every previous field and sends an explicitly disabled thin-depth threshold as null', () => {
   assert.deepEqual(buildRoiFloodRequest(filledForm(), square, tr), {roi:square,domain:square,
     rainfall:{amount:20,unit:'mm',duration:600,duration_unit:'s'},
     rainfall_profile:{interval_count:4,seed:7,distribution:'uniform_balanced'},
     terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
-    hydraulics:{manning:.05,initial_condition:'dry_zero_velocity',boundary:'free',infiltration:'unsupported',domain_nonurban:true},
+    hydraulics:{manning:.05,initial_condition:'dry_zero_velocity',boundary:{north:{type:'free'},east:{type:'free'},south:{type:'free'},west:{type:'free'}},infiltration:'unsupported',domain_nonurban:true},
     simulation:{duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null}})
+})
+
+test('request builder sends per-side boundaries with one fixed sea level and a still-water start', () => {
+  const hydraulics = buildRoiFloodRequest(filledForm({boundaryNorth:'closed',boundaryEast:'free',boundarySouth:'fixed_level',boundaryWest:'fixed_level',seaLevel:'0',stillWater:true}), square, tr).hydraulics
+  assert.deepEqual(hydraulics.boundary, {north:{type:'closed'},east:{type:'free'},south:{type:'fixed_level',level_m:0},west:{type:'fixed_level',level_m:0}})
+  assert.equal(hydraulics.initial_condition, 'still_water_at_fixed_level')
+  assert.equal(buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel:'-0.5'}), square, tr).hydraulics.initial_condition, 'dry_zero_velocity')
+})
+
+test('request builder rejects a missing side, a fixed side without a sea level, and a still-water start without a fixed side', () => {
+  assert.throws(() => buildRoiFloodRequest(filledForm({boundaryNorth:''}), square, tr), /frontera/)
+  for (const seaLevel of ['', 'abc', '20000']) {
+    assert.throws(() => buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel}), square, tr), /Nivel del mar/)
+  }
+  assert.throws(() => buildRoiFloodRequest(filledForm({stillWater:true}), square, tr), /nivel fijo/)
 })
 
 test('request builder sends an explicit thin-depth threshold in meters', () => {

@@ -97,6 +97,77 @@ def test_parameter_file_requests_velocity_output_for_flow_arrows():
     assert solver_parameter_file(request).splitlines()[:3] == ['dg2', 'dg2depththresh 0.02', 'voutput']
 
 
+SEA_WEST = {'north': {'type': 'closed'}, 'east': {'type': 'free'}, 'south': {'type': 'closed'},
+            'west': {'type': 'fixed_level', 'level_m': 100.5}}
+
+
+def with_sea(initial='still_water_at_fixed_level', sides=SEA_WEST):
+    p = payload()
+    p['hydraulics'].update(boundary=sides, initial_condition=initial)
+    return p
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['hydraulics'].update(boundary='open'),
+    lambda p: p['hydraulics'].update(initial_condition='still_water_at_fixed_level'),
+    lambda p: p['hydraulics'].update(boundary={**SEA_WEST, 'north': {'type': 'fixed_level', 'level_m': 3}},
+                                     initial_condition='still_water_at_fixed_level'),
+    lambda p: p['hydraulics'].update(initial_condition='wet'),
+])
+def test_boundary_and_initial_condition_must_be_consistent(root, change):
+    p = payload(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+def test_boundary_sides_and_initial_condition_are_recorded_in_state(root):
+    job = start_roi_run('alice', with_sea(), root=root, config=config(), launch=False)
+    assert job['boundary'] == SEA_WEST and job['initial_condition'] == 'still_water_at_fixed_level'
+    legacy = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    assert legacy['boundary'] == {s: {'type': 'free'} for s in ('north', 'east', 'south', 'west')}
+    assert legacy['initial_condition'] == 'dry_zero_velocity'
+
+
+def test_parameter_file_boundary_and_start_directives():
+    closed = payload(); closed['hydraulics']['boundary'] = 'closed'
+    assert 'bcifile' not in solver_parameter_file(validate_roi_run(closed, config()))
+    lines = solver_parameter_file(validate_roi_run(with_sea(), config())).splitlines()
+    assert 'bcifile boundary.bci' in lines and 'startfile initial.wd' in lines
+    assert 'startfile initial.wd' not in solver_parameter_file(validate_roi_run(with_sea('dry_zero_velocity'), config()))
+
+
+def test_native_fixed_level_starts_and_keeps_still_water(root):
+    # Flat 100 m terrain with a west sea at 100.5 m: the whole domain starts 0.5 m deep and must stay at rest.
+    job = start_roi_run('alice', with_sea(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']))
+    assert state['state'] == 'succeeded', state
+    work = root / job['id'] / 'work'
+    bci = (work / 'boundary.bci').read_text().splitlines()
+    assert [line.split()[0] for line in bci] == ['E', 'W'] and bci[1].endswith('HFIX 100.5')
+    assert {'initial.wd', 'initial.wd1x', 'initial.wd1y'} <= set(state['input_hashes'])
+    first = state['result']['frames'][0]['stats']
+    assert first['min_m'] == pytest.approx(.5, abs=1e-3) and first['max_m'] == pytest.approx(.5, abs=1e-3)
+    last = state['result']['frames'][-1]['stats']
+    assert last['max_m'] == pytest.approx(.502, abs=.01)  # 0.5 m sea plus the 2 mm of rain inside the ROI
+    assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05
+
+
+def flat_provider(root, run_id):
+    class Provider:
+        def acquire_roi(self, geometry):
+            cache = root / run_id / 'cache'
+            cache.mkdir(exist_ok=True)
+            records = []
+            for tile in _required_tiles(_validated_geometry(geometry)):
+                path = cache / (tile + '.zip')
+                with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr(tile + '.hgt', np.full((3601,3601), 100, dtype='>i2').tobytes())
+                records.append(NASADEMGranule(tile, 'NASADEM_HGT_' + tile, 'NASADEM_HGT', '001', path))
+            return records
+    return Provider()
+
+
 def test_acquisition_failure_is_terminal_and_sanitized(root):
     class Failed:
         def acquire_roi(self, geometry):

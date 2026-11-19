@@ -45,6 +45,9 @@ def _public(run):
     result = {key: run[key] for key in _FIELDS}
     # Runs created before this field existed used the solver default (thin-depth fallback off).
     result['dg2_depth_thresh_m'] = run.get('dg2_depth_thresh_m')
+    # Runs created before per-side boundaries existed report null; their request is in job.json.
+    result['boundary'] = run.get('boundary')
+    result['initial_condition'] = run.get('initial_condition')
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'

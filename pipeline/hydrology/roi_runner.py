@@ -4,7 +4,9 @@ Payload exacto: roi, domain (GeoJSON Polygon EPSG:4326); rainfall (contrato
 normalize_request); rainfall_profile {interval_count,seed,distribution}; terrain
 {target_crs,resolution_m,resampling}; hydraulics {manning,initial_condition,
 boundary,infiltration,domain_nonurban}; simulation {duration_s,save_interval_s,
-initial_tstep_s}. Ningún path ni binario procede del cliente.
+initial_tstep_s,dg2_depth_thresh_m}. boundary: 'closed', 'free' u objeto por lado
+(north/east/south/west: closed, free o fixed_level con level_m); initial_condition:
+'dry_zero_velocity' o 'still_water_at_fixed_level'. Ningún path ni binario procede del cliente.
 """
 from __future__ import annotations
 
@@ -36,7 +38,8 @@ from .dem_prepared import prepare_dem, _validate_crs
 from .dem_dg2 import prepare_dg2_dem
 from .rainfall import generate_rainfall_profile
 from .rainfall_netcdf import export_rainfall_netcdf
-from .boundaries import format_free_boundary
+from .boundaries import format_boundary, normalize_boundary
+from .initial_state import write_still_water_start
 from .results import summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -152,9 +155,14 @@ def validate_roi_run(payload, limits):
     resolution = _number(t['resolution_m'], 100_000)
     if t['resampling'] not in ('nearest','bilinear'):
         raise ValueError('resampling inválido')
-    if (h['initial_condition'] != 'dry_zero_velocity' or h['boundary'] not in ('closed','free') or
+    if (h['initial_condition'] not in ('dry_zero_velocity','still_water_at_fixed_level') or
             h['infiltration'] != 'unsupported' or h['domain_nonurban'] is not True):
         raise ValueError('hipótesis hidráulicas explícitas requeridas')
+    sides = normalize_boundary(h['boundary'])
+    if h['initial_condition'] == 'still_water_at_fixed_level':
+        levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
+        if len(levels) != 1:
+            raise ValueError('agua en reposo requiere lados de nivel fijo con un único nivel')
     _number(h['manning'], 1)
     duration = _number(s['duration_s'], 86400)
     save = _number(s['save_interval_s'], duration)
@@ -181,7 +189,8 @@ def validate_roi_run(payload, limits):
     generate_rainfall_profile({'roi': payload['roi'], 'rainfall': payload['rainfall']}, **rp)
     return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string()},
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
-                                               'width': width, 'height': height, 'frame_budget': frames}}, allow_nan=False))
+                                               'width': width, 'height': height, 'frame_budget': frames,
+                                               'boundary': sides}}, allow_nan=False))
 
 
 def _directory(root, run_id):
@@ -247,6 +256,8 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'simulation_duration_s':request['simulation']['duration_s'],
              'save_interval_s':request['simulation']['save_interval_s'],
              'dg2_depth_thresh_m':request['simulation']['dg2_depth_thresh_m'],
+             'boundary':request['computed']['boundary'],
+             'initial_condition':request['hydraulics']['initial_condition'],
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+cfg['timeout_s']+30}
     _save(directory,state)
@@ -294,12 +305,22 @@ def _prepare(directory, request, cfg, provider, stage):
     actual = [left,bottom,right,top]
     prepare_dg2_dem(dem, directory / 'dg2', executable=cfg['dem_executable'],vertical_datum='EGM96',
                     code_version=cfg['code_version'],timeout_s=min(cfg['preparation_timeout_s'],120),max_cells=cfg['max_cells'])
-    if request['hydraulics']['boundary']=='free':
-        format_free_boundary(dem,directory/'boundary')
+    if _has_boundary_file(request):
+        format_boundary(dem,directory/'boundary',request['computed']['boundary'])
+    if _still_water(request):
+        write_still_water_start(directory/'dg2',directory/'initial',request['computed']['boundary'],max_cells=cfg['max_cells'])
     profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':request['rainfall']},**request['rainfall_profile'])
     export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
                            max_values=cfg['max_rain_values'])
     return actual
+
+
+def _has_boundary_file(request):
+    return any(spec['type'] != 'closed' for spec in request['computed']['boundary'].values())
+
+
+def _still_water(request):
+    return request['hydraulics']['initial_condition'] == 'still_water_at_fixed_level'
 
 
 def solver_parameter_file(request):
@@ -316,8 +337,11 @@ def solver_parameter_file(request):
                   f'sim_time {s["duration_s"]}\nsaveint {s["save_interval_s"]}\n'
                   f'initial_tstep {s["initial_tstep_s"]}\nfpfric {h["manning"]}\n'
                   'dynamicrainfile rain.nc\n')
-    if h['boundary'] == 'free':
+    if _has_boundary_file(request):
         parameter += 'bcifile boundary.bci\n'
+    if _still_water(request):
+        # DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients) next to it.
+        parameter += 'startfile initial.wd\n'
     return parameter
 
 
@@ -364,14 +388,18 @@ def run_roi_worker(root, run_id, *, provider=None):
         s,h = request['simulation'],request['hydraulics']
         parameter = solver_parameter_file(request)
         work = directory/'work'; work.mkdir(mode=0o700)
-        for name,source in [('terrain.dem',directory/'dg2/terrain.dem'),('terrain.dem1x',directory/'dg2/terrain.dem1x'),
-                            ('terrain.dem1y',directory/'dg2/terrain.dem1y'),('rain.nc',directory/'rain.nc')]+(
-                            [('boundary.bci',directory/'boundary/boundary.bci')] if h['boundary']=='free' else []):
+        sources = [('terrain.dem',directory/'dg2/terrain.dem'),('terrain.dem1x',directory/'dg2/terrain.dem1x'),
+                   ('terrain.dem1y',directory/'dg2/terrain.dem1y'),('rain.nc',directory/'rain.nc')]
+        if _has_boundary_file(request):
+            sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
+        if _still_water(request):
+            sources += [(name,directory/'initial'/name) for name in ('initial.wd','initial.wd1x','initial.wd1y')]
+        for name,source in sources:
             if source.is_symlink() or not source.is_file():
                 raise ValueError('invalid prepared source')
             (work/name).write_bytes(source.read_bytes())
         (work/'roi.par').write_text(parameter)
-        names = ['terrain.dem','terrain.dem1x','terrain.dem1y','rain.nc','roi.par']+(['boundary.bci'] if h['boundary']=='free' else [])
+        names = [name for name,_ in sources]+['roi.par']
         state['input_hashes'] = {name:_sha(work/name) for name in names}
         state['provenance'] = {'terrain':json.loads((directory/'prepared/manifest.json').read_text()),
                                'aligned_terrain_sha256':_sha(directory/'prepared/solver-terrain.tif'),

@@ -34,9 +34,12 @@ def read_depth_ascii(path, max_cells=4_000_000):
     return _read_ascii(path, max_cells, nonnegative=True)
 
 
-def read_velocity_ascii(path, max_cells=4_000_000):
-    """Same ESRI grid contract as depth, but velocity components may be negative."""
+def read_signed_ascii(path, max_cells=4_000_000):
+    """Same ESRI grid contract as depth, but values (velocity, elevation, slopes) may be negative."""
     return _read_ascii(path, max_cells, nonnegative=False)
+
+
+read_velocity_ascii = read_signed_ascii
 
 
 def _read_ascii(path, max_cells, *, nonnegative):
@@ -69,10 +72,10 @@ def _read_ascii(path, max_cells, *, nonnegative):
             try:
                 row = [float(part) for part in parts]
             except ValueError as exc:
-                raise ValueError('invalid depth value' if nonnegative else 'invalid velocity value') from exc
+                raise ValueError('invalid depth value' if nonnegative else 'invalid grid value') from exc
             if any(not math.isfinite(v) or (nonnegative and v != nodata and v < 0) for v in row):
                 raise ValueError('depth must be finite and nonnegative outside nodata' if nonnegative
-                                 else 'velocity must be finite')
+                                 else 'values must be finite')
             rows.append(row)
         if stream.read(1):
             raise ValueError('extra ESRI ASCII data')

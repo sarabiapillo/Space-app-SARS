@@ -1,4 +1,4 @@
-"""Offline writer for explicitly idealized LISFLOOD-FP FREE perimeter boundaries."""
+"""Offline writer for explicit LISFLOOD-FP perimeter boundaries: closed, FREE or fixed level (HFIX)."""
 from __future__ import annotations
 
 import json
@@ -10,12 +10,54 @@ import rasterio
 from pyproj import CRS
 
 
-def format_free_boundary(dem_path, output_dir):
-    """Write four FREE boundaries for every edge of a metric north-up DEM.
+SIDES = ("north", "east", "south", "west")
+_TYPES = ("closed", "free", "fixed_level")
+# Generous bound on a fixed water-surface elevation (metres on the DEM vertical datum).
+MAX_ABS_LEVEL_M = 10_000
 
-    This is a format aid, not a domain/outlet selector or a hydraulic-ready input.
-    The caller explicitly chooses the computational DEM and destination.
+
+def normalize_boundary(value):
+    """Canonical per-side boundary: ``{side: {"type": ...}}`` with ``level_m`` only for fixed_level.
+
+    A string ``"closed"`` or ``"free"`` applies to all four sides (the original contract).
     """
+    if isinstance(value, str) and value in ("closed", "free"):
+        return {side: {"type": value} for side in SIDES}
+    if not isinstance(value, dict) or set(value) != set(SIDES):
+        raise ValueError("boundary must be 'closed', 'free' or an object with north, east, south and west")
+    sides = {}
+    for side in SIDES:
+        spec = value[side]
+        if not isinstance(spec, dict) or spec.get("type") not in _TYPES:
+            raise ValueError(f"{side}: type must be closed, free or fixed_level")
+        if spec["type"] != "fixed_level":
+            if set(spec) != {"type"}:
+                raise ValueError(f"{side}: only fixed_level takes level_m")
+            sides[side] = {"type": spec["type"]}
+            continue
+        level = spec.get("level_m")
+        if (set(spec) != {"type", "level_m"} or isinstance(level, bool) or not isinstance(level, (int, float))
+                or not math.isfinite(level) or abs(level) > MAX_ABS_LEVEL_M):
+            raise ValueError(f"{side}: fixed_level needs a finite level_m in metres")
+        sides[side] = {"type": "fixed_level", "level_m": float(level)}
+    return sides
+
+
+def format_free_boundary(dem_path, output_dir):
+    """Write four FREE boundaries for every edge of a metric north-up DEM."""
+    return format_boundary(dem_path, output_dir, {side: {"type": "free"} for side in SIDES})
+
+
+def format_boundary(dem_path, output_dir, sides):
+    """Write one ``.bci`` line per non-closed side of a metric north-up DEM; closed sides are omitted.
+
+    LISFLOOD-FP treats an edge without a line as a reflective wall. FREE is transmissive (DG2
+    ignores a FREE slope) and HFIX imposes a water-surface elevation in metres on the DEM datum.
+    This is a format aid, not a domain/outlet selector or a hydraulic-ready input.
+    """
+    sides = normalize_boundary(sides)
+    if all(spec["type"] == "closed" for spec in sides.values()):
+        raise ValueError("all sides closed: no boundary file is needed")
     if not isinstance(dem_path, (str, Path)) or not str(dem_path):
         raise ValueError("dem_path must identify a GeoTIFF")
     if not isinstance(output_dir, (str, Path)) or not str(output_dir):
@@ -64,18 +106,35 @@ def format_free_boundary(dem_path, output_dir):
     def coordinate(value):
         return str(int(value)) if float(value).is_integer() else format(value, ".15g")
 
-    bci = (f"N {coordinate(xmin)} {coordinate(xmax)} FREE\n"
-           f"E {coordinate(ymin)} {coordinate(ymax)} FREE\n"
-           f"S {coordinate(xmin)} {coordinate(xmax)} FREE\n"
-           f"W {coordinate(ymin)} {coordinate(ymax)} FREE\n")
+    edges = (("north", "N", xmin, xmax), ("east", "E", ymin, ymax),
+             ("south", "S", xmin, xmax), ("west", "W", ymin, ymax))
+    lines, labels = [], []
+    for side, tag, start, end in edges:
+        spec = sides[side]
+        if spec["type"] == "free":
+            lines.append(f"{tag} {coordinate(start)} {coordinate(end)} FREE\n")
+            labels.append(f"{tag}=FREE")
+        elif spec["type"] == "fixed_level":
+            level = format(spec["level_m"], ".15g")
+            lines.append(f"{tag} {coordinate(start)} {coordinate(end)} HFIX {level}\n")
+            labels.append(f"{tag}=HFIX {level} m")
+        else:
+            labels.append(f"{tag}=closed")
+    bci = "".join(lines)
+    all_free = all(spec["type"] == "free" for spec in sides.values())
     # Verify this unique output target remains absent after raster validation.
     destination.mkdir(parents=False, exist_ok=False)
     (destination / "boundary.bci").write_text(bci, encoding="utf-8")
     manifest = {
         "source": {"path": str(source), "format": "single-band GeoTIFF"},
         "grid": grid,
-        "method": "all four computational DEM edges; FREE without supplied slope",
-        "semantics": "idealized FREE boundary per LISFLOOD-FP 8.0 CPU DG2; not an observed outlet; may permit inflow or outflow",
+        "sides": sides,
+        "method": ("all four computational DEM edges; FREE without supplied slope" if all_free
+                   else "per-side computational DEM edges: " + ", ".join(labels)),
+        "semantics": ("idealized FREE boundary per LISFLOOD-FP 8.0 CPU DG2; not an observed outlet; may permit inflow or outflow"
+                      if all_free else
+                      "LISFLOOD-FP 8.0 CPU DG2: FREE idealized transmissive (slope ignored); HFIX fixed water-surface "
+                      "elevation in metres on the DEM vertical datum; closed sides omitted (reflective wall)"),
         "synthetic": True, "idealized": True, "hydraulic_ready": False,
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
