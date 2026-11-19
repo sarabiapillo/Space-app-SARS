@@ -50,7 +50,7 @@ def product_to_scene(product, maturity: str | None) -> SceneMeta:
 class ASFSource(DataSource):
     name = "asf"
 
-    def __init__(self, max_results: int = 500):
+    def __init__(self, max_results: int | None = 500):
         self.max_results = max_results
 
     def search(self, roi_wkt, product, start=None, end=None):

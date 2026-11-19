@@ -123,8 +123,17 @@ def _local_subset_available(scene_id, roi_wkt, scene=None):
 
 def search_gcov(roi, start=None, end=None):
     roi_wkt = validate_roi(roi)
-    scenes = ASFSource().search(roi_wkt, "GCOV", start=start, end=end)
-    results = [_scene_dict(s, roi_wkt) for s in scenes if s.product == "GCOV"]
+    # An arbitrary product cap could omit the second acquisition date, products
+    # on that date, or matching results from an explicitly requested date range.
+    source = ASFSource(max_results=None)
+    scenes = source.search(roi_wkt, "GCOV", start=start, end=end)
+    gcov_scenes = [scene for scene in scenes if scene.product == "GCOV"]
+    if start is None and end is None:
+        # Acquisition date (not product count/scene ID) is the unit of default recency.
+        latest_dates = sorted({scene.date for scene in gcov_scenes}, reverse=True)[:2]
+        latest_dates = set(latest_dates)
+        gcov_scenes = [scene for scene in gcov_scenes if scene.date in latest_dates]
+    results = [_scene_dict(s, roi_wkt) for s in gcov_scenes]
     return sorted(results, key=lambda x: (x["coverage_pct"] is not None, x["coverage_pct"] or -1,
                                           x["start_time"]), reverse=True)
 
