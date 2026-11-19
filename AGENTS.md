@@ -29,6 +29,7 @@ Se desarrolla para el reto de observación terrestre de NASA Space Apps 2026 (*B
 - `pipeline/sources/subset.py` + `pipeline/download.py`: recorte a la ROI (local o remoto por HTTPS, solo los bloques de la ROI), con verificación de identidad contra el catálogo, cobertura de la ROI y comparación de malla.
 - **Par de trabajo recortado (2026-11-14):** GCOV T62/F10 ASC P05023 PROVISIONAL, 2026-06-18 → 2026-10-16, en `data/raw/` (ver §4). Comparable y con malla idéntica. Aún **no** hay mapa de cambio ni validación.
 - El fenómeno sigue **sin decidir**. Las fuentes auxiliares candidatas están en `docs/metodologia.md`.
+- **Simulación de inundación (línea paralela, exploratoria; estado verificado 2026-11-19):** `pipeline/elevation/nasadem.py` (adquisición NASADEM vía Earthdata) y `pipeline/hydrology/` (DEM métrico → DG2, lluvia sintética reproducible ±10 mm/h exportada a NetCDF, frontera FREE idealizada, adaptador LISFLOOD-FP 8.0.3 DG2 CPU y conversión de salidas a COG). El solver y `generateDG2DEM` están compilados localmente en `data/tools/lisflood-fp-8.0/runtime/build/`, con hashes fijados en `backend/config/flood_service.py`. API Django autenticada: `POST /api/flood-scenarios/roi/start/` y `/api/flood-roi-runs/<uuid>/` (estado, resultados, COG y preview PNG EPSG:3857); el panel web `RainDg2Panel` está conectado a ella (ver `docs/api-simulacion-roi.md`, `docs/configuracion-servicio-inundacion.md` y `docs/features/flood-ui-dg2.tex`). Todo resultado se marca `synthetic` e `hydraulic_accuracy_validated: false`. El 2026-11-19 se completó una simulación real NASADEM (`n16w094`) + DG2 de prueba sobre un dominio de ~1 km² dentro de la ROI, con valores de prueba explícitos y `dg2_depth_thresh_m` (sin él, DG2 produce profundidades negativas en láminas finas). Los presupuestos por defecto solo admiten dominios pequeños (3000 celdas, 120 s de solver); la ROI completa no cabe. **No** existe validación hidráulica.
 
 **Lo más importante que falta:** `preprocess.py` y `change.py` sobre el par de trabajo (paso 5 del plan) y decidir el fenómeno para elegir la fuente de validación (paso 6).
 
@@ -134,6 +135,8 @@ terrapulse/
 │   └── processed/              # GeoTIFF/COG de dB y cambio
 ├── pipeline/                   # Python puro, independiente de Django
 │   ├── sources/                # fuentes intercambiables: base.py (contrato), asf.py, subset.py (recorte .h5 → C1)
+│   ├── elevation/              # proveedor NASADEM (Earthdata) para la simulación de inundación
+│   ├── hydrology/              # DEM DG2, lluvia sintética, fronteras, adaptador LISFLOOD-FP y resultados
 │   ├── catalog.py              # consulta la fuente, agrupa pilas, guarda JSON en data/catalog/
 │   ├── tests/                  # pytest (pytest.ini en la raíz)
 │   ├── download.py             # recorte a la ROI (h5py, local o remoto) → data/raw/<scene_id>/

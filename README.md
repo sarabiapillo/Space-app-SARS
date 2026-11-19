@@ -230,15 +230,19 @@ terrapulse/
 │   ├── download.py      # recorta escenas a la ROI en data/raw/
 │   ├── nisar_h5.py      # lectura por ventanas de los .h5 NISAR
 │   ├── etapa1.py        # inspección de una escena (figuras y control)
+│   ├── elevation/       # proveedor NASADEM para la simulación de inundación
+│   ├── hydrology/       # cadena DG2: DEM, lluvia sintética, solver y resultados
 │   └── sources/         # fuentes de datos intercambiables (ASF) y recorte
 ├── backend/             # Django + GeoDjango + DRF
 │   ├── config/
 │   ├── scenes/
 │   └── analyses/
-└── web/                 # Frontend React + TypeScript + Vite + MapLibre; API aún con mocks
+└── web/                 # Frontend React + TypeScript + Vite + MapLibre; la inundación DG2 usa la API real
 ```
 
-`pipeline/` no depende de Django, así que el procesamiento SAR se puede probar desde la terminal sin levantar el servidor. El [flujo propuesto de simulación DG2 no urbana](docs/flujo-dg2-simulacion-inundacion.tex) reutiliza ese frontend y propone evaluar LISFLOOD-FP como solver externo; todavía no hay simulación hidráulica implementada ni licencia del artefacto verificada.
+`pipeline/` no depende de Django, así que el procesamiento SAR se puede probar desde la terminal sin levantar el servidor.
+
+**Simulación de inundación (exploratoria).** Existe una cadena DG2 no urbana: `pipeline/elevation/` adquiere NASADEM y `pipeline/hydrology/` prepara el DEM DG2, genera lluvia sintética reproducible, ejecuta LISFLOOD-FP 8.0.3 DG2 (CPU, compilado localmente en `data/tools/lisflood-fp-8.0/`; GPLv2, sin redistribuirlo) y convierte las salidas a COG. El backend la expone mediante la API autenticada descrita en [docs/api-simulacion-roi.md](docs/api-simulacion-roi.md) y el panel web *Inundación ROI / DG2* la consume. Configuración y comprobación del servicio: [docs/configuracion-servicio-inundacion.md](docs/configuracion-servicio-inundacion.md). Los resultados son **sintéticos y sin validación hidráulica**. Ya se completó una simulación real NASADEM + DG2 de prueba sobre un dominio de ~1 km²; los presupuestos por defecto solo admiten dominios pequeños, no la ROI completa. Diseño y ecuaciones: [flujo DG2](docs/flujo-dg2-simulacion-inundacion.tex) y [simulación DG2](docs/simulacion-inundacion-dg2.tex).
 
 ## 11. Caso de estudio: ROI y escenas
 

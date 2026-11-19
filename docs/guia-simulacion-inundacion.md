@@ -2,6 +2,8 @@
 
 > **Alcance de este documento:** esta guía existe únicamente para orientar a un agente de IA en la generación e integración de una simulación de inundación dentro de TerraPulse AI. No sustituye la metodología científica del proyecto, la documentación del modelo hidráulico seleccionado ni una validación hidrológica independiente.
 
+> **Estado verificado (2026-11-19):** el mapa de ramas y las fases de abajo describen la propuesta original. Desde entonces ya existen el adaptador DG2, la API autenticada y el panel web; la sección [Estado actual](#estado-actual-que-debe-tenerse-en-cuenta) resume qué está implementado y qué sigue pendiente.
+
 > **Rama de referencia para esta propuesta documental:** `simulacion-inundancion` (observada en `a5d95fc`). El código productor se consulta en sus ramas; esta guía no autoriza fusionarlas, cambiar el checkout de otra persona ni iniciar una simulación.
 
 > **Trabajo paralelo:** las ramas no deben fusionarse como parte de esta guía. El agente debe consumir los contratos y artefactos de las ramas productoras, mantener sus cambios aislados y coordinar cualquier integración mediante Pull Requests aprobados por los equipos responsables.
@@ -99,16 +101,24 @@ La implementación completa debe poder:
 
 ## Estado actual que debe tenerse en cuenta
 
-Ninguna rama contiene todavía una cadena de simulación completa:
+Estado verificado el 2026-11-19 en `feature/flood-ui-dg2`.
 
-- `ETAPA-1` implementa recorte remoto/local e inspección HDF5; ambas funciones también están presentes en `simulacion-inundancion` (incluido `ASFSource.fetch_subset`). Se comprobó C1 para el par GCOV T62/F10 en la ROI, no una entrada hidráulica ni una inundación validada.
-- [`pipeline/web_export.py`](../pipeline/web_export.py) genera PNG para visualizar y COG numéricos en dB para exploración SAR; no convierte salidas DG2 a profundidad en metros. El GDAL del entorno declarado no trae drivers NISAR/HDF5; esos productos se leen con `h5py`.
-- No existen aún módulos finales de preprocesamiento SAR, cambio radar, validación hidráulica o simulación hidráulica en una rama integrada.
-- [`backend/scenes/models.py`](../backend/scenes/models.py) y [`backend/analyses/models.py`](../backend/analyses/models.py) están vacíos.
-- En la rama actual, [`web/`](../web) sí tiene una interfaz React/MapLibre, pero utiliza mocks y almacenamiento local; no está conectada al backend.
+**Implementado (pruebas de software, no validación física):**
+
+- **Adquisición de terreno:** [`pipeline/elevation/nasadem.py`](../pipeline/elevation/nasadem.py) obtiene NASADEM (elevación EGM96, no profundidad) vía Earthdata. Una comprobación real descargó y verificó contra CMR la tesela `n16w094`.
+- **Cadena hidráulica:** [`pipeline/hydrology/`](../pipeline/hydrology) prepara el DEM métrico y sus coeficientes DG2 con la utilidad oficial `generateDG2DEM`, genera lluvia sintética reproducible (±10 mm/h, acumulado conservado, uniforme dentro de la ROI) exportada a NetCDF, formatea una frontera FREE idealizada, ejecuta LISFLOOD-FP 8.0.3 DG2 CPU y convierte las salidas a COG ([`roi_runner.py`](../pipeline/hydrology/roi_runner.py), [`results.py`](../pipeline/hydrology/results.py)).
+- **Solver:** compilado localmente en `data/tools/lisflood-fp-8.0/runtime/build/`; los hashes de `lisflood` y `generateDG2DEM` están fijados en el servidor y no se aceptan rutas ni binarios del cliente.
+- **Backend:** API autenticada y privada por propietario, `POST /api/flood-scenarios/roi/start/` más estado, resultados, COG y preview PNG EPSG:3857 en `/api/flood-roi-runs/<uuid>/` ([contrato](api-simulacion-roi.md), [configuración](configuracion-servicio-inundacion.md)).
+- **Frontend:** el panel *Inundación ROI / DG2* ([`RainDg2Panel.tsx`](../web/src/components/RainDg2Panel.tsx)) exige entradas explícitas, sigue el ciclo de la corrida y muestra los cuadros georreferenciados en MapLibre, con advertencias de lluvia sintética y exactitud no validada.
+
+**Pendiente:**
+
+- Simulación real: el 2026-11-19 se completó una corrida NASADEM (`n16w094`) + DG2 de prueba sobre ~1 km² (1680 celdas de 30 m, 900 s simulados, 59–69 s de solver), con valores de prueba explícitos y `dg2_depth_thresh_m` = 0.02 m. Sin ese umbral DG2 produce profundidades medias negativas en láminas finas y la corrida se rechaza. Los presupuestos por defecto (3000 celdas, 120 s de solver, tope del código) solo admiten dominios pequeños; la ROI de estudio completa no cabe.
+- No hay validación hidráulica, máscara de inundación NISAR ni métricas contra observación (fases 3 y 6).
+- Infiltración no modelada; la frontera FREE es idealizada y no medida; el tiempo de cada cuadro es el programado, no un tiempo físico observado.
 - [`pipeline/config.yaml`](../pipeline/config.yaml) mantiene el fenómeno y los criterios específicos pendientes de verificación.
 
-Por tanto, el agente debe implementar por fases y no simular que existe una infraestructura que aún no está creada.
+Todo resultado actual se marca `synthetic: true` y `hydraulic_accuracy_validated: false`; no presentarlo como inundación observada.
 
 ---
 
