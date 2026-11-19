@@ -25,6 +25,7 @@ import {
   Crosshair,
   Download,
   Droplets,
+  Flame,
   GripHorizontal,
   Hand,
   Monitor,
@@ -131,6 +132,9 @@ interface MapCanvasProps {
   gcovFootprint?: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onDuplicateWithHeatmap?: () => void
+  onDuplicateForWater?: () => void
+  onDuplicateForSeismic?: () => void
 }
 
 interface ViewportMetrics {
@@ -294,6 +298,9 @@ export function MapCanvas({
   gcovFootprint = null,
   onNotify,
   onSelectPresetROI,
+  onDuplicateWithHeatmap,
+  onDuplicateForWater,
+  onDuplicateForSeismic,
 }: MapCanvasProps) {
   const { t, localizeText, language, locale } = useTranslation()
   const displayDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -1135,17 +1142,43 @@ export function MapCanvas({
     const map = mapRef.current
     if (!map || !mapReady) return
     const alpha = opacity / 100
-    // En modo Swipe (t1 ↔ t2) las dos capas coloreadas se dibujan con recorte sincronizado en EPSG:3857
-    const webglOpacity = dateViewMode === 'swipe' || !activeLayerEntry || !imagesReady || (hasAnalysisRoi && roiLayers.loading) ? 0 : alpha
+
+    // Ocultar mapa de calor completamente en pestañas de simulación (Agua / DG2 y Sismo)
+    // para evitar que se quede pegado encima o debajo de las simulaciones.
+    const isWaterTab = activeDockWindow?.kind === 'agua'
+    const isSeismicTab = activeDockWindow?.kind === 'sismo'
+    const hideHeatmap = isWaterTab || isSeismicTab
+
+    const shouldShowNisar =
+      !hideHeatmap &&
+      dateViewMode !== 'swipe' &&
+      Boolean(activeLayerEntry) &&
+      imagesReady &&
+      (!hasAnalysisRoi || !roiLayers.loading) &&
+      opacity > 0
+
+    const webglOpacity = shouldShowNisar ? alpha : 0
 
     if (map.getLayer(NISAR_LAYER)) {
+      map.setLayoutProperty(NISAR_LAYER, 'visibility', shouldShowNisar ? 'visible' : 'none')
       map.setPaintProperty(NISAR_LAYER, 'raster-opacity', webglOpacity)
       map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
     }
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
-      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', alpha * 0.03)
+      map.setLayoutProperty(FOOTPRINT_FILL_LAYER, 'visibility', hideHeatmap || opacity <= 0 ? 'none' : 'visible')
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', hideHeatmap || opacity <= 0 ? 0 : alpha * 0.03)
     }
-  }, [opacity, dateViewMode, mapReady, activeLayerEntry, croppedRegion, hasAnalysisRoi, roiLayers.loading, imagesReady])
+  }, [
+    opacity,
+    dateViewMode,
+    mapReady,
+    activeLayerEntry,
+    croppedRegion,
+    hasAnalysisRoi,
+    roiLayers.loading,
+    imagesReady,
+    activeDockWindow?.kind,
+  ])
 
   // Actualizar fuente `image` de MapLibre con el BlobURL/DataURL coloreado por LUT y `capa.esquinas_lonlat` (EPSG:3857)
   useEffect(() => {
@@ -1345,7 +1378,8 @@ export function MapCanvas({
       Boolean(activeFlood.rasterUrl) &&
       Array.isArray(activeFlood.rasterBounds) &&
       activeFlood.rasterBounds.length === 4 &&
-      activeFlood.showRasterOnMap !== false
+      activeFlood.showRasterOnMap !== false &&
+      activeDockWindow?.kind !== 'sismo'
 
     if (!shouldShow) {
       if (map.getLayer(FLOOD_CALC_LAYER)) {
@@ -1391,6 +1425,7 @@ export function MapCanvas({
             paint: {
               'raster-opacity': opacity,
               'raster-fade-duration': 150,
+              'raster-resampling': 'linear',
             },
           },
           map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
@@ -1407,6 +1442,7 @@ export function MapCanvas({
     activeFlood.waterOpacity,
     activeFlood.compareMode,
     hasCurrentFloodResult,
+    activeDockWindow?.kind,
   ])
 
   const handleFlyToZone = useCallback(
@@ -2051,6 +2087,44 @@ export function MapCanvas({
               </div>
             )}
           </div>
+
+          {hasAnalysisRoi && (
+            <div className="ws-panel-tab-actions">
+              {onDuplicateWithHeatmap && (
+                <button
+                  type="button"
+                  className="ws-tab-action-btn ws-tab-action-btn--heat"
+                  onClick={onDuplicateWithHeatmap}
+                  title={t('Generar una copia de este mapa con el mapa de calor SAR activado', 'Generate a copy of this map with SAR heatmap enabled')}
+                >
+                  <Flame size={12} />
+                  <span>{t('Copia con Calor', 'Copy with Heatmap')}</span>
+                </button>
+              )}
+              {onDuplicateForWater && (
+                <button
+                  type="button"
+                  className="ws-tab-action-btn ws-tab-action-btn--water"
+                  onClick={onDuplicateForWater}
+                  title={t('Generar copia limpia para simulación de agua (DG2) sin mapa de calor', 'Generate clean copy for water simulation (DG2) without heatmap')}
+                >
+                  <Droplets size={12} />
+                  <span>{t('Copia Agua (DG2)', 'Water Copy (DG2)')}</span>
+                </button>
+              )}
+              {onDuplicateForSeismic && (
+                <button
+                  type="button"
+                  className="ws-tab-action-btn ws-tab-action-btn--seismic"
+                  onClick={onDuplicateForSeismic}
+                  title={t('Generar copia limpia para simulación sísmica / terremoto', 'Generate clean copy for seismic / earthquake simulation')}
+                >
+                  <Activity size={12} />
+                  <span>{t('Copia Sismo', 'Seismic Copy')}</span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="ws-panel-tabbar__summary">
@@ -2637,8 +2711,9 @@ export function MapCanvas({
         )}
 
         {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
-        <aside
-          className="comsol-colorbar"
+        {((opacity > 0 && activeDockWindow?.kind === 'map') || solar.enabled) && (
+          <aside
+            className="comsol-colorbar"
           aria-label={activeLayerEntry ? t('Escala radiométrica de la ROI', 'ROI radiometric scale') : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
         >
           <div className="comsol-colorbar__column">
@@ -2718,6 +2793,7 @@ export function MapCanvas({
             </div>
           )}
         </aside>
+        )}
 
         {/* Chip técnico arriba del mapa cuando hay una región recortada activa */}
         {hasActiveCrop && (

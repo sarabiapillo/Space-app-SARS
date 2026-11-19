@@ -147,7 +147,10 @@ def test_preparation_returns_charts_and_saves_copy(tmp_path, monkeypatch):
 
     copy = tmp_path / 'graficas-roi' / 'abc123'
     repo_root = Path(__file__).resolve().parents[2]
-    assert result['copia_disco'] == copy.resolve().relative_to(repo_root).as_posix()
+    resolved_copy = copy.resolve()
+    expected_copy = (resolved_copy.relative_to(repo_root).as_posix()
+                     if resolved_copy.is_relative_to(repo_root) else resolved_copy.as_posix())
+    assert result['copia_disco'] == expected_copy
     assert json.loads((copy / entry['granuleId'] / 'graficas.json').read_text(encoding='utf-8')) == entry['manifest']
     assert (copy / entry['granuleId'] / 'metadatos.json').is_file()
     summary = json.loads((copy / 'roi.json').read_text(encoding='utf-8'))
@@ -334,7 +337,13 @@ def test_pair_workers_process_exact_selected_local_scenes_with_extra_catalog_ent
                for manifest in result['manifests'])
     assert [row['granuleId'] for row in result['charts']] == ids
     assert len(result['timings']['scene_processing_seconds']) == 2
-    assert all((run / 'layers' / scene_id / 'web' / 'capas.json').is_file() for scene_id in ids)
+    for scene_id in ids:
+        scene_dir = run / 'layers' / scene_id
+        assert (scene_dir / 'web' / 'capas.json').is_file()
+        assert list((scene_dir / 'web').glob('*.tif'))
+        assert list((scene_dir / 'web').glob('*.png'))
+        assert (scene_dir / 'graficas.json').is_file()
+        assert json.loads((scene_dir / 'metadatos.json').read_text())['identificacion']['granuleId'] == scene_id
     assert not (run / 'layers' / 'LOCAL_UNSELECTED').exists()
 
 

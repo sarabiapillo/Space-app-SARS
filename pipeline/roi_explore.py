@@ -115,6 +115,7 @@ def prepare(run_dir):
         manifests.append(manifest)
         charts_file = out / 'graficas.json'
         if charts_file.is_file():
+            manifest = manifests[0]
             charts.append({'granuleId': manifest['escena']['granuleId'],
                            'fecha': str(manifest['escena'].get('fecha_inicio', ''))[:10],
                            'manifest': json.loads(charts_file.read_text(encoding='utf-8'))})

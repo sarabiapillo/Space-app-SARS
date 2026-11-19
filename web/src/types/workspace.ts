@@ -171,6 +171,9 @@ export interface FloodSimulationState {
     maxDepthM: number
     meanDepthM: number
     waterSurfaceHa: number
+    permanentWaterAreaKm2?: number
+    overflowVolumeM3?: number
+    overflowAreaKm2?: number
     peakDischargeM3s?: number
     maxVelocityMs?: number
     meanVelocityMs?: number

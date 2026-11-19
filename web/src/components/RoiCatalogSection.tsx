@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   CloudRain,
+  Flame,
   Sun,
   Activity,
   Search,
@@ -20,7 +21,7 @@ import { useTranslation } from '../i18n/useTranslation'
 
 interface RoiCatalogSectionProps {
   activePresetId?: string | null
-  onSelectPreset: (preset: CatalogRoiPreset) => void
+  onSelectPreset: (preset: CatalogRoiPreset, options?: { withHeatmap?: boolean; simulation?: 'flood' | 'solar' | 'seismic' }) => void
   onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
 }
 
@@ -178,7 +179,7 @@ export function RoiCatalogSection({
                 key={preset.id}
                 preset={preset}
                 isActive={activePresetId === preset.id}
-                onSelect={() => onSelectPreset(preset)}
+                onSelect={(opts) => onSelectPreset(preset, opts)}
                 onOpenSimulation={onOpenSimulation}
                 showStateBadge
               />
@@ -232,7 +233,7 @@ export function RoiCatalogSection({
                               key={preset.id}
                               preset={preset}
                               isActive={activePresetId === preset.id}
-                              onSelect={() => onSelectPreset(preset)}
+                              onSelect={(opts) => onSelectPreset(preset, opts)}
                               onOpenSimulation={onOpenSimulation}
                             />
                           ))}
@@ -276,7 +277,7 @@ function RoiPresetCard({
 }: {
   preset: CatalogRoiPreset
   isActive: boolean
-  onSelect: () => void
+  onSelect: (options?: { withHeatmap?: boolean; simulation?: 'flood' | 'solar' | 'seismic' }) => void
   onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
   showStateBadge?: boolean
 }) {
@@ -307,10 +308,19 @@ function RoiPresetCard({
         <button
           type="button"
           className={`roi-card__btn-select ${isActive ? 'is-selected' : ''}`}
-          onClick={onSelect}
-          title={t('Cargar esta ROI en el mapa y centrar', 'Load this ROI on the map and center')}
+          onClick={() => onSelect({ withHeatmap: false })}
+          title={t('Cargar esta ROI limpia sin mapa de calor', 'Load this ROI clean without heatmap')}
         >
           {isActive ? t('✓ ROI Activa', '✓ Active ROI') : t('Seleccionar ROI', 'Select ROI')}
+        </button>
+
+        <button
+          type="button"
+          className="roi-card__sim-btn roi-card__sim-btn--heat"
+          onClick={() => onSelect({ withHeatmap: true })}
+          title={t('Cargar copia con Mapa de Calor SAR activado', 'Load copy with SAR Heatmap enabled')}
+        >
+          <Flame size={12} /> {t('Calor', 'Heat')}
         </button>
 
         {onOpenSimulation && (
@@ -318,9 +328,9 @@ function RoiPresetCard({
             <button
               type="button"
               className="roi-card__sim-btn roi-card__sim-btn--seismic"
-              title={t('Simular terremoto / sismo en esta zona con suelo geológico real', 'Simulate earthquake in this zone with real geological soil')}
+              title={t('Simular terremoto / sismo en esta zona (sin mapa de calor pegado)', 'Simulate earthquake in this zone (without heatmap stuck)')}
               onClick={() => {
-                onSelect()
+                onSelect({ withHeatmap: false, simulation: 'seismic' })
                 onOpenSimulation('seismic', preset)
               }}
             >
@@ -330,9 +340,9 @@ function RoiPresetCard({
               <button
                 type="button"
                 className="roi-card__sim-btn roi-card__sim-btn--flood"
-                title={t('Simular inundación / lluvia en esta zona', 'Simulate flood / rainfall in this zone')}
+                title={t('Simular inundación / lluvia en esta zona (sin mapa de calor pegado)', 'Simulate flood / rainfall in this zone (without heatmap stuck)')}
                 onClick={() => {
-                  onSelect()
+                  onSelect({ withHeatmap: false, simulation: 'flood' })
                   onOpenSimulation('flood', preset)
                 }}
               >
@@ -345,7 +355,7 @@ function RoiPresetCard({
                 className="roi-card__sim-btn roi-card__sim-btn--solar"
                 title={t('Calcular radiación solar en esta zona', 'Calculate solar radiation in this zone')}
                 onClick={() => {
-                  onSelect()
+                  onSelect({ withHeatmap: false, simulation: 'solar' })
                   onOpenSimulation('solar', preset)
                 }}
               >

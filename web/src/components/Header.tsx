@@ -8,6 +8,8 @@ import {
   CloudRain,
   Columns,
   Download,
+  Droplets,
+  Flame,
   Layers,
   PencilRuler,
   Plus,
@@ -53,6 +55,9 @@ interface HeaderProps {
   onToggleFloatingTools: () => void
   isCaptureMode: boolean
   onStartCaptureMode: () => void
+  onDuplicateWithHeatmap?: () => void
+  onDuplicateForWater?: () => void
+  onDuplicateForSeismic?: () => void
   /** Abre la landing institucional del equipo (MonitosCH) sin perder el estado del mapa. */
   onOpenTeamPage: () => void
 }
@@ -157,6 +162,9 @@ export function Header({
   onToggleFloatingTools,
   isCaptureMode,
   onStartCaptureMode,
+  onDuplicateWithHeatmap,
+  onDuplicateForWater,
+  onDuplicateForSeismic,
   onOpenTeamPage,
 }: HeaderProps) {
   const { language, setLanguage, t, localizeText } = useTranslation()
@@ -344,6 +352,43 @@ export function Header({
               <Plus size={14} strokeWidth={2.5} />
               <span>{t('Duplicar Mapa', 'Duplicate Map')}</span>
             </button>
+            {hasConfirmedROI && (
+              <>
+                {onDuplicateWithHeatmap && (
+                  <button
+                    type="button"
+                    className="ws-ribbon__btn ws-ribbon__btn--heat"
+                    onClick={onDuplicateWithHeatmap}
+                    title={t('Generar copia de esta ROI con mapa de calor SAR activado', 'Generate a copy of this ROI with SAR heatmap enabled')}
+                  >
+                    <Flame size={14} />
+                    <span>{t('Copia con Calor', 'Copy with Heatmap')}</span>
+                  </button>
+                )}
+                {onDuplicateForWater && (
+                  <button
+                    type="button"
+                    className="ws-ribbon__btn ws-ribbon__btn--water"
+                    onClick={onDuplicateForWater}
+                    title={t('Generar copia limpia para simulación de agua (DG2) sin mapa de calor', 'Generate clean copy for water simulation (DG2) without heatmap')}
+                  >
+                    <Droplets size={14} />
+                    <span>{t('Copia Agua (DG2)', 'Water Copy (DG2)')}</span>
+                  </button>
+                )}
+                {onDuplicateForSeismic && (
+                  <button
+                    type="button"
+                    className="ws-ribbon__btn ws-ribbon__btn--seismic"
+                    onClick={onDuplicateForSeismic}
+                    title={t('Generar copia limpia para simulación sísmica / terremoto sin mapa de calor', 'Generate clean copy for seismic / earthquake simulation without heatmap')}
+                  >
+                    <Activity size={14} />
+                    <span>{t('Copia Sismo', 'Seismic Copy')}</span>
+                  </button>
+                )}
+              </>
+            )}
           </div>
           <span className="ws-ribbon__label">{t('Espacio de Trabajo', 'Workspace')}</span>
         </div>

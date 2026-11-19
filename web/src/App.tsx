@@ -204,7 +204,10 @@ function App() {
     })
   }
 
-  const handleSelectPresetROI = useCallback((preset: CatalogRoiPreset) => {
+  const handleSelectPresetROI = useCallback((
+    preset: CatalogRoiPreset,
+    options?: { withHeatmap?: boolean; simulation?: 'flood' | 'solar' | 'seismic' }
+  ) => {
     const polygon = presetToRoiPolygon(preset)
     const cropRing = presetToCropRing(preset)
     const metadata = presetToEffectiveMetadata(preset)
@@ -212,25 +215,37 @@ function App() {
     setGcovFootprint(null)
     setLocationPreview(null)
 
+    // Por defecto al cargar un ROI se muestra limpio SIN mapa de calor (opacidadSar = 0).
+    // Si se especifica withHeatmap se activa a 72.
+    const initialOpacity = options?.withHeatmap ? 72 : 0
+
     if (activeCopy) {
       updateMap(activeCopy.id, {
         centro: preset.center,
         zoom: preset.zoom,
+        opacidadSar: initialOpacity,
         effectiveRoi: polygon,
         effectiveRoiMetadata: metadata,
         croppedRegion: cropRing,
-        solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null },
-        ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: false, rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
+        solar: { ...activeCopy.solar, enabled: options?.simulation === 'solar', rasterPreviewUrl: null, rasterBounds: null },
+        ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: options?.simulation === 'flood', rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
         fechaModificacion: new Date().toISOString(),
       })
     } else {
       const newCopy: WorkspaceMap = {
         ...current,
         id: newId(),
-        nombre: `Análisis - ${preset.shortLabel}`,
-        carpeta: 'Mis Análisis',
+        nombre: options?.withHeatmap
+          ? `Mapa de Calor - ${preset.shortLabel}`
+          : options?.simulation === 'flood'
+            ? `Agua DG2 - ${preset.shortLabel}`
+            : options?.simulation === 'seismic'
+              ? `Sismo - ${preset.shortLabel}`
+              : `Análisis - ${preset.shortLabel}`,
+        carpeta: options?.simulation ? 'Zonas de Riesgo' : 'Mis Análisis',
         esEditable: true,
         fechaModificacion: new Date().toISOString(),
+        opacidadSar: initialOpacity,
         centro: preset.center,
         zoom: preset.zoom,
         escena: { ...current.escena },
@@ -238,8 +253,9 @@ function App() {
         croppedRegion: cropRing,
         effectiveRoi: polygon,
         effectiveRoiMetadata: metadata,
-        solar: { ...DEFAULT_SOLAR, enabled: false },
-        flood: { ...DEFAULT_FLOOD, enabled: false },
+        solar: { ...DEFAULT_SOLAR, enabled: options?.simulation === 'solar' },
+        flood: { ...DEFAULT_FLOOD, enabled: options?.simulation === 'flood' },
+        seismic: { ...DEFAULT_SEISMIC, enabled: options?.simulation === 'seismic', epicenter: preset.center },
       }
       addMap(newCopy)
       setActiveCopyId(newCopy.id)
@@ -247,8 +263,21 @@ function App() {
     }
 
     cameraRef.current = { centro: preset.center, zoom: preset.zoom }
-    notify('success', t(`ROI activada: ${preset.name} (${preset.state}).`, `ROI activated: ${preset.name} (${preset.state}).`))
-  }, [activeCopy, current.escena, updateMap, addMap, notify, t])
+
+    if (options?.simulation === 'flood') {
+      handleDockTabChange('rain-dg2')
+      notify('success', t(`ROI activada para Simulación de Agua: ${preset.name} (${preset.state}) sin mapa de calor.`, `ROI activated for Water Simulation: ${preset.name} (${preset.state}) without heatmap.`))
+    } else if (options?.simulation === 'seismic') {
+      handleDockTabChange('seismic')
+      notify('success', t(`ROI activada para Sismo: ${preset.name} (${preset.state}) sin mapa de calor.`, `ROI activated for Seismic: ${preset.name} (${preset.state}) without heatmap.`))
+    } else if (options?.withHeatmap) {
+      handleDockTabChange('map')
+      notify('success', t(`ROI activada con Mapa de Calor: ${preset.name} (${preset.state}).`, `ROI activated with Heatmap: ${preset.name} (${preset.state}).`))
+    } else {
+      handleDockTabChange('map')
+      notify('success', t(`ROI activada (vista limpia sin mapa de calor): ${preset.name} (${preset.state}).`, `ROI activated (clean view without heatmap): ${preset.name} (${preset.state}).`))
+    }
+  }, [activeCopy, current, updateMap, addMap, notify, t, handleDockTabChange])
 
   const handleSolarChange = (nextSolar: SolarSimulationState) => {
     if (isEditing && activeCopy) {
@@ -358,6 +387,82 @@ function App() {
     setDuplicating(false)
   }
 
+  const handleDuplicateWithHeatmap = useCallback(() => {
+    if (!current.effectiveRoi && !current.croppedRegion) {
+      notify('error', t('Selecciona primero una ROI para generar la copia con mapa de calor.', 'Select an ROI first to generate a heatmap copy.'))
+      return
+    }
+    const baseTitle = current.nombre.replace(/^(Copia \d+|Análisis|Mapa de Calor|Agua DG2|Sismo)\s*-\s*/i, '').trim() || 'ROI'
+    const newCopy: WorkspaceMap = {
+      ...current,
+      id: newId(),
+      nombre: `Mapa de Calor - ${baseTitle}`,
+      carpeta: 'Mis Análisis',
+      esEditable: true,
+      opacidadSar: 72,
+      fechaModificacion: new Date().toISOString(),
+    }
+    addMap(newCopy)
+    setActiveCopyId(newCopy.id)
+    setViewMode('editado')
+    handleDockTabChange('map')
+    notify('success', t(`Copia con Mapa de Calor creada: "${newCopy.nombre}".`, `Heatmap copy created: "${newCopy.nombre}".`))
+  }, [current, addMap, notify, t, handleDockTabChange])
+
+  const handleDuplicateForWater = useCallback(() => {
+    if (!current.effectiveRoi && !current.croppedRegion) {
+      notify('error', t('Selecciona primero una ROI para generar la copia de simulación de agua.', 'Select an ROI first to generate a water simulation copy.'))
+      return
+    }
+    const baseTitle = current.nombre.replace(/^(Copia \d+|Análisis|Mapa de Calor|Agua DG2|Sismo)\s*-\s*/i, '').trim() || 'ROI'
+    const newCopy: WorkspaceMap = {
+      ...current,
+      id: newId(),
+      nombre: `Agua DG2 - ${baseTitle}`,
+      carpeta: 'Zonas de Riesgo',
+      esEditable: true,
+      opacidadSar: 0,
+      flood: {
+        ...(current.flood || DEFAULT_FLOOD),
+        enabled: true,
+        compareMode: false,
+      },
+      fechaModificacion: new Date().toISOString(),
+    }
+    addMap(newCopy)
+    setActiveCopyId(newCopy.id)
+    setViewMode('editado')
+    handleDockTabChange('rain-dg2')
+    notify('success', t(`Copia limpia para Simulación de Agua creada: "${newCopy.nombre}" (sin mapa de calor).`, `Clean copy for Water Simulation created: "${newCopy.nombre}" (without heatmap).`))
+  }, [current, addMap, notify, t, handleDockTabChange])
+
+  const handleDuplicateForSeismic = useCallback(() => {
+    if (!current.effectiveRoi && !current.croppedRegion) {
+      notify('error', t('Selecciona primero una ROI para generar la copia sísmica.', 'Select an ROI first to generate a seismic copy.'))
+      return
+    }
+    const baseTitle = current.nombre.replace(/^(Copia \d+|Análisis|Mapa de Calor|Agua DG2|Sismo)\s*-\s*/i, '').trim() || 'ROI'
+    const newCopy: WorkspaceMap = {
+      ...current,
+      id: newId(),
+      nombre: `Sismo - ${baseTitle}`,
+      carpeta: 'Zonas de Riesgo',
+      esEditable: true,
+      opacidadSar: 0,
+      seismic: {
+        ...(current.seismic || DEFAULT_SEISMIC),
+        enabled: true,
+        epicenter: current.centro,
+      },
+      fechaModificacion: new Date().toISOString(),
+    }
+    addMap(newCopy)
+    setActiveCopyId(newCopy.id)
+    setViewMode('editado')
+    handleDockTabChange('seismic')
+    notify('success', t(`Copia limpia para Simulación Sísmica creada: "${newCopy.nombre}" (sin mapa de calor).`, `Clean copy for Seismic Simulation created: "${newCopy.nombre}" (without heatmap).`))
+  }, [current, addMap, notify, t, handleDockTabChange])
+
   const handleExportJson = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
@@ -405,6 +510,9 @@ function App() {
         onToggleFloatingTools={() => setFloatingToolsOpen((prev) => !prev)}
         isCaptureMode={isCaptureMode}
         onStartCaptureMode={() => setIsCaptureMode((prev) => !prev)}
+        onDuplicateWithHeatmap={handleDuplicateWithHeatmap}
+        onDuplicateForWater={handleDuplicateForWater}
+        onDuplicateForSeismic={handleDuplicateForSeismic}
         onOpenTeamPage={() => setTeamPageOpen(true)}
       />
 
@@ -437,6 +545,7 @@ function App() {
                 carpeta: 'Mis Análisis',
                 esEditable: true,
                 fechaModificacion: new Date().toISOString(),
+                opacidadSar: 0,
                 croppedRegion: cropRing,
                 effectiveRoi: geometry,
                 effectiveRoiMetadata: metadata,
@@ -452,6 +561,7 @@ function App() {
             updateMap(activeCopy.id, {
               effectiveRoi: geometry, effectiveRoiMetadata: metadata,
               croppedRegion: cropRing,
+              opacidadSar: 0,
               solar: { ...activeCopy.solar, enabled: false, rasterPreviewUrl: null, rasterBounds: null },
               ...(activeCopy.flood ? { flood: { ...activeCopy.flood, enabled: false, rasterUrl: null, rasterBounds: null, stats: null, charts: null, resultRoiKey: undefined, compareMode: false } } : {}),
               fechaModificacion: new Date().toISOString(),
@@ -507,6 +617,9 @@ function App() {
           gcovFootprint={gcovFootprint}
           onNotify={notify}
           onSelectPresetROI={handleSelectPresetROI}
+          onDuplicateWithHeatmap={handleDuplicateWithHeatmap}
+          onDuplicateForWater={handleDuplicateForWater}
+          onDuplicateForSeismic={handleDuplicateForSeismic}
         />
       </div>
 

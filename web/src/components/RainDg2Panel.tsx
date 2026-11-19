@@ -542,6 +542,34 @@ export function RainDg2Panel({
                     </span>
                   </div>
 
+                  <div className="ws-rain-result-box" style={{ borderLeft: '3px solid #0284c7' }}>
+                    <span className="ws-rain-result-box__label">{t('Cuerpos de Agua Detectados', 'Detected Water Bodies')}</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#0369a1' }}>
+                      {flood.stats.permanentWaterAreaKm2 !== undefined && flood.stats.permanentWaterAreaKm2 > 0
+                        ? `${flood.stats.permanentWaterAreaKm2} km²`
+                        : t('Sin embalses mayores', 'No major reservoirs')}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      {flood.stats.permanentWaterAreaKm2 !== undefined && flood.stats.permanentWaterAreaKm2 > 0
+                        ? t('Presas / lagos / cauces perennes', 'Dams / lakes / perennial rivers')
+                        : t('Detección geomorfológica ∇z < 0.004 m/m', 'Geomorphologic detection ∇z < 0.004 m/m')}
+                    </span>
+                  </div>
+
+                  <div className="ws-rain-result-box" style={{ borderLeft: '3px solid #f97316' }}>
+                    <span className="ws-rain-result-box__label">{t('Desbordamiento Fluvial', 'River Overtopping / Flood')}</span>
+                    <strong className="ws-rain-result-box__val" style={{ color: '#c2410c' }}>
+                      {flood.stats.overflowAreaKm2 !== undefined && flood.stats.overflowAreaKm2 > 0
+                        ? `${flood.stats.overflowAreaKm2} km²`
+                        : t('Flujo en cauce', 'Confined in channel')}
+                    </strong>
+                    <span className="ws-rain-result-box__sub">
+                      {flood.stats.overflowVolumeM3 !== undefined && flood.stats.overflowVolumeM3 > 0
+                        ? `${(flood.stats.overflowVolumeM3 / 1000).toFixed(1)} dam³ ${t('desbordados a llanura', 'spilled to floodplain')}`
+                        : t('Capacidad de banca suficiente (Q ≤ Q_bank)', 'Bankfull capacity sufficient (Q ≤ Q_bank)')}
+                    </span>
+                  </div>
+
                   <div className="ws-rain-result-box">
                     <span className="ws-rain-result-box__label">{t('Cota Superficie Agua', 'Water surface elevation')}</span>
                     <strong className="ws-rain-result-box__val">
@@ -622,6 +650,18 @@ export function RainDg2Panel({
                   <div className="ws-rain-eq-item">
                     <span>{t('7. Forzamiento Barométrico Hidrostático (Bajas Presiones):', '7. Hydrostatic barometric forcing (low pressure):')}</span>
                     <code>Δh_baro = (1013.25 - P_baro) / (ρ_w · g)  [{t('+1.02 cm por hPa de caída', '+1.02 cm per hPa drop')}]</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>{t('8. Capacidad de Banca Fluvial y Desbordamiento (Leopold-Maddock):', '8. Bankfull capacity and overtopping (Leopold-Maddock):')}</span>
+                    <code>Q_bank = (1/n) · A_b · R_b^(2/3) · S^(1/2)  |  Q_desborde = max(0, Q - Q_bank)</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>{t('9. Propagación de Desbordamiento Lateral a Llanura Aluvial:', '9. Lateral overtopping flood propagation to floodplain:')}</span>
+                    <code>η_desborde = z_cauce + H_bank + h_over  →  h_llanura = max(0, η_desborde - z_terreno)</code>
+                  </div>
+                  <div className="ws-rain-eq-item">
+                    <span>{t('10. Detección Geomorfológica de Cuerpos de Agua Permanentes:', '10. Geomorphological detection of permanent water bodies:')}</span>
+                    <code>Máscara Hídrica = (‖∇z‖ &lt; 0.0045 m/m) ∧ (Var(z) &lt; 0.6 m) ∧ (Área &gt; 0.03 km²)</code>
                   </div>
                 </div>
               )}
