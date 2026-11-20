@@ -38,7 +38,7 @@ from pipeline.elevation.nasadem import NASADEMProvider, _required_tiles
 from .inputs import normalize_request, validate_roi
 from .dem_prepared import prepare_dem, _validate_crs
 from .dem_dg2 import prepare_dg2_dem
-from .rainfall import generate_rainfall_profile
+from .rainfall import generate_rainfall_profile, observed_rainfall_profile
 from .rainfall_netcdf import export_rainfall_netcdf
 from .boundaries import format_boundary, normalize_boundary
 from .initial_state import write_still_water_start
@@ -156,7 +156,10 @@ def validate_roi_run(payload, limits):
         raise ValueError('JSON inválido') from None
     validate_roi(payload['roi']); validate_roi(payload['domain'])
     _keys(payload['terrain'], {'target_crs','resolution_m','resampling'})
-    _keys(payload['rainfall_profile'], {'interval_count','seed','distribution'})
+    observed = isinstance(payload['rainfall_profile'], dict) and payload['rainfall_profile'].get('source') == 'observed'
+    _keys(payload['rainfall_profile'], {'source','segments','provenance'} if observed else {'interval_count','seed','distribution'})
+    if observed and not isinstance(payload['rainfall_profile']['provenance'], dict):
+        raise ValueError('lluvia observada requiere su procedencia')
     hydraulic_keys = {'manning','initial_condition','boundary','infiltration','domain_nonurban'}
     if (not isinstance(payload['hydraulics'], dict) or not hydraulic_keys <= set(payload['hydraulics'])
             or not set(payload['hydraulics']) <= hydraulic_keys | {'atmospheric_pressure_hpa', 'lakes'}):
@@ -206,16 +209,19 @@ def validate_roi_run(payload, limits):
     coefficient = runoff_coefficient(normalized['rainfall']['duration_s']) if h['infiltration'] == 'runoff_coefficient' else None
     losses = {'infiltration': h['infiltration'], 'runoff_coefficient': coefficient,
               'atmospheric_pressure_hpa': pressure, 'barometric_surge_m': surge}
-    if isinstance(rp['seed'], bool) or not isinstance(rp['seed'], int) or abs(rp['seed']) > 2**53:
-        raise ValueError('seed fuera de rango')
-    count = _number(rp['interval_count'], 10000, integer=True)
-    if count < 2 or count % 2 or rp['distribution'] != 'uniform_balanced':
-        raise ValueError('perfil no admitido')
+    if observed:
+        count = len(rp['segments']) if isinstance(rp['segments'], list) else 0
+    else:
+        if isinstance(rp['seed'], bool) or not isinstance(rp['seed'], int) or abs(rp['seed']) > 2**53:
+            raise ValueError('seed fuera de rango')
+        count = _number(rp['interval_count'], 10000, integer=True)
+        if count < 2 or count % 2 or rp['distribution'] != 'uniform_balanced':
+            raise ValueError('perfil no admitido')
     geography, extent, width, height = _geometry(payload, crs, resolution, limits['max_cells'], limits['max_tiles'])
     if (count + 2)*width*height > limits['max_rain_values'] or frames*width*height > limits['max_rain_values']:
         raise ValueError('presupuesto acumulado de datos excedido')
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
-    generate_rainfall_profile({'roi': payload['roi'], 'rainfall': _solver_rainfall(payload['rainfall'], losses)}, **rp)
+    _rain_profile(payload, losses)
     return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string()},
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
                                                'width': width, 'height': height, 'frame_budget': frames,
@@ -282,7 +288,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
     directory.mkdir(mode=0o700)
     (directory / 'job.json').write_text(json.dumps({'payload':request,'config':cfg}, allow_nan=False), encoding='utf-8')
     state = {'id':run_id,'owner':owner,'case_id':'roi','state':'created','stage':'created',
-             'synthetic':True,'hydraulic_accuracy_validated':False,
+             'synthetic':request['rainfall_profile'].get('source') != 'observed','hydraulic_accuracy_validated':False,
              'simulation_duration_s':request['simulation']['duration_s'],
              'save_interval_s':request['simulation']['save_interval_s'],
              'dg2_depth_thresh_m':request['simulation']['dg2_depth_thresh_m'],
@@ -354,8 +360,7 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         write_still_water_start(directory/'dg2',directory/'initial',
                                 request['computed']['solver_boundary'] if _still_water(request) else None,
                                 max_cells=cfg['max_cells'],lake_depth=lake_depth)
-    rainfall = _solver_rainfall(request['rainfall'],request['computed']['losses'])
-    profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':rainfall},**request['rainfall_profile'])
+    profile = _rain_profile(request, request['computed']['losses'])
     export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
                            max_values=cfg['max_rain_values'])
     # OpenStreetMap roads for road-cut indicators; optional: an Overpass failure never stops the run.
@@ -365,6 +370,23 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         roads = {'roads': None, 'reason': 'unavailable'}
     (directory/'roads.json').write_text(json.dumps(roads, allow_nan=False))
     return actual
+
+
+def _rain_profile(request, losses):
+    """Rain profile the solver receives: synthetic from ``rainfall``, or an observed series (e.g. IMERG).
+
+    An observed series must add up to the declared ``rainfall`` amount over the declared duration.
+    """
+    rp = request['rainfall_profile']
+    if rp.get('source') != 'observed':
+        return generate_rainfall_profile({'roi': request['roi'], 'rainfall': _solver_rainfall(request['rainfall'], losses)}, **rp)
+    declared = normalize_request({'roi': request['roi'], 'rainfall': request['rainfall']})['rainfall']
+    series = observed_rainfall_profile(request['roi'], rp['segments'], rp['provenance'])['rainfall']
+    if (not math.isclose(series['amount_m'], declared['amount_m'], rel_tol=1e-9, abs_tol=1e-12)
+            or not math.isclose(series['duration_s'], declared['duration_s'], rel_tol=1e-12)):
+        raise ValueError('rainfall debe coincidir con el total y la duración de la serie observada')
+    return observed_rainfall_profile(request['roi'], rp['segments'], rp['provenance'],
+                                     scale=losses['runoff_coefficient'] or 1.0)
 
 
 def _solver_rainfall(rainfall, losses):

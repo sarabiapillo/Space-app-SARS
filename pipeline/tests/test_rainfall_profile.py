@@ -90,3 +90,41 @@ def test_rejects_actual_interval_underflow():
     tiny = payload({"intensity": 1e300, "intensity_unit": "mm/s", "duration": 1e-320, "duration_unit": "s"})
     with pytest.raises(ValueError):
         generate_rainfall_profile(tiny, interval_count=10000, seed=1, distribution="uniform_balanced")
+
+
+OBSERVED = [{"start_s": 0, "end_s": 1800, "mm": 3.0}, {"start_s": 1800, "end_s": 3600, "mm": 0.0},
+            {"start_s": 3600, "end_s": 5400, "mm": 9.0}]
+SOURCE = {"product": "GPM_3IMERGHHL", "version": "07"}
+
+
+def test_observed_profile_keeps_the_rain_of_each_interval_and_its_source():
+    from pipeline.hydrology.rainfall import observed_rainfall_profile
+    profile = observed_rainfall_profile(ROI, OBSERVED, SOURCE)
+    depths = [s["intensity_m_s"] * (s["end_s"] - s["start_s"]) for s in profile["segments"]]
+    assert depths == pytest.approx([.003, 0, .009])
+    assert [(s["start_s"], s["end_s"]) for s in profile["segments"]] == [(0, 1800), (1800, 3600), (3600, 5400)]
+    assert profile["rainfall"]["amount_m"] == pytest.approx(.012) and profile["rainfall"]["duration_s"] == 5400
+    assert profile["synthetic"] is False and profile["observed"] is True and not profile["hydraulic_ready"]
+    assert profile["source"] == SOURCE and profile["scale"] == 1.0 and profile["roi"] == ROI
+
+
+def test_observed_profile_scales_the_rain_by_the_runoff_coefficient():
+    from pipeline.hydrology.rainfall import observed_rainfall_profile
+    profile = observed_rainfall_profile(ROI, OBSERVED, SOURCE, scale=.5)
+    assert profile["rainfall"]["amount_m"] == pytest.approx(.006) and profile["scale"] == .5
+
+
+@pytest.mark.parametrize("segments", [
+    [],
+    [{"start_s": 0, "end_s": 1800, "mm": -1}],
+    [{"start_s": 60, "end_s": 1800, "mm": 1}],
+    [{"start_s": 0, "end_s": 1800, "mm": 1}, {"start_s": 2000, "end_s": 3600, "mm": 1}],
+    [{"start_s": 0, "end_s": 1800, "mm": float("nan")}],
+    [{"start_s": 0, "end_s": 1800, "mm": True}],
+    [{"start_s": 0, "end_s": 1800}],
+    [{"start_s": i, "end_s": i + 1, "mm": 0} for i in range(10_001)],
+])
+def test_observed_profile_rejects_invalid_series(segments):
+    from pipeline.hydrology.rainfall import observed_rainfall_profile
+    with pytest.raises(ValueError):
+        observed_rainfall_profile(ROI, segments, SOURCE)

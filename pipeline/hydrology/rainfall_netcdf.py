@@ -1,4 +1,4 @@
-"""Export synthetic rainfall profiles to the native DG2 CPU NetCDF forcing layout."""
+"""Export synthetic or observed rainfall profiles to the native DG2 CPU NetCDF forcing layout."""
 from __future__ import annotations
 
 import hashlib
@@ -31,8 +31,9 @@ def export_rainfall_netcdf(profile, dem_path, output_path, *, simulation_duratio
     ``simulation_duration_s`` is explicit, covers all rain, and can extend the dry tail.
     This only exports forcing; it does not prepare or run a hydraulic simulation.
     """
-    if not isinstance(profile, dict) or profile.get("synthetic") is not True or profile.get("hydraulic_ready") is not False:
-        raise ValueError("profile must be a synthetic, non-hydraulic-ready rainfall profile")
+    if (not isinstance(profile, dict) or profile.get("hydraulic_ready") is not False
+            or not (profile.get("synthetic") is True or (profile.get("synthetic") is False and profile.get("observed") is True))):
+        raise ValueError("profile must be a synthetic or observed, non-hydraulic-ready rainfall profile")
     roi = validate_roi(profile.get("roi"))
     if isinstance(simulation_duration_s, bool) or not isinstance(simulation_duration_s, (int, float)):
         raise ValueError("simulation_duration_s must be finite and positive")
@@ -147,7 +148,7 @@ def export_rainfall_netcdf(profile, dem_path, output_path, *, simulation_duratio
                 "profile_sha256": profile_digest, "profile": profile,
                 "dem": {"path": dem_path.name, "sha256": dem_digest, "crs": dem_crs, "transform": dem_transform,
                         "width": width, "height": height, "mask_policy": "selected centers require finite DEM elevation"},
-                "synthetic": True, "hydraulic_ready": False}
+                "synthetic": profile["synthetic"], "observed": profile.get("observed", False), "hydraulic_ready": False}
 
     try:
         from scipy.io import netcdf_file

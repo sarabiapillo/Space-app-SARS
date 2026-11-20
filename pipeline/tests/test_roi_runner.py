@@ -319,3 +319,46 @@ def test_native_roi_dem_rain_and_depth_cogs(root):
         assert len(artifact['geographic_bounds']) == 4
     assert state['input_hashes']['rain.nc'] == sha(work / 'rain.nc')
     assert get_roi_run(root, run_id) == state
+
+
+def observed(p=None, segments=None, amount=2, duration=2):
+    p = p or payload()
+    p['rainfall'] = {'amount': amount, 'unit': 'mm', 'duration': duration, 'duration_unit': 's'}
+    p['rainfall_profile'] = {'source': 'observed', 'provenance': {'product': 'GPM_3IMERGHHL', 'granules': ['G0', 'G1']},
+                             'segments': segments or [{'start_s': 0, 'end_s': 1, 'mm': 1.5}, {'start_s': 1, 'end_s': 2, 'mm': .5}]}
+    return p
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['rainfall'].update(amount=3),  # does not match the series total
+    lambda p: p['rainfall'].update(duration=1.5),  # does not match the series end
+    lambda p: p['rainfall_profile'].update(seed=7),  # mixes synthetic and observed keys
+    lambda p: p['rainfall_profile'].update(provenance='IMERG'),
+    lambda p: p['rainfall_profile']['segments'][1].update(start_s=1.2),
+    lambda p: p['rainfall_profile'].update(source='radar'),
+])
+def test_observed_rain_must_match_the_declared_total_and_be_a_valid_series(root, change):
+    p = observed(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+def test_observed_rain_run_is_not_synthetic(root):
+    job = start_roi_run('alice', observed(), root=root, config=config(), launch=False)
+    assert job['synthetic'] is False and not job['hydraulic_accuracy_validated']
+    assert start_roi_run('alice', payload(), root=root, config=config(), launch=False)['synthetic'] is True
+
+
+def test_native_observed_rain_reaches_the_solver_interval_by_interval(root):
+    p = observed(); p['hydraulics'].update(infiltration='runoff_coefficient')
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    coefficient = job['losses']['runoff_coefficient']
+    with netcdf_file(root / job['id'] / 'rain.nc', 'r', mmap=False) as nc:
+        rain = nc.variables['rainfall_depth'][:].copy()
+    assert rain[0].max() == pytest.approx(1.5 * coefficient) and rain[1].max() == pytest.approx(.5 * coefficient)
+    rain_source = state['provenance']['rain']
+    assert rain_source['observed'] is True and rain_source['synthetic'] is False
+    assert rain_source['profile']['source']['product'] == 'GPM_3IMERGHHL'

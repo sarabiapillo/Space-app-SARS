@@ -52,6 +52,24 @@ Se portaron del simulador de inundación de la rama `terrapulseai_v2.1` (`backen
 
 El estado de la corrida devuelve `losses` = `{infiltration, runoff_coefficient, atmospheric_pressure_hpa, barometric_surge_m}` (`null` en corridas anteriores). El hietograma de resultados muestra la lluvia que recibió el solver, es decir, la efectiva cuando hay coeficiente.
 
+### Lluvia observada (validación)
+
+El uso normal es la lluvia hipotética. Para validar el simulador contra un evento real, `rainfall_profile` acepta también una serie observada:
+
+```json
+"rainfall": {"amount":2,"unit":"mm","duration":3600,"duration_unit":"s"},
+"rainfall_profile": {"source":"observed","provenance":{"product":"GPM_3IMERGHHL"},
+  "segments":[{"start_s":0,"end_s":1800,"mm":1.5},{"start_s":1800,"end_s":3600,"mm":0.5}]}
+```
+
+- `segments`: lluvia en mm por intervalo, contiguos desde 0 s, a lo sumo 10 000. Se aplica uniforme en la ROI.
+- `rainfall` debe coincidir con el total y la duración de la serie; si no, la solicitud se rechaza.
+- `provenance`: objeto obligatorio con el origen de la serie.
+- Con `infiltration: "runoff_coefficient"`, cada intervalo se multiplica por C.
+- La corrida queda con `synthetic: false`, y la procedencia de la lluvia guarda `observed: true` y la serie.
+
+Para obtener la serie de IMERG cada 30 min sobre el dominio, se usa `python -m pipeline.hydrology.imerg <oeste> <sur> <este> <norte> <inicio_utc> <fin_utc> <salida.json>`. Calcula la media de las celdas de 0.1° que tocan el dominio. Por defecto usa `GPM_3IMERGHHL` (IMERG Late, sin ajuste con pluviómetros), porque IMERG Final llega unos 3.5 meses tarde. Hace falta autorizar GES DISC en el perfil de Earthdata.
+
 ## Respuestas y animación
 
 `202` (valores ilustrativos; UUID asignado por servidor):

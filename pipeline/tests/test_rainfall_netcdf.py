@@ -203,3 +203,20 @@ def test_duration_overflow_is_value_error(tmp_path, dem):
     with pytest.raises(ValueError):
         export_rainfall_netcdf(profile(), dem, tmp_path / "overflow.nc",
                                simulation_duration_s=10**10000, max_values=100000)
+
+
+def test_observed_profile_exports_each_interval_and_is_marked_observed(dem, tmp_path):
+    from pipeline.hydrology.rainfall import observed_rainfall_profile
+    observed = observed_rainfall_profile(ROI, [{"start_s": 0, "end_s": 1800, "mm": 3.0},
+                                               {"start_s": 1800, "end_s": 3600, "mm": 7.5}], {"product": "GPM_3IMERGHHL"})
+    manifest = json.loads(export_rainfall_netcdf(observed, dem, tmp_path / "rain.nc", simulation_duration_s=3600).read_text())
+    assert manifest["synthetic"] is False and manifest["observed"] is True
+    with netcdf_file(tmp_path / "rain.nc", "r", mmap=False) as nc:
+        rain = nc.variables["rainfall_depth"][:].copy()
+    assert rain[0].max() == pytest.approx(3.0) and rain[1].max() == pytest.approx(7.5)
+
+
+def test_a_profile_neither_synthetic_nor_observed_is_still_rejected(dem, tmp_path):
+    unflagged = {**profile(), "synthetic": False}
+    with pytest.raises(ValueError):
+        export_rainfall_netcdf(unflagged, dem, tmp_path / "rain.nc", simulation_duration_s=7200)

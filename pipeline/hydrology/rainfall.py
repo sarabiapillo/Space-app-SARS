@@ -65,3 +65,39 @@ def generate_rainfall_profile(payload, *, interval_count, seed, distribution):
         "synthetic": True,
         "hydraulic_ready": False,
     }
+
+
+def observed_rainfall_profile(roi, segments, source, *, scale=1.0):
+    """Profile from an observed rain series (e.g. IMERG): one segment per interval, uniform over the ROI.
+
+    ``segments`` are ``{start_s, end_s, mm}``: contiguous, starting at 0, at most 10,000. ``scale``
+    multiplies the rain the solver receives (the runoff coefficient when infiltration is on).
+    """
+    if not isinstance(segments, list) or not segments or len(segments) > MAX_INTERVALS:
+        raise ValueError(f"la serie observada necesita entre 1 y {MAX_INTERVALS} intervalos")
+    if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale) or not 0 < scale <= 1:
+        raise ValueError("scale debe estar en (0, 1]")
+    parsed, previous_end = [], 0.0
+    for segment in segments:
+        if not isinstance(segment, dict) or set(segment) != {"start_s", "end_s", "mm"}:
+            raise ValueError("intervalo observado inválido")
+        values = [segment[key] for key in ("start_s", "end_s", "mm")]
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values):
+            raise ValueError("intervalo observado inválido")
+        start, end, mm = (float(v) for v in values)
+        if start != previous_end or end <= start or mm < 0:
+            raise ValueError("la serie observada debe empezar en 0, ser contigua y no negativa")
+        parsed.append((start, end, mm * scale / 1000.0))
+        previous_end = end
+    amount = math.fsum(depth for _, _, depth in parsed)
+    return {
+        "rainfall": {"mode": "observed", "amount_m": amount, "duration_s": previous_end,
+                     "mean_intensity_m_s": amount / previous_end},
+        "roi": roi,
+        "segments": [{"start_s": start, "end_s": end, "intensity_m_s": depth / (end - start)} for start, end, depth in parsed],
+        "source": source,
+        "scale": float(scale),
+        "synthetic": False,
+        "observed": True,
+        "hydraulic_ready": False,
+    }
