@@ -12,6 +12,7 @@ import rasterio
 from scipy.io import netcdf_file
 
 from pipeline.elevation.nasadem import NASADEMGranule, _required_tiles, _validated_geometry
+from pipeline.hydrology.results import NegativeDepthArtifacts, summarize_results
 from pipeline.hydrology.roi_runner import validate_roi_run, start_roi_run, run_roi_worker, get_roi_run, solver_parameter_file
 
 BASE = Path(__file__).resolve().parents[2] / 'data/test-runs'
@@ -63,6 +64,11 @@ def root():
     lambda p: p['simulation'].update(dg2_depth_thresh_m=True),
     lambda p: p['simulation'].update(dg2_depth_thresh_m='0.02'),
     lambda p: p['simulation'].update(dg2_depth_thresh_m=float('nan')),
+    lambda p: p['simulation'].update(solver='fv2'),
+    lambda p: p['simulation'].update(solver=None),
+    lambda p: p['simulation'].update(solver='FV1'),
+    lambda p: p['simulation'].update(solver=True),
+    lambda p: p['simulation'].update(solver='fv1', dg2_depth_thresh_m=.02),
 ])
 def test_bad_input_never_creates_jobs(root, change):
     p = payload(); change(p)
@@ -91,6 +97,41 @@ def test_parameter_file_without_threshold_keeps_previous_directives():
     assert solver_parameter_file(request) == ('dg2\nvoutput\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
                                               'sim_time 2\nsaveint 1\ninitial_tstep 0.1\nfpfric 0.02\n'
                                               'dynamicrainfile rain.nc\nbcifile boundary.bci\n')
+
+
+def test_parameter_file_with_explicit_dg2_equals_a_payload_without_solver():
+    explicit = payload(); explicit['simulation']['solver'] = 'dg2'
+    assert solver_parameter_file(validate_roi_run(explicit, config())) == solver_parameter_file(validate_roi_run(payload(), config()))
+
+
+def fv1(p=None):
+    p = p or payload()
+    p['simulation']['solver'] = 'fv1'
+    return p
+
+
+def test_parameter_file_uses_the_fv1_keyword_without_thin_depth_threshold():
+    assert solver_parameter_file(validate_roi_run(fv1(), config())) == (
+        'fv1\nvoutput\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
+        'sim_time 2\nsaveint 1\ninitial_tstep 0.1\nfpfric 0.02\n'
+        'dynamicrainfile rain.nc\nbcifile boundary.bci\n')
+
+
+def test_fv1_rejects_a_thin_depth_threshold_with_a_clear_message(root):
+    p = fv1(); p['simulation']['dg2_depth_thresh_m'] = .02
+    with pytest.raises(ValueError, match='dg2_depth_thresh_m'):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+@pytest.mark.parametrize('body, solver', [(payload, 'dg2'), (fv1, 'fv1')])
+def test_requested_solver_is_recorded_in_state_and_the_deadline_covers_two_attempts(root, body, solver):
+    import time
+    before = time.time()
+    job = start_roi_run('alice', body(), root=root, config=config(), launch=False)
+    assert (job['requested_solver'], job['solver'], job['solver_fallback'], job['solver_attempts']) == (solver, solver, None, [])
+    cfg = config()
+    assert job['deadline_epoch_s'] >= before + cfg['preparation_timeout_s'] + 2 * cfg['timeout_s']
 
 
 def test_parameter_file_requests_velocity_output_for_flow_arrows():
@@ -152,6 +193,75 @@ def test_native_fixed_level_starts_and_keeps_still_water(root):
     last = state['result']['frames'][-1]['stats']
     assert last['max_m'] == pytest.approx(.502, abs=.01)  # 0.5 m sea plus the 2 mm of rain inside the ROI
     assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05
+
+
+def test_native_fv1_fixed_level_starts_and_keeps_still_water(root):
+    # FV1 reads only initial.wd from `startfile` (no DG2 slope coefficients) and the cell-average DEM.
+    job = start_roi_run('alice', fv1(with_sea()), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    work = root / job['id'] / 'work'
+    assert (work / 'roi.par').read_text().splitlines()[0] == 'fv1'
+    assert 'initial.wd' in state['input_hashes'] and not {'initial.wd1x', 'initial.wd1y', 'terrain.dem1x'} & set(state['input_hashes'])
+    first = state['result']['frames'][0]['stats']
+    assert first['min_m'] == pytest.approx(.5, abs=1e-3) and first['max_m'] == pytest.approx(.5, abs=1e-3)
+    assert state['result']['frames'][-1]['stats']['max_m'] == pytest.approx(.502, abs=.01)
+    assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05  # FV1 also writes Vx/Vy with voutput
+    assert state['solver'] == state['result']['solver'] == state['provenance']['solver'] == 'fv1'
+    assert state['solver_fallback'] is None and state['result']['solver_fallback'] is None
+    assert state['result']['negative_depth']['status'] == 'none'
+
+
+def failing_on(solver, error):
+    """Summarizer that fails the attempt of ``solver`` (read from its parameter file) and runs the real one otherwise."""
+    def summarize(outputs, **kwargs):
+        if (Path(outputs).parent / 'roi.par').read_text().splitlines()[0] == solver:
+            raise error
+        return summarize_results(outputs, **kwargs)
+    return summarize
+
+
+def test_native_dg2_artifacts_fall_back_to_fv1_and_report_the_switch(root):
+    job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           summarizer=failing_on('dg2', NegativeDepthArtifacts({})))
+    assert state['state'] == 'succeeded', state
+    fallback = {'from': 'dg2', 'to': 'fv1', 'reason': 'negative_depth_artifacts'}
+    assert (state['requested_solver'], state['solver'], state['solver_fallback']) == ('dg2', 'fv1', fallback)
+    assert state['result']['solver'] == 'fv1' and state['result']['requested_solver'] == 'dg2'
+    assert state['result']['solver_fallback'] == fallback and state['provenance']['solver_fallback'] == fallback
+    assert state['solver_attempts'] == [{'solver': 'dg2', 'outcome': 'failed', 'reason': 'negative_depth_artifacts'},
+                                        {'solver': 'fv1', 'outcome': 'succeeded', 'reason': None}]
+    run = root / job['id']
+    # Each attempt has its own working directory; the shown results and hashes are the FV1 attempt's.
+    assert (run / 'work/roi.par').read_text().startswith('dg2\n')
+    assert (run / 'work-fallback/roi.par').read_text().startswith('fv1\n')
+    assert state['input_hashes']['roi.par'] == sha(run / 'work-fallback/roi.par')
+    assert state['artifacts'] and all((run / a['file']).is_file() for a in state['artifacts'])
+    assert get_roi_run(root, job['id']) == state
+
+
+def test_native_fv1_failure_falls_back_to_dg2(root):
+    job = start_roi_run('alice', fv1(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           summarizer=failing_on('fv1', ValueError('bad output')))
+    assert state['state'] == 'succeeded', state
+    assert (state['requested_solver'], state['solver']) == ('fv1', 'dg2')
+    assert state['solver_fallback'] == {'from': 'fv1', 'to': 'dg2', 'reason': 'output_invalid'}
+    assert (root / job['id'] / 'work-fallback/roi.par').read_text().startswith('dg2\n')
+
+
+def test_native_both_solvers_failing_keep_the_first_error_and_both_attempts(root):
+    def summarize(outputs, **kwargs):
+        first = Path(outputs).parent.name == 'work'
+        raise NegativeDepthArtifacts({}) if first else ValueError('bad output')
+    job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads, summarizer=summarize)
+    assert state['state'] == 'failed' and state['error'] == 'negative_depth_artifacts'
+    assert state['solver_fallback'] == {'from': 'dg2', 'to': 'fv1', 'reason': 'negative_depth_artifacts'}
+    assert state['solver_attempts'] == [{'solver': 'dg2', 'outcome': 'failed', 'reason': 'negative_depth_artifacts'},
+                                        {'solver': 'fv1', 'outcome': 'failed', 'reason': 'output_invalid'}]
+    assert 'result' not in state and 'artifacts' not in state
 
 
 @pytest.mark.parametrize('change', [
@@ -271,6 +381,8 @@ def test_acquisition_failure_is_terminal_and_sanitized(root):
     job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
     state = run_roi_worker(root, job['id'], provider=Failed(), roads_fetcher=no_roads)
     assert state['state'] == 'failed' and state['error'] == 'acquisition_failed'
+    # Acquisition and preparation are shared by both solvers: no fallback attempt.
+    assert state['solver_attempts'] == [] and state['solver_fallback'] is None
     assert 'private' not in json.dumps(state) and get_roi_run(root, job['id']) == state
 
 
@@ -296,6 +408,10 @@ def test_native_roi_dem_rain_and_depth_cogs(root):
     assert state['state'] == 'succeeded', state
     assert state['synthetic'] and not state['hydraulic_accuracy_validated']
     assert state['solver_returncode'] == 0
+    # No fallback when the requested solver succeeds.
+    assert (state['requested_solver'], state['solver'], state['solver_fallback']) == ('dg2', 'dg2', None)
+    assert state['solver_attempts'] == [{'solver': 'dg2', 'outcome': 'succeeded', 'reason': None}]
+    assert state['result']['solver'] == 'dg2' and not (root / run_id / 'work-fallback').exists()
     assert len(state['provenance']['terrain']['source']['records']) == 2
     assert state['provenance']['aligned_terrain_sha256'] == sha(root / run_id / 'prepared/solver-terrain.tif')
     assert state['result']['time_axis']['status'] == 'actual_times_unavailable'

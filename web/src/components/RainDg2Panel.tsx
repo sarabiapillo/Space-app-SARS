@@ -8,7 +8,8 @@ import { floodRoiPolygon } from '../utils/floodRoi'
 import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
 import {
   buildRoiFloodRequest, coastPreset, createFloodRunController, DG2_DEFAULT_MAX_CELLS, estimateDomainCells, exampleFormValues,
-  flowArrowFeatures, formStepStatus, inlandPreset, pngDownloadName, withFormChange, type FloodDg2Form,
+  failedAttemptsNotice, flowArrowFeatures, formStepStatus, inlandPreset, NEGATIVE_DEPTH_WARNING, negativeDepthWarning, pngDownloadName,
+  solverFallbackNotice, solverLabel, withFormChange, type FloodDg2Form,
 } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 import { FloodDg2Charts } from './FloodDg2Charts'
@@ -25,8 +26,9 @@ interface Props {
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   onClose?: () => void
 }
-/** Every value starts empty: nothing reaches the server unless the user types it or loads the example values. */
-const initial: FloodDg2Form = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false}
+/** Every value starts empty: nothing reaches the server unless the user types it or loads the example values.
+ * The method is a choice, not a physical value: DG2 is preselected. */
+const initial: FloodDg2Form = {domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,solver:'dg2',confirm:false}
 type Form = FloodDg2Form
 const TERMINAL = ['succeeded','failed','timed_out']
 const STATES = [...new Set(PRESET_ROI_CATALOG.map(p => p.state))]
@@ -103,7 +105,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
 
   return <aside className={`ws-rain-overlay ${collapsed?'is-collapsed':''}`} aria-label={t('Panel de simulación de inundación DG2','DG2 flood simulation panel')}>
     <div className="ws-rain-overlay__header">
-      <div className="ws-rain-overlay__title"><CloudRain size={16} aria-hidden="true"/><div><strong>{t('Simulación de inundación (DG2)','Flood simulation (DG2)')}</strong><div className="ws-rain-overlay__sub">{t('Lluvia sintética sobre tu zona · LISFLOOD-FP','Synthetic rain over your area · LISFLOOD-FP')}</div></div></div>
+      <div className="ws-rain-overlay__title"><CloudRain size={16} aria-hidden="true"/><div><strong>{t('Simulación de inundación (DG2/FV1)','Flood simulation (DG2/FV1)')}</strong><div className="ws-rain-overlay__sub">{t('Lluvia sintética sobre tu zona · LISFLOOD-FP','Synthetic rain over your area · LISFLOOD-FP')}</div></div></div>
       <div className="ws-rain-overlay__actions">
         <button type="button" className="ws-floating-toolbox__icon-btn" onClick={()=>setCollapsed(!collapsed)} aria-expanded={!collapsed} aria-label={collapsed?t('Expandir panel','Expand panel'):t('Colapsar panel','Collapse panel')} title={collapsed?t('Expandir panel','Expand panel'):t('Colapsar panel','Collapse panel')}>{collapsed?<ChevronDown size={14}/>:<ChevronUp size={14}/>}</button>
         {onClose&&<button type="button" className="ws-floating-toolbox__icon-btn" onClick={onClose} aria-label={t('Cerrar panel y volver al mapa','Close panel and return to map')} title={t('Cerrar panel y volver al mapa','Close panel and return to map')}><X size={14}/></button>}
@@ -168,6 +170,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
       <section className="ws-rain-card ws-rain-step">
         <FloodCollapsible icon={<Settings2 size={12} aria-hidden="true"/>} title={t('4 Opciones avanzadas: terreno y solver','4 Advanced options: terrain and solver')}
           badge={<span className={`ws-rain-step__state ${steps.solver&&/^EPSG:\d+$/.test(form.crs)&&Number(form.resolution)>0&&form.resampling?'is-done':''}`}>{steps.solver&&/^EPSG:\d+$/.test(form.crs)&&Number(form.resolution)>0&&form.resampling?t('Completo','Complete'):t('Faltan valores','Values missing')}</span>}>
+          <FloodField label={t('Método','Method')} hint={t('DG2 (Galerkin discontinuo de 2.º orden) es más preciso; FV1 (volúmenes finitos de 1.er orden) es más estable en terreno empinado. Si el método elegido falla, el servidor prueba automáticamente el otro y lo indica en los resultados.','DG2 (second-order discontinuous Galerkin) is more accurate; FV1 (first-order finite volumes) is more stable on steep terrain. If the chosen method fails, the server automatically tries the other one and says so in the results.')} control={aria=><select className="ws-rain-input-field" value={form.solver} onChange={e=>set('solver',e.target.value)} {...aria}><option value="dg2">{t('DG2 (más preciso)','DG2 (more accurate)')}</option><option value="fv1">{t('FV1 (estable, para terreno empinado)','FV1 (stable, for steep terrain)')}</option></select>}/>
           <div className="ws-rain-form-grid">
             <FloodField label={t('CRS métrico del terreno (EPSG:...)','Metric terrain CRS (EPSG:...)')} hint={t('Proyección en metros; en México, una zona UTM (Chiapas: EPSG:32615).','Projection in metres; in Mexico, a UTM zone (Chiapas: EPSG:32615).')} control={aria=><input className="ws-rain-input-field" type="text" spellCheck={false} value={form.crs} onChange={e=>set('crs',e.target.value)} {...aria}/>}/>
             {numberField('resolution',t('Resolución del terreno (m)','Terrain resolution (m)'),t('Tamaño de celda; define cuántas celdas tiene la malla.','Cell size; sets how many cells the grid has.'),{min:0})}
@@ -176,8 +179,8 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
             {numberField('save',t('Intervalo de guardado de cuadros (s)','Frame save interval (s)'),t('Cada cuánto se guarda un cuadro del mapa.','How often a map frame is saved.'),{min:0})}
             {numberField('tstep',t('Paso inicial (s)','Initial timestep (s)'),t('Primer paso de tiempo; el solver lo ajusta después.','First timestep; the solver adapts it afterwards.'),{min:0})}
           </div>
-          <FloodField label={t('Umbral de lámina delgada DG2 (m, 0–1; dg2depththresh)','DG2 thin-depth threshold (m, 0–1; dg2depththresh)')} hint={t('Elimina profundidades negativas en láminas finas, pero cambia la solución; queda registrado en la corrida.','Removes negative depths on thin films but changes the solution; it is recorded with the run.')} control={aria=><input className="ws-rain-input-field" type="number" inputMode="decimal" step="any" min={0} max={1} value={form.thinDepth} disabled={form.thinDepthOff} onChange={e=>set('thinDepth',e.target.value)} {...aria}/>}/>
-          <FloodCheck checked={form.thinDepthOff} onChange={v=>set('thinDepthOff',v)}>{t('Desactivar umbral (por defecto del solver): pueden aparecer profundidades negativas en láminas finas.','Disable threshold (solver default): negative depths may appear on thin films.')}</FloodCheck>
+          {form.solver!=='fv1'&&<><FloodField label={t('Umbral de lámina delgada DG2 (m, 0–1; dg2depththresh)','DG2 thin-depth threshold (m, 0–1; dg2depththresh)')} hint={t('Elimina profundidades negativas en láminas finas, pero cambia la solución; queda registrado en la corrida.','Removes negative depths on thin films but changes the solution; it is recorded with the run.')} control={aria=><input className="ws-rain-input-field" type="number" inputMode="decimal" step="any" min={0} max={1} value={form.thinDepth} disabled={form.thinDepthOff} onChange={e=>set('thinDepth',e.target.value)} {...aria}/>}/>
+          <FloodCheck checked={form.thinDepthOff} onChange={v=>set('thinDepthOff',v)}>{t('Desactivar umbral (por defecto del solver): pueden aparecer profundidades negativas en láminas finas.','Disable threshold (solver default): negative depths may appear on thin films.')}</FloodCheck></>}
         </FloodCollapsible>
       </section>
 
@@ -188,7 +191,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         {missing.length>0&&<p className="ws-rain-help">{t(`Falta completar: ${missing.join(', ')}.`,`Still to complete: ${missing.join(', ')}.`)}</p>}
         {overBudget&&<p className="ws-rain-help ws-rain-warn">{t(`La malla estimada (~${fmt(cells!,0)} celdas) supera el límite por defecto de ${DG2_DEFAULT_MAX_CELLS}.`,`The estimated grid (~${fmt(cells!,0)} cells) exceeds the default limit of ${DG2_DEFAULT_MAX_CELLS}.`)}</p>}
         <button type="button" className="ws-rain-action-btn" disabled={!roi||!form.confirm||busy} onClick={launch}>
-          {busy?<><Loader2 size={13} className="spin" aria-hidden="true"/>{t('Simulando…','Simulating…')}</>:<><Zap size={13} aria-hidden="true"/>{t('Iniciar corrida DG2','Start DG2 run')}</>}
+          {busy?<><Loader2 size={13} className="spin" aria-hidden="true"/>{t('Simulando…','Simulating…')}</>:<><Zap size={13} aria-hidden="true"/>{t(`Iniciar corrida ${solverLabel(form.solver)}`,`Start ${solverLabel(form.solver)} run`)}</>}
         </button>
         <small className="ws-rain-field__hint">{t('La corrida solo empieza al pulsar este botón; cambiar cualquier valor retira la confirmación.','The run only starts when you press this button; changing any value withdraws the confirmation.')}</small>
         {current?.error&&<p role="alert" className="ws-rain-error"><AlertCircle size={13} aria-hidden="true"/><span>{localizeText(current.error)}</span></p>}
@@ -198,14 +201,17 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         <div className="ws-rain-card__head">{busy?<Loader2 size={13} className="spin" aria-hidden="true"/>:failed?<AlertCircle size={13} aria-hidden="true"/>:<CheckCircle2 size={13} aria-hidden="true"/>}<h3>{t('Corrida','Run')}: {runLabel(current.run.state)}</h3></div>
         {busy&&<div className="ws-rain-progressbar" role="progressbar" aria-label={t('Corrida en curso','Run in progress')}><span/></div>}
         <p className="ws-rain-help">{t('Etapa','Stage')}: {current.run.stage} · <code>{current.run.id}</code></p>
-        <p className="ws-rain-help">{t('Umbral de lámina delgada DG2:','DG2 thin-depth threshold:')} {current.run.dg2_depth_thresh_m==null?t('desactivado','disabled'):`${current.run.dg2_depth_thresh_m} m`}</p>
+        <p className="ws-rain-help">{t('Método:','Method:')} {solverLabel(current.run.requested_solver??'dg2')}{current.run.solver&&current.run.solver!==(current.run.requested_solver??'dg2')?t(` → ${solverLabel(current.run.solver)} (cambio automático)`,` → ${solverLabel(current.run.solver)} (automatic switch)`):''}</p>
+        {(current.run.requested_solver??'dg2')==='dg2'&&<p className="ws-rain-help">{t('Umbral de lámina delgada DG2:','DG2 thin-depth threshold:')} {current.run.dg2_depth_thresh_m==null?t('desactivado','disabled'):`${current.run.dg2_depth_thresh_m} m`}</p>}
         {current.run.losses&&<p className="ws-rain-help">{t('Infiltración:','Infiltration:')} {current.run.losses.runoff_coefficient==null?t('no modelada','not modeled'):t(`coeficiente ${current.run.losses.runoff_coefficient.toFixed(3)} (${Math.round((1-current.run.losses.runoff_coefficient)*100)} % se infiltra)`,`coefficient ${current.run.losses.runoff_coefficient.toFixed(3)} (${Math.round((1-current.run.losses.runoff_coefficient)*100)} % infiltrates)`)} · {t('Presión:','Pressure:')} {current.run.losses.atmospheric_pressure_hpa==null?t('no aplicada','not applied'):`${current.run.losses.atmospheric_pressure_hpa} hPa → +${current.run.losses.barometric_surge_m.toFixed(3)} m`}</p>}
-        {failed&&<p role="alert" className="ws-rain-error"><AlertCircle size={13} aria-hidden="true"/><span>{t('Corrida fallida:','Run failed:')} {current.run.error??current.run.state}</span></p>}
+        {failed&&<p role="alert" className="ws-rain-error"><AlertCircle size={13} aria-hidden="true"/><span>{t('Corrida fallida:','Run failed:')} {current.run.error??current.run.state}{failedAttemptsNotice(current.run.solver_attempts,t)?` · ${failedAttemptsNotice(current.run.solver_attempts,t)}`:''}</span></p>}
       </section>}
 
       {current?.result&&<section className="ws-rain-card ws-rain-card--results">
-        <div className="ws-rain-card__head"><span className="ws-rain-step__num" aria-hidden="true">5</span><BarChart3 size={13} aria-hidden="true"/><h3>{t('Resultados DG2: profundidad (m)','DG2 results: depth (m)')}</h3></div>
+        <div className="ws-rain-card__head"><span className="ws-rain-step__num" aria-hidden="true">5</span><BarChart3 size={13} aria-hidden="true"/><h3>{t(`Resultados ${solverLabel(current.result.solver??'dg2')}: profundidad (m)`,`${solverLabel(current.result.solver??'dg2')} results: depth (m)`)}</h3></div>
         <p className="ws-rain-banner"><ShieldAlert size={13} aria-hidden="true"/><span>{t('Lluvia sintética; exactitud hidráulica NO validada. No son observaciones.','Synthetic rainfall; hydraulic accuracy NOT validated. Not observations.')}</span></p>
+        {solverFallbackNotice(current.result.solver_fallback,t)&&<p role="status" className="ws-rain-banner ws-rain-fallback"><Settings2 size={13} aria-hidden="true"/><span>{solverFallbackNotice(current.result.solver_fallback,t)}</span></p>}
+        {negativeDepthWarning(current.result,t)&&<p role="alert" className="ws-rain-help ws-rain-warn"><AlertCircle size={13} aria-hidden="true"/> {negativeDepthWarning(current.result,t)}</p>}
         <FloodField label={t('Cuadro / máximo','Frame / maximum')} hint={t('Los cuadros se ordenan por índice; el tiempo programado no es tiempo físico observado.','Frames ordered by index; scheduled time is not observed physical time.')} control={aria=><select className="ws-rain-input-field" value={selected} onChange={e=>choose(e.target.value)} {...aria}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s)`}</option>)}</select>}/>
         <FloodResultSummary result={current.result} frameIndex={selectedArtifact?.frame_index}/>
 
@@ -233,8 +239,9 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
 
         <FloodCollapsible title={t('Detalle técnico del cuadro','Technical detail of the frame')}>
           {stats&&<dl className="ws-rain-dl">{(['wet_cells','valid_cells','nodata_cells','min_m','max_m'] as const).filter(key=>typeof stats[key]==='number'&&Number.isFinite(stats[key])).map(key=><div key={key}><dt>{key}</dt><dd>{String(stats[key])} {key.endsWith('_m')?'m':''}</dd></div>)}</dl>}
-          {(()=>{const fr=current.result.froude?.frames.find(f=>f.frame_index===selectedArtifact?.frame_index);const tc=current.result.time_of_concentration;return (fr||tc)&&<dl className="ws-rain-dl">
+          {(()=>{const fr=current.result.froude?.frames.find(f=>f.frame_index===selectedArtifact?.frame_index);const tc=current.result.time_of_concentration;return (fr||tc||(current.result.negative_depth?.clipped_cell_frames??0)>0)&&<dl className="ws-rain-dl">
             {fr&&<div><dt>{t('Número de Froude (h ≥ 0.15 m)','Froude number (h ≥ 0.15 m)')}</dt><dd>{fr.max==null?t('sin agua suficiente','not enough water'):t(`máx ${fr.max.toFixed(2)} · medio ${fr.mean!.toFixed(2)} · ${fr.supercritical_cells} de ${fr.cells} celdas supercríticas (Fr > 1)`,`max ${fr.max.toFixed(2)} · mean ${fr.mean!.toFixed(2)} · ${fr.supercritical_cells} of ${fr.cells} cells supercritical (Fr > 1)`)}</dd></div>}
+            {(current.result.negative_depth?.clipped_cell_frames??0)>0&&<div><dt>{t('Profundidades negativas puestas en 0','Negative depths set to 0')}</dt><dd>{t(`${current.result.negative_depth!.clipped_cell_frames} valores de celda · mínimo ${current.result.negative_depth!.min_m} m · volumen añadido hasta ${((current.result.negative_depth!.max_added_volume_ratio??0)*100).toFixed(2)} % del agua de un cuadro`,`${current.result.negative_depth!.clipped_cell_frames} cell values · minimum ${current.result.negative_depth!.min_m} m · added volume up to ${((current.result.negative_depth!.max_added_volume_ratio??0)*100).toFixed(2)} % of the water of a frame`)}</dd></div>}
             {tc&&<div><dt>{t('Tiempo de concentración (Kirpich)','Time of concentration (Kirpich)')}</dt><dd>{t(`${tc.minutes.toFixed(1)} min · recorrido ${Math.round(tc.flow_length_m)} m · pendiente ${tc.slope_m_m.toFixed(4)} · área drenada ${tc.upslope_area_km2.toFixed(2)} km²`,`${tc.minutes.toFixed(1)} min · flow path ${Math.round(tc.flow_length_m)} m · slope ${tc.slope_m_m.toFixed(4)} · drained area ${tc.upslope_area_km2.toFixed(2)} km²`)}</dd></div>}
           </dl>})()}
         </FloodCollapsible>
@@ -242,7 +249,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         <FloodCollapsible defaultOpen icon={<BarChart3 size={12} aria-hidden="true"/>} title={t('Gráficas','Charts')}>
           <FloodDg2Charts result={current.result} frameIndex={selectedArtifact?.frame_index}/>
         </FloodCollapsible>
-        {current.result.warnings?.map((w,i)=><p key={i} className="ws-rain-help ws-rain-warn">{localizeText(w)}</p>)}
+        {current.result.warnings?.filter(w=>w!==NEGATIVE_DEPTH_WARNING).map((w,i)=><p key={i} className="ws-rain-help ws-rain-warn">{localizeText(w)}</p>)}
       </section>}
 
       <FloodHowItWorks/>

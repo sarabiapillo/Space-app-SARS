@@ -100,6 +100,39 @@ test('DG2 panel does not reuse the terrapulseai_v2 simulator state or its unsupp
   assert.match(translate('Infiltración no modelada','Infiltration not modeled'), /Infiltración|Infiltration/)
 })
 
+test('method selector offers DG2 (default) and FV1 in the selected language only', () => {
+  setLanguage('es')
+  const es = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  assert.match(es, /Método<\/span><select/)
+  assert.match(es, /<option value="dg2" selected="">DG2 \(más preciso\)<\/option>/)
+  assert.match(es, /<option value="fv1">FV1 \(estable, para terreno empinado\)<\/option>/)
+  assert.match(es, /Iniciar corrida DG2/)
+  setLanguage('en')
+  const en = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  assert.match(en, /Method<\/span><select/)
+  assert.match(en, /DG2 \(more accurate\)/)
+  assert.match(en, /FV1 \(stable, for steep terrain\)/)
+  assert.doesNotMatch(en, /más preciso|terreno empinado|cambio automático/)
+  setLanguage('es')
+})
+
+test('result cards show the solver and an automatic switch in the selected language', async () => {
+  const { FloodResultSummary } = await import('../src/components/flood/FloodResultSummary.tsx')
+  const result = { grid: { cellsize_m: 30 }, frames: [], maximum: { stats: { max_m: 1 } }, artifacts: [],
+    solver: 'fv1', requested_solver: 'dg2', solver_fallback: { from: 'dg2', to: 'fv1', reason: 'negative_depth_artifacts' } }
+  setLanguage('es')
+  const es = render(FloodResultSummary, { result, frameIndex: null })
+  assert.match(es, /Método de cálculo/); assert.match(es, />FV1</); assert.match(es, /cambio automático desde DG2/)
+  setLanguage('en')
+  const en = render(FloodResultSummary, { result, frameIndex: null })
+  assert.match(en, /Computation method/); assert.match(en, /automatic switch from DG2/)
+  assert.doesNotMatch(en, /Método|cambio automático/)
+  assert.match(render(FloodResultSummary, { result: { ...result, solver: undefined, solver_fallback: undefined }, frameIndex: null }), />DG2<.*the one chosen/)
+  assert.equal(localizeText('artefactos numéricos en terreno muy empinado; profundidades poco confiables, la dirección del flujo sí vale'),
+    'numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid')
+  setLanguage('es')
+})
+
 test('DG2 resampling options match the ROI API contract', () => {
   const html = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
   assert.match(html, /<option[^>]*>nearest<\/option>/)

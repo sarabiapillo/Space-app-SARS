@@ -1,4 +1,4 @@
-"""API privada para trabajos ROI DG2; nunca revela el job ni inicia red en HTTP."""
+"""API privada para trabajos ROI DG2/FV1; nunca revela el job ni inicia red en HTTP."""
 import hashlib
 import io
 import os
@@ -24,7 +24,7 @@ from .views import UniqueFieldsJSONParser
 
 _FIELDS = ('id', 'state', 'stage', 'simulation_duration_s', 'save_interval_s',
            'synthetic', 'hydraulic_accuracy_validated')
-_ERRORS = frozenset(('acquisition_failed', 'preparation_failed', 'preparation_or_output_invalid',
+_ERRORS = frozenset(('acquisition_failed', 'preparation_failed', 'preparation_or_output_invalid', 'negative_depth_artifacts',
                      'worker_stopped', 'worker_deadline', 'worker_launch_failed',
                      'preparation_timeout', 'solver_timeout'))
 
@@ -45,6 +45,11 @@ def _public(run):
     result = {key: run[key] for key in _FIELDS}
     # Runs created before this field existed used the solver default (thin-depth fallback off).
     result['dg2_depth_thresh_m'] = run.get('dg2_depth_thresh_m')
+    # Solver choice with automatic fallback; runs created before it ran DG2 without fallback.
+    result['requested_solver'] = run.get('requested_solver', 'dg2')
+    result['solver'] = run.get('solver', 'dg2')
+    result['solver_fallback'] = run.get('solver_fallback')  # {from, to, reason} or null
+    result['solver_attempts'] = run.get('solver_attempts')  # [{solver, outcome, reason}]; null in older runs
     # Runs created before per-side boundaries existed report null; their request is in job.json.
     result['boundary'] = run.get('boundary')
     result['initial_condition'] = run.get('initial_condition')
@@ -125,8 +130,13 @@ class RoiRunResultsView(APIView):
             result['lakes'] = run['result'].get('lakes')
             # Chart inputs; null for runs summarized before depth classes existed.
             result['depth_classes_m'] = run['result'].get('depth_classes_m')
-            # DG2 depths slightly below 0 set to 0 (tolerance, count, frames, minimum); null in older runs.
+            # Negative depths set to 0 and the volume they add (status none/minor/artifacts); older runs
+            # carry the earlier tolerance-based summary, and null before that.
             result['negative_depth'] = run['result'].get('negative_depth')
+            # Solver whose results these are and the automatic fallback, if any; older runs ran DG2.
+            result['requested_solver'] = run['result'].get('requested_solver', 'dg2')
+            result['solver'] = run['result'].get('solver', 'dg2')
+            result['solver_fallback'] = run['result'].get('solver_fallback')
             result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)

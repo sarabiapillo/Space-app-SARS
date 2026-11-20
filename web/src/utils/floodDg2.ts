@@ -1,4 +1,4 @@
-import type { FloodRoiResult, FloodRoiRun, FloodRoiStats } from '../api/client.ts'
+import type { FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
 import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
@@ -10,7 +10,10 @@ export interface FloodDg2Form {
   /** 'none' or 'hydrolakes' (HydroLAKES lakes full at start over a dug bed). */
   lakes: string
   nonurban: boolean; amount: string; rainDuration: string; seed: string; intervals: string
-  duration: string; save: string; tstep: string; thinDepth: string; thinDepthOff: boolean; confirm: boolean
+  duration: string; save: string; tstep: string; thinDepth: string; thinDepthOff: boolean
+  /** 'dg2' (more accurate, default) or 'fv1' (stable on steep terrain); the thin-depth threshold only applies to DG2. */
+  solver: string
+  confirm: boolean
 }
 type Polygon = { type: 'Polygon'; coordinates: unknown }
 type Translate = (es: string, en: string) => string
@@ -43,9 +46,10 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   if(form.pressure.trim()&&!anyFixed)throw Error(t('La presión atmosférica solo eleva un lado de nivel fijo del mar.','Atmospheric pressure only raises a fixed sea-level side.'))
   const boundary=Object.fromEntries(Object.entries(sides).map(([side,type])=>[side,type==='fixed_level'?{type,level_m:level}:{type}]))
   if(!form.nonurban||!form.confirm)throw Error(t('Declara el dominio no urbano y confirma las hipótesis.','Declare a nonurban domain and confirm the assumptions.'))
-  // LISFLOOD-FP `dg2depththresh`: null only when the user explicitly disables it; the API caps it at 1 m.
-  const thinDepth=form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
-  return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth}}
+  if(!['dg2','fv1'].includes(form.solver))throw Error(t('Selecciona el método de cálculo (DG2 o FV1).','Select the computation method (DG2 or FV1).'))
+  // LISFLOOD-FP `dg2depththresh`: DG2 only; null when the user explicitly disables it or chooses FV1. The API caps it at 1 m.
+  const thinDepth=form.solver==='fv1'||form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
+  return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}}
 }
 
 /** Default `FLOOD_ROI_DG2_MAX_CELLS` of the server (configurable there); about 1 km² at 30 m. */
@@ -90,7 +94,7 @@ export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): Floo
   const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
   return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, confirm:false}
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', confirm:false}
 }
 
 /** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM96) and starts full; the other sides are free. */
@@ -133,7 +137,8 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
       && sides.every(v => ['closed','free','fixed_level'].includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
       && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
       && (!form.pressure.trim() || (anyFixed && pressure >= 950 && pressure <= 1040)),
-    solver: positive(form.duration, 86400) && positive(form.save) && positive(form.tstep) && (form.thinDepthOff || positive(form.thinDepth, 1)),
+    solver: positive(form.duration, 86400) && positive(form.save) && positive(form.tstep) && ['dg2','fv1'].includes(form.solver)
+      && (form.solver === 'fv1' || form.thinDepthOff || positive(form.thinDepth, 1)),
     confirm: form.nonurban && form.confirm,
   }
 }
@@ -160,6 +165,50 @@ export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | '
     tcMin: result.time_of_concentration?.minutes ?? null,
     roads: !roads ? null : !roads.available ? 'unavailable' as const : {cutKm: exposure?.cut_km ?? 0, cautionKm: exposure?.caution_km ?? 0, totalKm: roads.total_km ?? 0},
   }
+}
+
+/** Display name of a LISFLOOD-FP solver keyword. */
+export function solverLabel(solver: string | null | undefined) {
+  return solver === 'fv1' ? 'FV1' : solver === 'dg2' ? 'DG2' : '—'
+}
+
+/** Plain-language reason why one solver attempt failed (public reason codes of the ROI worker). */
+function attemptReason(solver: string, reason: string | null | undefined, t: Translate) {
+  const name = solverLabel(solver)
+  switch (reason) {
+    case 'negative_depth_artifacts': return t(`${name} dejó artefactos numéricos (profundidades negativas)`, `${name} left numerical artifacts (negative depths)`)
+    case 'solver_timeout': return t(`${name} agotó su tiempo de cálculo`, `${name} ran out of computation time`)
+    case 'solver_failed': return t(`${name} terminó con error`, `${name} ended with an error`)
+    case 'output_invalid': return t(`${name} produjo salidas inválidas`, `${name} produced invalid outputs`)
+    default: return t(`${name} falló`, `${name} failed`)
+  }
+}
+
+/** Notice shown with the results when the server switched solver automatically; null without a fallback. */
+export function solverFallbackNotice(fallback: FloodSolverFallback | null | undefined, t: Translate) {
+  if (!fallback) return null
+  const from = solverLabel(fallback.from), to = solverLabel(fallback.to)
+  return t(`Se cambió automáticamente de ${from} a ${to} porque ${attemptReason(fallback.from, fallback.reason, t)}. Los resultados mostrados son de ${to}.`,
+    `Switched automatically from ${from} to ${to} because ${attemptReason(fallback.from, fallback.reason, t)}. The results shown are from ${to}.`)
+}
+
+/** For a failed run: both attempts and their reasons; null unless both solvers were tried. */
+export function failedAttemptsNotice(attempts: FloodSolverAttempt[] | null | undefined, t: Translate) {
+  if (!attempts || attempts.length < 2) return null
+  const parts = attempts.map(a => attemptReason(a.solver, a.reason, t)).join('; ')
+  return t(`Se intentaron los dos métodos: ${parts}.`, `Both methods were tried: ${parts}.`)
+}
+
+/** Server warning (verbatim) when negative depths set to 0 add 1–10 % of the water of a frame. */
+export const NEGATIVE_DEPTH_WARNING = 'artefactos numéricos en terreno muy empinado; profundidades poco confiables, la dirección del flujo sí vale'
+
+/** Visible warning for results whose negative depths reached the 'artifacts' status; null otherwise. */
+export function negativeDepthWarning(result: Pick<FloodRoiResult, 'negative_depth'>, t: Translate) {
+  const negative = result.negative_depth
+  if (negative?.status !== 'artifacts') return null
+  const pct = negative.max_added_volume_ratio == null ? '—' : String(Math.round(negative.max_added_volume_ratio * 1000) / 10)
+  return t(`${NEGATIVE_DEPTH_WARNING} (las profundidades negativas puestas en 0 añadieron hasta ${pct} % del agua de un cuadro).`,
+    `numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid (negative depths set to 0 added up to ${pct} % of the water of a frame).`)
 }
 
 /** Solver-velocity arrows of one frame as GeoJSON; null for the maximum or runs without velocities. */

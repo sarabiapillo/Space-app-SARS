@@ -6,7 +6,7 @@ import { FloodCollapsible } from './FloodFormParts'
 export function FloodHowItWorks() {
   const { t } = useTranslation()
   const items: Array<[string, string]> = [
-    [t('1. Aguas someras 2D, conservación de masa (lo resuelve LISFLOOD-FP DG2)', '1. 2D shallow water, mass conservation (solved by LISFLOOD-FP DG2)'),
+    [t('1. Aguas someras 2D, conservación de masa (lo resuelve LISFLOOD-FP DG2 o FV1)', '1. 2D shallow water, mass conservation (solved by LISFLOOD-FP DG2 or FV1)'),
       '∂h/∂t + ∂(hu)/∂x + ∂(hv)/∂y = R(t)'],
     [t('2. Fricción de Manning en la ecuación de momento', '2. Manning friction in the momentum equation'),
       'S_f = n² · |u| · u / h^(4/3)'],
@@ -22,8 +22,8 @@ export function FloodHowItWorks() {
   return (
     <FloodCollapsible className="ws-rain-howto" icon={<BookOpen size={12} aria-hidden="true" />} title={t('Cómo funciona la simulación', 'How the simulation works')}>
       <p className="ws-rain-help">
-        {t('DG2 (Galerkin discontinuo de 2.º orden) resuelve las ecuaciones de aguas someras sobre el terreno NASADEM reproyectado. La lluvia es sintética y uniforme en la zona; el resultado es una solución numérica, no una observación, y su exactitud hidráulica no está validada.',
-          'DG2 (second-order discontinuous Galerkin) solves the shallow water equations over the reprojected NASADEM terrain. Rain is synthetic and uniform over the area; the result is a numerical solution, not an observation, and its hydraulic accuracy is not validated.')}
+        {t('DG2 (Galerkin discontinuo de 2.º orden) o FV1 (volúmenes finitos de 1.er orden, más estable en terreno empinado) resuelve las ecuaciones de aguas someras sobre el terreno NASADEM reproyectado; si el método elegido falla, se usa automáticamente el otro. La lluvia es sintética y uniforme en la zona; el resultado es una solución numérica, no una observación, y su exactitud hidráulica no está validada.',
+          'DG2 (second-order discontinuous Galerkin) or FV1 (first-order finite volumes, more stable on steep terrain) solves the shallow water equations over the reprojected NASADEM terrain; if the chosen method fails, the other one is used automatically. Rain is synthetic and uniform over the area; the result is a numerical solution, not an observation, and its hydraulic accuracy is not validated.')}
       </p>
       <div className="ws-rain-eq-content">
         {items.map(([label, formula]) => (

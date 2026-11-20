@@ -312,34 +312,63 @@ def test_refuse_nonmetric_crs_and_preserve_source(tmp_path):
     assert not (tmp_path / 'out.tif').exists() and source.read_bytes() == before
 
 
-def test_small_negative_dg2_depths_are_set_to_zero_and_reported(tmp_path):
-    # DG2 wet/dry fronts can leave a few slightly negative cell-average depths even with dg2depththresh.
+ARTIFACTS_WARNING = 'artefactos numéricos en terreno muy empinado; profundidades poco confiables, la dirección del flujo sí vale'
+THRESHOLDS = {'warning': .01, 'fail': .10}
+
+
+def test_negative_depths_below_one_percent_of_the_water_are_set_to_zero_without_warning(tmp_path):
+    # 5 m cells: frame 1 holds 0.6 m x 25 m2 = 15 m3 of water; clipping -0.001 m adds 0.025 m3 (0.17 %).
     ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.2 .3\n')
-    ascii_grid(tmp_path / 'a-0001.wd', '-.033 .1\n-.01 .3\n')
+    ascii_grid(tmp_path / 'a-0001.wd', '-.001 .1\n.2 .3\n')
     ascii_grid(tmp_path / 'a.max', '.05 .1\n.2 .3\n')
     result = summarize_results(tmp_path, save_interval_s=1)
-    assert result['negative_depth'] == {'tolerance_m': .05, 'clipped_cell_frames': 2, 'frames': [1], 'min_m': -.033}
+    assert result['negative_depth'] == {'clipped_cell_frames': 1, 'frames': [1], 'min_m': -.001,
+                                        'max_added_volume_ratio': pytest.approx(.001 / .6),
+                                        'status': 'minor', 'thresholds': THRESHOLDS}
     assert result['frames'][1]['stats']['min_m'] == 0
+    assert not any(ARTIFACTS_WARNING in w for w in result['warnings'])
     clean = tmp_path / 'clean'
     clean.mkdir()
     minimal_outputs(clean)
     assert summarize_results(clean, save_interval_s=1)['negative_depth'] == {
-        'tolerance_m': .05, 'clipped_cell_frames': 0, 'frames': [], 'min_m': None}
+        'clipped_cell_frames': 0, 'frames': [], 'min_m': None, 'max_added_volume_ratio': 0.0,
+        'status': 'none', 'thresholds': THRESHOLDS}
 
 
-def test_negative_depths_beyond_the_tolerance_still_fail_the_run(tmp_path):
-    ascii_grid(tmp_path / 'a-0000.wd', '-.06 .1\n.2 .3\n')
+def test_negative_depths_between_one_and_ten_percent_keep_the_result_with_a_visible_warning(tmp_path):
+    # Frame 1: -0.033 m in one cell against 0.6 m of water left = 5.5 % of the water volume.
+    ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.2 .3\n')
+    ascii_grid(tmp_path / 'a-0001.wd', '-.033 .1\n.2 .3\n')
     ascii_grid(tmp_path / 'a.max', '.05 .1\n.2 .3\n')
-    with pytest.raises(ValueError, match='nonnegative'):
+    result = summarize_results(tmp_path, save_interval_s=1)
+    negative = result['negative_depth']
+    assert negative['status'] == 'artifacts' and negative['frames'] == [1] and negative['min_m'] == -.033
+    assert negative['max_added_volume_ratio'] == pytest.approx(.033 / .6)
+    assert ARTIFACTS_WARNING in result['warnings']
+    assert result['frames'][1]['stats']['min_m'] == 0
+
+
+@pytest.mark.parametrize('frame', ['-.07 .1\n.2 .3\n',  # 0.07 / 0.6 = 11.7 % of the water
+                                   '-.001 0\n0 0\n'])   # water was added to a dry frame
+def test_negative_depths_above_ten_percent_fail_with_a_specific_error(tmp_path, frame):
+    from pipeline.hydrology.results import NegativeDepthArtifacts
+    ascii_grid(tmp_path / 'a-0000.wd', frame)
+    ascii_grid(tmp_path / 'a.max', '.05 .1\n.2 .3\n')
+    with pytest.raises(NegativeDepthArtifacts) as error:
         summarize_results(tmp_path, save_interval_s=1)
+    assert error.value.code == 'negative_depth_artifacts'
 
 
-def test_strict_reader_and_cog_export_follow_the_tolerance(tmp_path):
+def test_strict_reader_by_default_and_clipping_reader_measures_the_added_volume(tmp_path):
     path = ascii_grid(tmp_path / 'a-0000.wd', '-.03 .1\n.2 .3\n')
     with pytest.raises(ValueError, match='nonnegative'):
-        read_depth_ascii(path)  # default stays strict
-    grid = read_depth_ascii(path, negative_tolerance_m=.05)
-    assert grid['values'][0, 0] == 0 and grid['clipped'] == {'cells': 1, 'min_m': -.03}
-    export_depth_cog(path, tmp_path / 'a.tif', crs='EPSG:32615', code_version='test', negative_tolerance_m=.05)
+        read_depth_ascii(path)  # default stays strict (initial depth and every other reader)
+    grid = read_depth_ascii(path, clip_negative=True)
+    assert grid['values'][0, 0] == 0
+    assert grid['clipped'] == {'cells': 1, 'min_m': -.03, 'added_m3': pytest.approx(.03 * 25),
+                               'water_m3': pytest.approx(.6 * 25)}
+    with pytest.raises(ValueError, match='nonnegative'):
+        export_depth_cog(path, tmp_path / 'strict.tif', crs='EPSG:32615', code_version='test')
+    export_depth_cog(path, tmp_path / 'a.tif', crs='EPSG:32615', code_version='test', clip_negative=True)
     with rasterio.open(tmp_path / 'a.tif') as cog:
         assert cog.read(1)[0, 0] == 0

@@ -48,8 +48,10 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, payload(), format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual(start.call_args.args, ('1', payload()))
-        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(response.json()['dg2_depth_thresh_m'])
+        # A payload without `solver` runs DG2; no fallback and no attempt yet.
+        self.assertEqual([response.json()[k] for k in ('requested_solver', 'solver', 'solver_fallback', 'solver_attempts')], ['dg2', 'dg2', None, []])
         self.assertEqual(response.json()['boundary'], {s: {'type': 'free'} for s in ('north', 'east', 'south', 'west')})
         self.assertEqual(response.json()['initial_condition'], 'dry_zero_velocity')
         self.assertEqual(response.json()['lakes'], 'none')
@@ -93,9 +95,11 @@ class RoiHttpTests(SimpleTestCase):
             self.assertNotEqual(client.get(results).status_code, 200)
             self.assertNotEqual(client.get(download).status_code, 200)
         # Runs recorded before the threshold existed ran with the solver default (off): reported as null.
-        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(self.alice.get(status).json()['dg2_depth_thresh_m'])
         self.assertIsNone(self.alice.get(status).json()['boundary'])  # seeded run predates per-side boundaries
+        # Runs recorded before the solver choice ran DG2 without fallback.
+        self.assertEqual([self.alice.get(status).json()[k] for k in ('requested_solver', 'solver', 'solver_fallback', 'solver_attempts')], ['dg2', 'dg2', None, None])
         result = self.alice.get(results)
         self.assertEqual(result.status_code, 200)
         body = result.json()
@@ -111,6 +115,7 @@ class RoiHttpTests(SimpleTestCase):
         self.assertIsNone(body['froude'])
         self.assertIsNone(body['time_of_concentration'])
         self.assertIsNone(body['negative_depth'])
+        self.assertEqual([body['requested_solver'], body['solver'], body['solver_fallback']], ['dg2', 'dg2', None])
         self.assertIsNone(body['roads'])
         self.assertIsNone(body['lakes'])
         self.assertEqual(len(body['artifacts']), 4)
@@ -140,6 +145,41 @@ class RoiHttpTests(SimpleTestCase):
         other = self.jobs / str(uuid.uuid4())
         other.symlink_to(directory, target_is_directory=True)
         self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{other.name}/').status_code, 404)
+
+    def test_status_and_results_echo_the_automatic_solver_fallback(self):
+        run_id, state, directory = self.seed()
+        fallback = {'from': 'dg2', 'to': 'fv1', 'reason': 'negative_depth_artifacts'}
+        attempts = [{'solver': 'dg2', 'outcome': 'failed', 'reason': 'negative_depth_artifacts'},
+                    {'solver': 'fv1', 'outcome': 'succeeded', 'reason': None}]
+        state.update(requested_solver='dg2', solver='fv1', solver_fallback=fallback, solver_attempts=attempts)
+        state['result'].update(requested_solver='dg2', solver='fv1', solver_fallback=fallback)
+        (directory / 'state.json').write_text(json.dumps(state))
+        url = f'/api/flood-roi-runs/{run_id}/'
+        status = self.alice.get(url).json()
+        self.assertEqual([status['requested_solver'], status['solver'], status['solver_fallback'], status['solver_attempts']], ['dg2', 'fv1', fallback, attempts])
+        body = self.alice.get(url + 'results/').json()
+        self.assertEqual([body['requested_solver'], body['solver'], body['solver_fallback']], ['dg2', 'fv1', fallback])
+
+    def test_failed_run_reports_negative_depth_artifacts_and_both_attempts(self):
+        run_id, state, directory = self.seed()
+        attempts = [{'solver': 'dg2', 'outcome': 'failed', 'reason': 'negative_depth_artifacts'},
+                    {'solver': 'fv1', 'outcome': 'failed', 'reason': 'output_invalid'}]
+        state.update(state='failed', stage='results', error='negative_depth_artifacts', solver='fv1', solver_attempts=attempts)
+        (directory / 'state.json').write_text(json.dumps(state))
+        status = self.alice.get(f'/api/flood-roi-runs/{run_id}/').json()
+        self.assertEqual(status['error'], 'negative_depth_artifacts')
+        self.assertEqual(status['solver_attempts'], attempts)
+
+    def test_start_rejects_fv1_with_a_thin_depth_threshold_and_echoes_fv1(self):
+        body = payload(); body['simulation'].update(solver='fv1', dg2_depth_thresh_m=.02)
+        self.assertEqual(self.alice.post(self.start, body, format='json').status_code, 400)
+        body['simulation']['dg2_depth_thresh_m'] = None
+        with patch('analyses.roi_flood_runs.start_roi_run') as start:
+            from pipeline.hydrology.roi_runner import start_roi_run
+            start.side_effect = lambda *args, **kwargs: start_roi_run(*args, **{**kwargs, 'launch': False})
+            response = self.alice.post(self.start, body, format='json')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual([response.json()['requested_solver'], response.json()['solver']], ['fv1', 'fv1'])
 
     def test_preview_palette_uses_the_pipeline_depth_classes(self):
         from analyses.roi_flood_runs import _DEPTH_CLASSES

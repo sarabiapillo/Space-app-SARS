@@ -101,7 +101,7 @@ test('controller invalidation aborts stale ROI and revokes object URLs; no resul
 const { buildRoiFloodRequest } = await import('../src/utils/floodDg2.ts')
 const tr = es => es
 const square = {type:'Polygon',coordinates:[[[-93.3,16.67],[-93.29,16.67],[-93.29,16.68],[-93.3,16.68],[-93.3,16.67]]]}
-const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,infiltration:'unsupported',pressure:'',lakes:'none',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
+const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,infiltration:'unsupported',pressure:'',lakes:'none',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,solver:'dg2',confirm:true,...overrides})
 
 test('request builder keeps every previous field and sends an explicitly disabled thin-depth threshold as null', () => {
   assert.deepEqual(buildRoiFloodRequest(filledForm(), square, tr), {roi:square,domain:square,
@@ -109,7 +109,7 @@ test('request builder keeps every previous field and sends an explicitly disable
     rainfall_profile:{interval_count:4,seed:7,distribution:'uniform_balanced'},
     terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
     hydraulics:{manning:.05,initial_condition:'dry_zero_velocity',boundary:{north:{type:'free'},east:{type:'free'},south:{type:'free'},west:{type:'free'}},infiltration:'unsupported',domain_nonurban:true,lakes:'none'},
-    simulation:{duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null}})
+    simulation:{duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null,solver:'dg2'}})
 })
 
 test('request builder sends per-side boundaries with one fixed sea level and a still-water start', () => {
@@ -234,17 +234,17 @@ test('request builder keeps the exact body for a coastal form with every hydraul
     rainfall_profile:{interval_count:2,seed:7,distribution:'uniform_balanced'},
     terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
     hydraulics:{manning:.04,initial_condition:'still_water_at_fixed_level',boundary:{north:{type:'closed'},east:{type:'free'},south:{type:'fixed_level',level_m:0},west:{type:'closed'}},infiltration:'runoff_coefficient',domain_nonurban:true,lakes:'hydrolakes',atmospheric_pressure_hpa:990},
-    simulation:{duration_s:180,save_interval_s:60,initial_tstep_s:1,dg2_depth_thresh_m:.02}})
+    simulation:{duration_s:180,save_interval_s:60,initial_tstep_s:1,dg2_depth_thresh_m:.02,solver:'dg2'}})
 })
 
-const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false})
+const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,solver:'dg2',confirm:false})
 
 test('example values fill only the illustrative numbers and never the user declarations or choices', async () => {
   const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
   assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, confirm:false})
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', confirm:false})
   // Infiltration, lakes, domain and the nonurban declaration stay the user's explicit choice.
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr), /infiltración/)
@@ -324,4 +324,54 @@ test('changing a value withdraws the confirmation, but the non-urban declaration
   assert.equal(withFormChange(confirmed, 'amount', '80').confirm, false)
   assert.equal(withFormChange({ ...confirmed, confirm: false }, 'confirm', true).confirm, true)
   assert.equal(withFormChange(confirmed, 'confirm', false).confirm, false)
+})
+
+test('request builder sends the chosen solver; FV1 sends no thin-depth threshold even when one is typed', () => {
+  assert.equal(buildRoiFloodRequest(filledForm(), square, tr).simulation.solver, 'dg2')
+  for (const thin of [{thinDepth:'0.02',thinDepthOff:false}, {thinDepth:'',thinDepthOff:false}, {thinDepth:'',thinDepthOff:true}]) {
+    const simulation = buildRoiFloodRequest(filledForm({solver:'fv1',...thin}), square, tr).simulation
+    assert.deepEqual(simulation, {duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null,solver:'fv1'})
+  }
+  for (const solver of ['', 'fv2', undefined]) assert.throws(() => buildRoiFloodRequest(filledForm({solver}), square, tr), /método/)
+})
+
+test('example values keep DG2 and the solver step ignores the thin-depth field for FV1', async () => {
+  const { exampleFormValues, formStepStatus } = await import('../src/utils/floodDg2.ts')
+  assert.equal(exampleFormValues({...emptyForm(), solver:'fv1'}, square).solver, 'dg2')
+  const ready = {...exampleFormValues(emptyForm(), square), useRoi:true, infiltration:'unsupported', lakes:'none', nonurban:true, confirm:true}
+  assert.equal(formStepStatus({...ready, solver:'fv1', thinDepth:'', thinDepthOff:false}, square).solver, true)
+  assert.equal(formStepStatus({...ready, solver:'dg2', thinDepth:'', thinDepthOff:false}, square).solver, false)
+  assert.equal(formStepStatus({...ready, solver:''}, square).solver, false)
+})
+
+const en = (es, english) => english
+test('automatic solver fallback notice names both methods and the reason in plain words', async () => {
+  const { solverFallbackNotice } = await import('../src/utils/floodDg2.ts')
+  assert.equal(solverFallbackNotice({from:'dg2',to:'fv1',reason:'negative_depth_artifacts'}, tr),
+    'Se cambió automáticamente de DG2 a FV1 porque DG2 dejó artefactos numéricos (profundidades negativas). Los resultados mostrados son de FV1.')
+  assert.equal(solverFallbackNotice({from:'dg2',to:'fv1',reason:'negative_depth_artifacts'}, en),
+    'Switched automatically from DG2 to FV1 because DG2 left numerical artifacts (negative depths). The results shown are from FV1.')
+  assert.equal(solverFallbackNotice({from:'fv1',to:'dg2',reason:'solver_timeout'}, tr),
+    'Se cambió automáticamente de FV1 a DG2 porque FV1 agotó su tiempo de cálculo. Los resultados mostrados son de DG2.')
+  assert.match(solverFallbackNotice({from:'dg2',to:'fv1',reason:'solver_failed'}, tr), /porque DG2 terminó con error/)
+  assert.match(solverFallbackNotice({from:'dg2',to:'fv1',reason:'output_invalid'}, en), /because DG2 produced invalid outputs/)
+  assert.equal(solverFallbackNotice(null, tr), null)
+  assert.equal(solverFallbackNotice(undefined, tr), null)
+})
+
+test('a run where both solvers failed lists each attempt and its reason', async () => {
+  const { failedAttemptsNotice } = await import('../src/utils/floodDg2.ts')
+  const attempts = [{solver:'dg2',outcome:'failed',reason:'negative_depth_artifacts'},{solver:'fv1',outcome:'failed',reason:'output_invalid'}]
+  assert.equal(failedAttemptsNotice(attempts, tr), 'Se intentaron los dos métodos: DG2 dejó artefactos numéricos (profundidades negativas); FV1 produjo salidas inválidas.')
+  assert.equal(failedAttemptsNotice([attempts[0]], tr), null)
+  assert.equal(failedAttemptsNotice(null, tr), null)
+})
+
+test('negative-depth artifacts warning only when the volume rule marks the result as artifacts', async () => {
+  const { negativeDepthWarning, NEGATIVE_DEPTH_WARNING } = await import('../src/utils/floodDg2.ts')
+  assert.equal(NEGATIVE_DEPTH_WARNING, 'artefactos numéricos en terreno muy empinado; profundidades poco confiables, la dirección del flujo sí vale')
+  const artifacts = {status:'artifacts', max_added_volume_ratio:.055, clipped_cell_frames:2, frames:[1], min_m:-.033, thresholds:{warning:.01,fail:.1}}
+  assert.equal(negativeDepthWarning({negative_depth:artifacts}, tr), `${NEGATIVE_DEPTH_WARNING} (las profundidades negativas puestas en 0 añadieron hasta 5.5 % del agua de un cuadro).`)
+  assert.match(negativeDepthWarning({negative_depth:artifacts}, en), /^numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid/)
+  for (const negative_depth of [{...artifacts, status:'minor'}, {...artifacts, status:'none'}, null, undefined]) assert.equal(negativeDepthWarning({negative_depth}, tr), null)
 })

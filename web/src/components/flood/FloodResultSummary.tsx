@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { FloodRoiResult } from '../../api/client'
-import { dg2Summary } from '../../utils/floodDg2'
+import { dg2Summary, solverLabel } from '../../utils/floodDg2'
 import { useTranslation } from '../../i18n/useTranslation'
 
 interface Props {
@@ -26,8 +26,11 @@ export function FloodResultSummary({ result, frameIndex }: Props) {
   const fmt = (v: number | null | undefined, digits = 2) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString(locale, { maximumFractionDigits: digits })
   const atMaximum = frameIndex == null
   const thresholds = result.roads?.thresholds_m
+  const fallback = result.solver_fallback
   return (
     <div className="ws-rain-results-grid" role="group" aria-label={t('Resumen de resultados', 'Results summary')}>
+      <Card label={t('Método de cálculo', 'Computation method')} value={solverLabel(result.solver ?? 'dg2')}
+        sub={fallback ? t(`cambio automático desde ${solverLabel(fallback.from)}`, `automatic switch from ${solverLabel(fallback.from)}`) : t('el elegido', 'the one chosen')} />
       <Card label={t('Área inundada (≥ 0.03 m)', 'Flooded area (≥ 0.03 m)')} value={`${fmt(s.floodedHa)} ha`}
         sub={s.floodedPct == null ? undefined : t(`${fmt(s.floodedPct, 1)} % de las celdas con dato`, `${fmt(s.floodedPct, 1)} % of cells with data`)} />
       <Card label={t('Profundidad máxima', 'Maximum depth')} value={`${fmt(s.maxDepthM)} m`}

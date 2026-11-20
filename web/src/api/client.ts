@@ -398,13 +398,26 @@ export async function runSolarSimulation(
   return res.json()
 }
 
-export interface FloodRoiRun { id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null; losses?: {infiltration: string; runoff_coefficient: number | null; atmospheric_pressure_hpa: number | null; barometric_surge_m: number} | null }
+/** Automatic switch to the other solver after the requested one failed (reason: public code of the worker). */
+export interface FloodSolverFallback { from: string; to: string; reason: string }
+export interface FloodSolverAttempt { solver: string; outcome: 'succeeded' | 'failed'; reason: string | null }
+export interface FloodRoiRun {
+  id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null
+  losses?: {infiltration: string; runoff_coefficient: number | null; atmospheric_pressure_hpa: number | null; barometric_surge_m: number} | null
+  /** 'dg2' or 'fv1': requested by the user, and the one whose results are shown (or last tried). */
+  requested_solver?: string; solver?: string
+  solver_fallback?: FloodSolverFallback | null
+  solver_attempts?: FloodSolverAttempt[] | null
+}
 export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
 export interface FloodRoiResult {
   frames: Array<{frame_index: number; scheduled_time_s: number | null; time_s: null; stats: FloodRoiStats}>
   maximum: {stats: FloodRoiStats}
   artifacts: Array<{name: string; url: string; frame_index?: number | null; scheduled_time_s?: number | null}>
   warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
+  requested_solver?: string; solver?: string; solver_fallback?: FloodSolverFallback | null
+  /** Negative depths set to 0 and the volume they add relative to the water of each frame (null in older runs). */
+  negative_depth?: {status?: 'none' | 'minor' | 'artifacts'; clipped_cell_frames?: number; frames?: Array<number | 'maximum'>; min_m?: number | null; max_added_volume_ratio?: number | null; thresholds?: {warning: number; fail: number}} | null
   /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
   flow?: FloodRoiFlow | null
   grid?: {cellsize_m: number; shape?: [number, number]}

@@ -1,10 +1,11 @@
-"""Trabajos privados ROI→NASADEM→DG2. Hipótesis sintéticas, no precisión hidráulica certificada.
+"""Trabajos privados ROI→NASADEM→DG2/FV1. Hipótesis sintéticas, no precisión hidráulica certificada.
 
 Payload exacto: roi, domain (GeoJSON Polygon EPSG:4326); rainfall (contrato
 normalize_request); rainfall_profile {interval_count,seed,distribution}; terrain
 {target_crs,resolution_m,resampling}; hydraulics {manning,initial_condition,
 boundary,infiltration,domain_nonurban}; simulation {duration_s,save_interval_s,
-initial_tstep_s,dg2_depth_thresh_m}. boundary: 'closed', 'free' u objeto por lado
+initial_tstep_s,dg2_depth_thresh_m,solver?}; solver 'dg2' (default) o 'fv1', con fallback
+automático al otro si el intento falla tras la preparación. boundary: 'closed', 'free' u objeto por lado
 (north/east/south/west: closed, free o fixed_level con level_m); initial_condition:
 'dry_zero_velocity' o 'still_water_at_fixed_level'; infiltration: 'unsupported' o
 'runoff_coefficient'; atmospheric_pressure_hpa opcional (950-1040, eleva el nivel del mar fijo).
@@ -19,6 +20,7 @@ import math
 import multiprocessing
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -45,10 +47,11 @@ from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
 from .lakes import CITATION as LAKES_CITATION, burn_lakes, lakes_in_bounds
-from .results import NEGATIVE_DEPTH_TOLERANCE_M, summarize_results, export_depth_cog
+from .results import NegativeDepthArtifacts, summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
 _KEYS = {'roi', 'domain', 'rainfall', 'rainfall_profile', 'terrain', 'hydraulics', 'simulation'}
+SOLVERS = ('dg2', 'fv1')
 _CONFIG = {'executable', 'binary_sha256', 'dem_executable', 'dem_sha256', 'timeout_s',
            'preparation_timeout_s', 'max_cells', 'max_rain_values', 'max_frames', 'max_tiles', 'code_version'}
 
@@ -164,7 +167,10 @@ def validate_roi_run(payload, limits):
     if (not isinstance(payload['hydraulics'], dict) or not hydraulic_keys <= set(payload['hydraulics'])
             or not set(payload['hydraulics']) <= hydraulic_keys | {'atmospheric_pressure_hpa', 'lakes'}):
         raise ValueError('hydraulics: claves inválidas')
-    _keys(payload['simulation'], {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'})
+    simulation_keys = {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'}
+    if (not isinstance(payload['simulation'], dict) or not simulation_keys <= set(payload['simulation'])
+            or not set(payload['simulation']) <= simulation_keys | {'solver'}):
+        raise ValueError('simulation: claves inválidas')
     t, h, s, rp = (payload[k] for k in ('terrain','hydraulics','simulation','rainfall_profile'))
     crs = _validate_crs(t['target_crs'])
     resolution = _number(t['resolution_m'], 100_000)
@@ -200,6 +206,12 @@ def validate_roi_run(payload, limits):
     # It removes negative cell-average depths on thin films but changes the solution, so it is recorded.
     if s['dg2_depth_thresh_m'] is not None:
         _number(s['dg2_depth_thresh_m'], 1)
+    # Solver: 'dg2' (default when absent, so earlier payloads keep working) or 'fv1'; same binary, other keyword.
+    solver = s.get('solver', 'dg2')
+    if not isinstance(solver, str) or solver not in SOLVERS:
+        raise ValueError("simulation.solver debe ser 'dg2' o 'fv1'")
+    if solver == 'fv1' and s['dg2_depth_thresh_m'] is not None:
+        raise ValueError('simulation.dg2_depth_thresh_m solo aplica a DG2: con solver fv1 debe ser null')
     frames = math.floor(duration / save) + 2
     if frames > limits['max_frames']:
         raise ValueError('cuadros exceden max_frames')
@@ -223,6 +235,7 @@ def validate_roi_run(payload, limits):
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
     _rain_profile(payload, losses)
     return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string()},
+                                  'simulation': {**s, 'solver': solver},
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
                                                'width': width, 'height': height, 'frame_budget': frames,
                                                'boundary': sides, 'solver_boundary': solver_sides,
@@ -292,12 +305,16 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'simulation_duration_s':request['simulation']['duration_s'],
              'save_interval_s':request['simulation']['save_interval_s'],
              'dg2_depth_thresh_m':request['simulation']['dg2_depth_thresh_m'],
+             # solver = the one whose results are shown (or last tried); solver_fallback = {from,to,reason} or null.
+             'requested_solver':request['simulation']['solver'],'solver':request['simulation']['solver'],
+             'solver_fallback':None,'solver_attempts':[],
              'boundary':request['computed']['boundary'],
              'initial_condition':request['hydraulics']['initial_condition'],
              'losses':request['computed']['losses'],
              'lakes':request['computed']['lakes'],
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
-             'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+cfg['timeout_s']+30}
+             # Two solver attempts at most (requested solver, then the automatic fallback).
+             'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+2*cfg['timeout_s']+30}
     _save(directory,state)
     if launch:
         try:
@@ -402,12 +419,17 @@ def _still_water(request):
     return request['hydraulics']['initial_condition'] == 'still_water_at_fixed_level'
 
 
-def solver_parameter_file(request, start=None):
+def solver_parameter_file(request, start=None, solver=None):
     """LISFLOOD-FP .par text from a validated request. All file names are constant;
-    only validated numbers are interpolated, so no untrusted directive can be injected."""
+    only validated numbers are interpolated, so no untrusted directive can be injected.
+
+    ``solver`` overrides the requested one (automatic fallback); the same 8.0.3 binary takes `dg2` or `fv1`."""
     s, h = request['simulation'], request['hydraulics']
-    parameter = 'dg2\n'
-    if s['dg2_depth_thresh_m'] is not None:
+    solver = solver or s.get('solver', 'dg2')
+    if solver not in SOLVERS:
+        raise ValueError('solver inválido')
+    parameter = f'{solver}\n'
+    if solver == 'dg2' and s['dg2_depth_thresh_m'] is not None:
         # Must follow `dg2`, which resets DG2DepthThresh to its default.
         parameter += f'dg2depththresh {s["dg2_depth_thresh_m"]}\n'
     # Velocity frames (.Vx/.Vy = HU/H) for flow arrows; they do not change the depth solution.
@@ -419,7 +441,7 @@ def solver_parameter_file(request, start=None):
     if _has_boundary_file(request):
         parameter += 'bcifile boundary.bci\n'
     if _still_water(request) if start is None else start:
-        # Sea and/or lakes full at start. DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients).
+        # Sea and/or lakes full at start. DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients); FV1 only initial.wd.
         parameter += 'startfile initial.wd\n'
     return parameter
 
@@ -436,7 +458,92 @@ def _preparation_child(directory, request, cfg, provider, stage, roads_fetcher=f
         os._exit(1)
 
 
-def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
+class _AttemptFailed(Exception):
+    """One solver attempt failed after preparation; ``reason`` is a public code."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def other_solver(solver):
+    """The automatic fallback: DG2 -> FV1 and FV1 -> DG2."""
+    return 'fv1' if solver == 'dg2' else 'dg2'
+
+
+def _solver_inputs(directory, request, solver, started):
+    """Prepared files the solver reads. FV1 reads neither the DG2 slope coefficients of the DEM (.dem1x/.dem1y)
+    nor those of the start depth (initial.wd1x/.wd1y): only DG2 loads them (swe/dg2new.cpp)."""
+    sources = [('terrain.dem',directory/'dg2/terrain.dem')]
+    if solver == 'dg2':
+        sources += [('terrain.dem1x',directory/'dg2/terrain.dem1x'),('terrain.dem1y',directory/'dg2/terrain.dem1y')]
+    sources.append(('rain.nc',directory/'rain.nc'))
+    if _has_boundary_file(request):
+        sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
+    if started:
+        sources += [(name,directory/'initial'/name) for name in
+                    (('initial.wd','initial.wd1x','initial.wd1y') if solver == 'dg2' else ('initial.wd',))]
+    return sources
+
+
+def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
+    """Run one solver in its own directory and summarize it; raises _AttemptFailed on a solver or output failure.
+
+    Staging errors (missing prepared files) are not solver failures: they propagate and fail the run."""
+    work = directory/name; work.mkdir(mode=0o700)
+    sources = _solver_inputs(directory,request,solver,started)
+    for file_name,source in sources:
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('invalid prepared source')
+        (work/file_name).write_bytes(source.read_bytes())
+    (work/'roi.par').write_text(solver_parameter_file(request,start=started,solver=solver))
+    state['input_hashes'] = {file_name:_sha(work/file_name) for file_name in [n for n,_ in sources]+['roi.par']}
+    state.update(state='running',stage='running'); _save(directory,state)
+    with (directory/('solver.log' if name == 'work' else 'solver-fallback.log')).open('wb') as log:
+        try:
+            result = subprocess.run([cfg['executable'],'roi.par'],cwd=work,stdin=subprocess.DEVNULL,
+                                    stdout=log,stderr=subprocess.STDOUT,timeout=cfg['timeout_s'],check=False)
+        except subprocess.TimeoutExpired:
+            raise _AttemptFailed('solver_timeout') from None
+    state['solver_returncode'] = result.returncode
+    if result.returncode:
+        raise _AttemptFailed('solver_failed')
+    cogs = directory/'cogs'
+    try:
+        outputs = work/'outputs'
+        if not outputs.is_dir() or outputs.is_symlink() or any(p.is_symlink() or not p.is_file() for p in outputs.iterdir()):
+            raise ValueError('invalid solver output')
+        state.update(state='results',stage='results'); _save(directory,state)
+        summary = summarizer(outputs,save_interval_s=request['simulation']['save_interval_s'],crs=request['terrain']['target_crs'],
+                             max_cells=cfg['max_cells'],initial_depth=work/'initial.wd' if started else None,
+                             roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
+        summary['lakes'] = state['provenance']['lakes']['lakes'] if state['provenance']['lakes'] else None
+        if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
+            raise ValueError('output budget exceeded')
+        artifacts=[]
+        cogs.mkdir(mode=0o700)
+        for item in [*summary['frames'],summary['maximum']]:
+            source=outputs/item['file']
+            if source.is_symlink():
+                raise ValueError('invalid output symlink')
+            target=cogs/(item['file']+'.tif')
+            info=export_depth_cog(source,target,crs=request['terrain']['target_crs'],code_version=cfg['code_version'],
+                                  max_cells=cfg['max_cells'],clip_negative=True)
+            with rasterio.open(target) as cog:
+                geographic=transform_bounds(cog.crs,'EPSG:4326',*cog.bounds,densify_pts=21)
+            artifacts.append({'file':'cogs/'+target.name,'sha256':info['output_sha256'],
+                              'source_sha256':info['source_sha256'],'geographic_bounds':list(geographic),
+                              'frame_index':item.get('frame_index'),'time_s':None,
+                              'scheduled_time_s':item.get('scheduled_time_s')})
+        return {'summary':summary,'artifacts':artifacts}
+    except Exception as exc:
+        # A failed attempt leaves no partial COGs behind for the next one.
+        if cogs.is_dir() and not cogs.is_symlink():
+            shutil.rmtree(cogs)
+        raise _AttemptFailed('negative_depth_artifacts' if isinstance(exc, NegativeDepthArtifacts) else 'output_invalid') from None
+
+
+def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, summarizer=summarize_results):
     """Claim exclusivo; preparación en grupo de proceso con deadline; estado terminal."""
     directory = _directory(root,run_id)
     try:
@@ -464,67 +571,40 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
             state.update(state='failed',error=stage.read_text() if stage.exists() else 'preparation_failed'); return state
         actual = json.loads(stage.read_text())['extent_m']
         state.update(state='preparing',stage='preparing',computed_extent_m=actual); _save(directory,state)
-        s,h = request['simulation'],request['hydraulics']
         started = (directory/'initial/initial.wd').is_file()
-        parameter = solver_parameter_file(request,start=started)
-        work = directory/'work'; work.mkdir(mode=0o700)
-        sources = [('terrain.dem',directory/'dg2/terrain.dem'),('terrain.dem1x',directory/'dg2/terrain.dem1x'),
-                   ('terrain.dem1y',directory/'dg2/terrain.dem1y'),('rain.nc',directory/'rain.nc')]
-        if _has_boundary_file(request):
-            sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
-        if started:
-            sources += [(name,directory/'initial'/name) for name in ('initial.wd','initial.wd1x','initial.wd1y')]
-        for name,source in sources:
-            if source.is_symlink() or not source.is_file():
-                raise ValueError('invalid prepared source')
-            (work/name).write_bytes(source.read_bytes())
-        (work/'roi.par').write_text(parameter)
-        names = [name for name,_ in sources]+['roi.par']
-        state['input_hashes'] = {name:_sha(work/name) for name in names}
         lakes_manifest = directory/'lakes/manifest.json'
+        requested = request['simulation'].get('solver','dg2')  # jobs created before the solver choice ran DG2
+        state.setdefault('solver_attempts',[]); state.setdefault('solver_fallback',None)
         state['provenance'] = {'lakes':json.loads(lakes_manifest.read_text()) if lakes_manifest.is_file() else None,
                                'terrain':json.loads((directory/'prepared/manifest.json').read_text()),
                                'aligned_terrain_sha256':_sha(directory/'prepared/solver-terrain.tif'),
                                'aligned_extent_m':actual,
                                'dg2':json.loads((directory/'dg2/manifest.json').read_text()),
                                'rain':json.loads((directory/'rain.json').read_text()),
-                               'helper_sha256':cfg['dem_sha256'], 'code_version':cfg['code_version']}
-        state.update(state='running',stage='running'); _save(directory,state)
-        with (directory/'solver.log').open('wb') as log:
+                               'helper_sha256':cfg['dem_sha256'], 'code_version':cfg['code_version'],
+                               'requested_solver':requested,'solver':requested,'solver_fallback':None}
+        # Requested solver first; if its attempt fails after preparation, the other solver runs once on the same
+        # prepared inputs in its own directory. Preparation failures never reach here (both would fail alike).
+        failure = None
+        for solver,name in ((requested,'work'),(other_solver(requested),'work-fallback')):
+            if failure is not None:
+                state['solver_fallback'] = state['provenance']['solver_fallback'] = {'from':requested,'to':solver,'reason':failure}
+            state['solver'] = state['provenance']['solver'] = solver
             try:
-                result = subprocess.run([cfg['executable'],'roi.par'],cwd=work,stdin=subprocess.DEVNULL,
-                                        stdout=log,stderr=subprocess.STDOUT,timeout=cfg['timeout_s'],check=False)
-            except subprocess.TimeoutExpired:
-                state.update(state='timed_out',error='solver_timeout'); return state
-        state['solver_returncode'] = result.returncode
-        if result.returncode:
-            raise RuntimeError('solver_failed')
-        outputs = work/'outputs'
-        if not outputs.is_dir() or outputs.is_symlink() or any(p.is_symlink() or not p.is_file() for p in outputs.iterdir()):
-            raise ValueError('invalid solver output')
-        state.update(state='results',stage='results'); _save(directory,state)
-        summary = summarize_results(outputs,save_interval_s=s['save_interval_s'],crs=request['terrain']['target_crs'],max_cells=cfg['max_cells'],
-                                    initial_depth=work/'initial.wd' if started else None,
-                                    roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
-        summary['lakes'] = state['provenance']['lakes']['lakes'] if state['provenance']['lakes'] else None
-        if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
-            raise ValueError('output budget exceeded')
-        artifacts=[]
-        (directory/'cogs').mkdir(mode=0o700)
-        for item in [*summary['frames'],summary['maximum']]:
-            source=outputs/item['file']
-            if source.is_symlink():
-                raise ValueError('invalid output symlink')
-            target=directory/'cogs'/(item['file']+'.tif')
-            info=export_depth_cog(source,target,crs=request['terrain']['target_crs'],code_version=cfg['code_version'],max_cells=cfg['max_cells'],
-                                  negative_tolerance_m=NEGATIVE_DEPTH_TOLERANCE_M)
-            with rasterio.open(target) as cog:
-                geographic=transform_bounds(cog.crs,'EPSG:4326',*cog.bounds,densify_pts=21)
-            artifacts.append({'file':'cogs/'+target.name,'sha256':info['output_sha256'],
-                              'source_sha256':info['source_sha256'],'geographic_bounds':list(geographic),
-                              'frame_index':item.get('frame_index'),'time_s':None,
-                              'scheduled_time_s':item.get('scheduled_time_s')})
-        state.update(state='succeeded',stage='succeeded',result=summary,artifacts=artifacts)
+                outcome = _attempt(directory,request,cfg,state,solver,name,started,summarizer)
+            except _AttemptFailed as exc:
+                state['solver_attempts'].append({'solver':solver,'outcome':'failed','reason':exc.reason})
+                failure = failure or exc.reason
+                continue
+            state['solver_attempts'].append({'solver':solver,'outcome':'succeeded','reason':None})
+            summary = {**outcome['summary'],'requested_solver':requested,'solver':solver,'solver_fallback':state['solver_fallback']}
+            state.update(state='succeeded',stage='succeeded',result=summary,artifacts=outcome['artifacts'])
+            return state
+        # Both attempts failed: the run reports the first attempt's error; solver_attempts lists both.
+        if failure == 'solver_timeout':
+            state.update(state='timed_out',error='solver_timeout')
+        else:
+            state.update(state='failed',error=failure if failure == 'negative_depth_artifacts' else 'preparation_or_output_invalid')
     except Exception:
         state.update(state='failed',error='preparation_or_output_invalid')
     finally:

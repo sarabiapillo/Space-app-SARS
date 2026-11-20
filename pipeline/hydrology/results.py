@@ -31,11 +31,25 @@ FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput 
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
 # Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts.
 DEPTH_CLASS_BOUNDS_M = (.03, .15, .5, 1, 2)
-# DG2 wet/dry fronts can leave a few slightly negative cell-average depths even with dg2depththresh
-# (a real 30 mm / 900 s run left one cell at -0.033 m in one frame). Depths down to -NEGATIVE_DEPTH_TOLERANCE_M
-# are set to 0 and reported; anything more negative still fails the run.
-NEGATIVE_DEPTH_TOLERANCE_M = .05
+# DG2 wet/dry fronts on steep terrain can leave negative cell-average depths even with dg2depththresh.
+# Every negative depth of a solver output is set to 0; the water volume this adds, sum(-h_neg) * cell^2, is
+# compared per frame (and on the maximum grid) with the water left in that frame after clipping, sum(h) * cell^2.
+# Below NEGATIVE_VOLUME_WARNING_RATIO the result is normal; up to NEGATIVE_VOLUME_FAIL_RATIO it is kept with
+# NEGATIVE_DEPTH_WARNING; above it (or volume added to a dry frame) the run fails with NegativeDepthArtifacts.
+NEGATIVE_VOLUME_WARNING_RATIO = .01
+NEGATIVE_VOLUME_FAIL_RATIO = .10
+NEGATIVE_DEPTH_WARNING = ('artefactos numéricos en terreno muy empinado; profundidades poco confiables, '
+                          'la dirección del flujo sí vale')
 _D8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+
+class NegativeDepthArtifacts(ValueError):
+    """Negative depths add more than NEGATIVE_VOLUME_FAIL_RATIO of the water in some frame."""
+    code = 'negative_depth_artifacts'
+
+    def __init__(self, details):
+        super().__init__('negative depths add more than 10 % of the water volume of a frame')
+        self.details = details
 
 
 def _limit(max_cells):
@@ -43,14 +57,16 @@ def _limit(max_cells):
         raise ValueError('max_cells must be a positive integer')
 
 
-def read_depth_ascii(path, max_cells=4_000_000, *, negative_tolerance_m=0.0):
+def read_depth_ascii(path, max_cells=4_000_000, *, clip_negative=False):
     """Parsea seis encabezados ESRI exactos; nodata nunca representa lecho seco.
 
-    Depths in ``[-negative_tolerance_m, 0)`` become 0 and are counted in ``clipped``; below that they fail.
+    Strict by default: any negative depth fails. With ``clip_negative`` (solver outputs only) every negative
+    depth becomes 0 and ``clipped`` reports the cells, the minimum, the volume added (``added_m3``) and the
+    water left after clipping (``water_m3``).
     """
-    if not isinstance(negative_tolerance_m, (int, float)) or not 0 <= negative_tolerance_m < 1:
-        raise ValueError('negative_tolerance_m must be in [0, 1)')
-    return _read_ascii(path, max_cells, nonnegative=True, tolerance=float(negative_tolerance_m))
+    if not isinstance(clip_negative, bool):
+        raise ValueError('clip_negative must be a boolean')
+    return _read_ascii(path, max_cells, nonnegative=True, tolerance=math.inf if clip_negative else 0.0)
 
 
 def read_signed_ascii(path, max_cells=4_000_000):
@@ -102,6 +118,8 @@ def _read_ascii(path, max_cells, *, nonnegative, tolerance=0.0):
     mask = values == nodata
     clipped = nonnegative and (values < 0) & ~mask
     worst = float(values[clipped].min()) if nonnegative and clipped.any() else None
+    area = fields['cellsize'] ** 2
+    added = float(-values[clipped].sum()) * area if nonnegative and clipped.any() else 0.0
     if nonnegative:
         values[clipped] = 0.0
     valid = values[~mask]
@@ -120,7 +138,8 @@ def _read_ascii(path, max_cells, *, nonnegative, tolerance=0.0):
                   'wet_cells': int(np.count_nonzero(valid > 0)),
                   'min_m': float(valid.min()) if valid.size else None,
                   'max_m': float(valid.max()) if valid.size else None},
-        **({'clipped': {'cells': int(clipped.sum()), 'min_m': worst}} if nonnegative else {}),
+        **({'clipped': {'cells': int(clipped.sum()), 'min_m': worst, 'added_m3': added,
+                        'water_m3': float(valid.sum()) * area}} if nonnegative else {}),
     }
 
 
@@ -139,7 +158,7 @@ def _metric_crs(crs):
         raise ValueError('explicit valid metric projected CRS required') from exc
 
 
-def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_000, negative_tolerance_m=0.0):
+def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_000, clip_negative=False):
     """Exporta COG sin reproyección ni sobrescritura; devuelve SHA256 de origen/destino."""
     target = Path(output_path)
     if target.exists():
@@ -148,7 +167,7 @@ def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_00
     if not isinstance(code_version, str) or not code_version.strip():
         raise ValueError('code_version must be explicit')
     source = Path(path)
-    grid = read_depth_ascii(source, max_cells=max_cells, negative_tolerance_m=negative_tolerance_m)
+    grid = read_depth_ascii(source, max_cells=max_cells, clip_negative=clip_negative)
     if source.resolve() == target.resolve():
         raise ValueError('output cannot be source')
     values = grid['values'].astype('float32')
@@ -222,13 +241,18 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                            'total_km': None, 'frames': [], 'maximum': None}
     frames = []
     reference = None
-    negative = {'tolerance_m': NEGATIVE_DEPTH_TOLERANCE_M, 'clipped_cell_frames': 0, 'frames': [], 'min_m': None}
+    negative = {'clipped_cell_frames': 0, 'frames': [], 'min_m': None, 'max_added_volume_ratio': 0.0,
+                'status': 'none', 'thresholds': {'warning': NEGATIVE_VOLUME_WARNING_RATIO, 'fail': NEGATIVE_VOLUME_FAIL_RATIO}}
     for index, path in frame_paths + [(None, maxima[0])]:
-        data = read_depth_ascii(path, max_cells=max_cells, negative_tolerance_m=NEGATIVE_DEPTH_TOLERANCE_M)
-        if data['clipped']['cells']:
-            negative['clipped_cell_frames'] += data['clipped']['cells']
+        data = read_depth_ascii(path, max_cells=max_cells, clip_negative=True)
+        clipped = data['clipped']
+        if clipped['cells']:
+            negative['clipped_cell_frames'] += clipped['cells']
             negative['frames'].append('maximum' if index is None else index)
-            negative['min_m'] = min(data['clipped']['min_m'], negative['min_m'] if negative['min_m'] is not None else 0.0)
+            negative['min_m'] = min(clipped['min_m'], negative['min_m'] if negative['min_m'] is not None else 0.0)
+            # Volume added to a frame without water counts as above the failure threshold.
+            ratio = clipped['added_m3'] / clipped['water_m3'] if clipped['water_m3'] > 0 else math.inf
+            negative['max_added_volume_ratio'] = max(negative['max_added_volume_ratio'], ratio)
         signature = (data['grid'], data['nodata'])
         if reference is None:
             reference = signature
@@ -262,6 +286,11 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                 flow['frames'].append({'frame_index': index, 'arrows': arrows,
                                        'max_speed_m_s': max((a[2] for a in arrows), default=0)})
                 froude['frames'].append({'frame_index': index, **froude_frame(data, vx['values'], vy['values'])})
+    if negative['max_added_volume_ratio'] > NEGATIVE_VOLUME_FAIL_RATIO:
+        raise NegativeDepthArtifacts({**negative, 'status': 'failed', 'max_added_volume_ratio':
+                                      None if math.isinf(negative['max_added_volume_ratio']) else negative['max_added_volume_ratio']})
+    if negative['clipped_cell_frames']:
+        negative['status'] = 'artifacts' if negative['max_added_volume_ratio'] >= NEGATIVE_VOLUME_WARNING_RATIO else 'minor'
     mass = directory / (prefix + '.mass')
     balance = None
     if not mass.is_file():
@@ -274,9 +303,8 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                         f"mide conservación numérica, no exactitud hidráulica."]
         except (ValueError, OSError, IndexError):
             warnings = ['Archivo .mass ilegible; balance de masa no disponible.']
-    if negative['clipped_cell_frames']:
-        warnings = [*warnings, f"DG2 dejó {negative['clipped_cell_frames']} valores de celda ligeramente negativos "
-                               f"(mínimo {negative['min_m']:.3g} m, tolerancia {NEGATIVE_DEPTH_TOLERANCE_M} m); se pusieron en 0."]
+    if negative['status'] == 'artifacts':
+        warnings = [*warnings, NEGATIVE_DEPTH_WARNING]
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
