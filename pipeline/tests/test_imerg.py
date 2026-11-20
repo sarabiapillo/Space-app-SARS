@@ -72,3 +72,35 @@ def test_half_hourly_files_are_read_from_their_grid_group(tmp_path):
         return [{'id': 'G0', 'begin': '2026-10-03T00:00:00Z', 'handle': tmp_path / 'hh.HDF5'}]
     result = imerg_rainfall(BOUNDS, '2026-10-03T00:00:00Z', '2026-10-03T00:30:00Z', search=search, open_granule=read_imerg_file)
     assert result['segments'][0]['mm'] == pytest.approx(3.0)
+
+
+def test_auto_uses_the_best_run_that_covers_the_whole_event():
+    granules = [('2026-10-03T00:00:00Z', grid(4, 8)), ('2026-10-03T00:30:00Z', grid(0, 2))]
+    asked = []
+
+    def search(product, bounds, start, end):
+        asked.append(product)
+        if product == 'GPM_3IMERGHH':
+            return []  # Final not published yet (about 3.5 months of latency)
+        if product == 'GPM_3IMERGHHL':
+            return [{'id': 'L0', 'begin': granules[0][0], 'handle': 0}]  # incomplete Late run
+        return [{'id': f'E{i}', 'begin': begin, 'handle': i} for i, (begin, _) in enumerate(granules)]
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def open_granule(handle):
+        yield granules[handle][1]
+    result = imerg_rainfall(BOUNDS, '2026-10-03T00:00:00Z', '2026-10-03T01:00:00Z', product='auto',
+                            search=search, open_granule=open_granule)
+    assert asked == ['GPM_3IMERGHH', 'GPM_3IMERGHHL', 'GPM_3IMERGHHE']
+    assert result['provenance']['product'] == 'GPM_3IMERGHHE' and 'Early' in result['provenance']['note']
+    assert result['provenance']['tried'] == ['GPM_3IMERGHH', 'GPM_3IMERGHHL', 'GPM_3IMERGHHE']
+    assert result['segments'][0]['mm'] == pytest.approx(3.0)
+
+
+def test_auto_fails_when_no_run_covers_the_event():
+    def search(product, bounds, start, end):
+        return []
+    with pytest.raises(ValueError, match='no IMERG run'):
+        imerg_rainfall(BOUNDS, '2026-10-03T00:00:00Z', '2026-10-03T01:00:00Z', product='auto', search=search)
