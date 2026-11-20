@@ -2833,6 +2833,518 @@ se divide entre 1000.
 
 
 \clearpage
+\part{Visor de relieve 3D de la ROI y máscara geométrica SAR}
+\label{part:relieve3d}
+
+Esta parte documenta el módulo interactivo y completamente aislado de visualización tridimensional del terreno
+de la región de interés (\src{web/src/utils/terrain3d.ts} y \src{web/src/components/Terrain3DViewer.tsx}).
+Su propósito es doble: ofrecer una maqueta topográfica 3D de la ROI activa (con rotación libre de $360^\circ$,
+exageración vertical y texturas satelital o hipsométrica) y construir sobre esa misma malla una
+\textbf{máscara geométrica exploratoria para SAR} que identifique zonas de pendiente crítica, escorzo severo
+(\emph{layover}) y sombra radar según la geometría de mirada lateral de NISAR.
+
+\begin{atencion}
+El visor 3D es un módulo de inspección visual y geomorfológica ejecutado íntegramente en el navegador del
+cliente. No reemplaza al proveedor científico NASADEM del pipeline (\src{pipeline/elevation/nasadem.py}), no
+modifica la base de datos PostGIS y sus métricas de telemetría no se emplean como entrada de los cálculos
+numéricos de retrodispersión, simulación hidráulica DG2 ni irradiancia solar.
+\end{atencion}
+
+\section{Arquitectura aislada y flujo de construcción del bloque 3D}
+\label{sec:relieve3d-arquitectura}
+
+Para no penalizar el tiempo de carga inicial ni desmontar el lienzo 2D de MapLibre GL, el componente
+\texttt{Terrain3DViewer} se importa de forma diferida mediante \texttt{React.lazy} y \texttt{Suspense} desde
+\src{web/src/App.tsx}. El motor gráfico Three.js (\texttt{WebGLRenderer}, \texttt{PerspectiveCamera} y
+\texttt{OrbitControls}) se descarga en un paquete independiente (\texttt{Terrain3DViewer-*.js}) únicamente
+cuando el usuario pulsa el botón \textbf{Relieve 3D} en la barra superior (\src{web/src/components/Header.tsx}).
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=4mm,
+  caja/.style={draw,rounded corners,fill=blue!6,align=center,text width=2.3cm,minimum height=1.35cm,font=\small},
+  sal/.style={caja,fill=green!9},
+  fl/.style={-{Stealth},thick}]
+\node[caja] (a) {Geometría ROI\\(EPSG:4326)};
+\node[caja,right=of a] (b) {BBox y zoom\\$z\in[8,13]$};
+\node[caja,right=of b] (c) {Decodificación 1:1\\Terrarium (m)};
+\node[caja,right=of c] (d) {Remuestreo bilineal\\+ Despike $3\times3$};
+\node[sal,right=of d] (e) {Malla 3D $160\times160$\\+ Máscara SAR};
+\draw[fl] (a)--(b); \draw[fl] (b)--(c); \draw[fl] (c)--(d); \draw[fl] (d)--(e);
+\end{tikzpicture}
+\caption{Cadena de procesamiento en cliente del módulo de Relieve 3D (\src{web/src/utils/terrain3d.ts}).
+La conversión de canales RGB a metros ocurre a resolución nativa $1:1$ antes de cualquier interpolación
+espacial.}
+\label{fig:flujo-relieve3d}
+\end{figure}
+
+\section{Formulación matemática de la malla de elevación}
+\label{sec:relieve3d-matematicas}
+
+\subsection{Rectángulo envolvente, proyección Web Mercator y selección de zoom}
+\label{sec:relieve3d-mercator}
+
+Dada una geometría de ROI activa en coordenadas geográficas WGS84 ($\mathrm{EPSG}{:}4326$) ---ya sea un
+\texttt{Polygon}, un \texttt{MultiPolygon} administrativo o un anillo de recorte manual---, la función
+\texttt{bboxFromGeometry} extrae su rectángulo envolvente
+\begin{equation}
+  \mathcal{B} = [\lambda_{\min},\ \varphi_{\min},\ \lambda_{\max},\ \varphi_{\max}],
+  \label{eq:bbox-relieve}
+\end{equation}
+donde $\lambda\in[-180^\circ,180^\circ]$ es la longitud y $\varphi\in[-85.0511^\circ,85.0511^\circ]$ es la
+latitud acotada al dominio de la proyección Web Mercator ($\mathrm{EPSG}{:}3857$). Para evitar descargas
+excesivas en el cliente, se exige que la extensión angular cumpla
+$\Delta\lambda = \lambda_{\max}-\lambda_{\min}\le 3^\circ$ y
+$\Delta\varphi = \varphi_{\max}-\varphi_{\min}\le 3^\circ$.
+
+Para un nivel de zoom entero $z\in[8,13]$, el número de teselas por eje es $2^z$. Las coordenadas continuas
+de tesela $(X_t,Y_t)\in[0,2^z)$ se obtienen mediante la transformación de Mercator esférica:
+\begin{equation}
+  X_t(\lambda,z) = \frac{\lambda + 180^\circ}{360^\circ}\,2^z,
+  \qquad
+  Y_t(\varphi,z) = \frac{1}{2}\left[
+    1 - \frac{1}{\pi}\ln\!\left(\tan\!\left(\frac{\varphi\pi}{180^\circ}\right)
+    + \sec\!\left(\frac{\varphi\pi}{180^\circ}\right)\right)
+  \right] 2^z .
+  \label{eq:mercator-tiles}
+\end{equation}
+Los índices enteros de las teselas que cubren $\mathcal{B}$ son
+$x_0=\lfloor X_t(\lambda_{\min},z)\rfloor$, $x_1=\lfloor X_t(\lambda_{\max},z)-10^{-9}\rfloor$,
+$y_0=\lfloor Y_t(\varphi_{\max},z)\rfloor$ e $y_1=\lfloor Y_t(\varphi_{\min},z)-10^{-9}\rfloor$ (donde el eje
+$Y_t$ crece de norte a sur). El algoritmo \texttt{chooseZoom} selecciona el nivel más detallado que no supere
+el presupuesto máximo $N_{\max}=36$ teselas:
+\begin{equation}
+  z^\ast = \max\Bigl\{\, z\in\{8,9,10,11,12,13\} \;\Big|\;
+  (x_1 - x_0 + 1)(y_1 - y_0 + 1) \le N_{\max} \,\Bigr\}.
+  \label{eq:choose-zoom}
+\end{equation}
+
+Las dimensiones horizontales métricas $(W_m,H_m)$ del rectángulo $\mathcal{B}$, necesarias para conservar la
+proporción horizontal de la maqueta y calcular gradientes de pendiente en metros por metro, se aproximan sobre
+la esfera de radio medio $R_\oplus = 6\,371\,008.8\,\unit{m}$ evaluada en la latitud media
+$\bar\varphi = (\varphi_{\min}+\varphi_{\max})/2$:
+\begin{equation}
+  W_m = R_\oplus\,\frac{(\lambda_{\max}-\lambda_{\min})\pi}{180^\circ}\,\cos\!\left(\frac{\bar\varphi\pi}{180^\circ}\right),
+  \qquad
+  H_m = R_\oplus\,\frac{(\varphi_{\max}-\varphi_{\min})\pi}{180^\circ}.
+  \label{eq:bbox-metros}
+\end{equation}
+
+\subsection{Decodificación nativa 1:1 de teselas AWS Terrarium}
+\label{sec:relieve3d-terrarium}
+
+La elevación proviene de las teselas abiertas \textbf{AWS Terrarium} ($256\times256$ píxeles PNG de 8 bits por
+canal, derivadas de SRTM/NASADEM y otras fuentes públicas). Cada píxel almacena la altura codificada en los
+canales rojo $R$, verde $G$ y azul $B$, con $R,G,B\in\{0,1,\ldots,255\}$:
+\begin{equation}
+  h_{\mathrm{raw}}(R,G,B) = \left(256\,R + G + \frac{B}{256}\right) - 32\,768\quad[\unit{m}].
+  \label{eq:terrarium-decode}
+\end{equation}
+En esta representación de punto fijo en base 256:
+\begin{itemize}
+  \item El canal $R$ aporta escalones gruesos de $256\,\unit{m}$ (con $R=128, G=0, B=0$ correspondientes a
+        $0\,\unit{m}$ exactos).
+  \item El canal $G$ aporta metros enteros ($0$ a $255\,\unit{m}$).
+  \item El canal $B$ aporta fracciones de metro con resolución de $1/256\,\unit{m}\approx 3.9\,\unit{mm}$.
+\end{itemize}
+
+\warn{Nunca se debe escalar ni interpolar una imagen Terrarium en el espacio de color RGB antes de aplicar la
+ecuación~\eqref{eq:terrarium-decode}. Si un píxel con $h=255\,\unit{m}$ ($R=128,G=255,B=0$) y un vecino con
+$h=256\,\unit{m}$ ($R=129,G=0,B=0$) se promedian linealmente en RGB, el píxel intermedio recibe $R=128,G=128$
+($h=128\,\unit{m}$) o, si el redondeo sube $R$ a $129$ mientras $G$ permanece alto, produce un pico espurio
+de $+256\,\unit{m}$ (una «aguja» de un solo vértice). Por ello, \src{web/src/utils/terrain3d.ts} carga cada
+tesela con \texttt{createImageBitmap(blob, \{colorSpaceConversion: 'none'\})}, la vuelca a su resolución
+nativa $1:1$ ($256\times256$) con \texttt{imageSmoothingEnabled = false} y convierte inmediatamente cada píxel
+a un \texttt{Float32Array} en metros.}
+
+\subsection{Saneamiento costero y recorte de batimetría}
+\label{sec:relieve3d-saneamiento}
+
+En regiones costeras (como la ROI de Acapulco), las teselas Terrarium incluyen batimetría oceánica que desciende
+hasta $-9\,651\,\unit{m}$. Si esos valores negativos entraran directamente a la maqueta 3D, el desnivel total
+$\Delta z$ se inflaría artificialmente a más de $10\,000\,\unit{m}$, generando paredes laterales desproporcionadas
+y comprimiendo la rampa hipsométrica terrestre a un tono uniforme.
+
+La función \texttt{sanitizeElevationSample} valida la opacidad $\alpha\in[0,255]$, descarta valores corruptos
+por encima del techo físico $h_{\mathrm{ceil}}=9\,000\,\unit{m}$ y aplica un piso al nivel del mar
+$h_{\mathrm{floor}}=0\,\unit{m}$:
+\begin{equation}
+  h_{\mathrm{san}}(R,G,B,\alpha) =
+  \begin{cases}
+    \mathrm{NaN}, & \text{si } \alpha < 255 \;\vee\; \neg\text{finito}(h_{\mathrm{raw}}) \;\vee\; h_{\mathrm{raw}} > 9\,000\,\unit{m},\\[4pt]
+    \max\bigl(0\,\unit{m},\ h_{\mathrm{raw}}(R,G,B)\bigr), & \text{en otro caso.}
+  \end{cases}
+  \label{eq:saneamiento-costero}
+\end{equation}
+De este modo, la superficie marina queda nivelada a $0\,\unit{m}$ sin picos sobre el agua y las cotas mínima y
+máxima reflejan exclusivamente el relieve emergido de la ROI.
+
+\subsection{Remuestreo bilineal en metros hacia la malla \texorpdfstring{$161\times161$}{161x161}}
+\label{sec:relieve3d-bilineal}
+
+Una vez ensamblado el mosaico nativo de alturas saneadas $M(x,y)$ en metros (de dimensiones
+$W_s\times H_s$ píxeles), se recorta la subventana continua $[s_x, s_x+s_w]\times[s_y, s_y+s_h]$ que
+corresponde exactamente a los bordes de $\mathcal{B}$ y se remuestrea a la malla de la geometría 3D de
+$N_c\times N_r = 161\times161$ vértices ($160\times160$ segmentos).
+
+Para cada nodo $(c,r)$ con $c\in\{0,\ldots,N_c-1\}$ y $r\in\{0,\ldots,N_r-1\}$, las coordenadas continuas en
+el mosaico fuente son
+\begin{equation}
+  f_x = s_x + \frac{c}{N_c - 1}\,s_w,
+  \qquad
+  f_y = s_y + \frac{r}{N_r - 1}\,s_h,
+\end{equation}
+con índices base $x_0=\lfloor f_x\rfloor$, $y_0=\lfloor f_y\rfloor$, $x_1=\min(W_s-1,x_0+1)$,
+$y_1=\min(H_s-1,y_0+1)$ y pesos fraccionarios $t_x = f_x - x_0$, $t_y = f_y - y_0$. Si las cuatro muestras
+vecinas $h_{00}=M(x_0,y_0)$, $h_{10}=M(x_1,y_0)$, $h_{01}=M(x_0,y_1)$ y $h_{11}=M(x_1,y_1)$ son finitas, la
+función \texttt{resampleElevationBilinear} evalúa la interpolación bilineal directamente en metros:
+\begin{equation}
+  h(c,r) = (1 - t_y)\bigl[(1 - t_x)h_{00} + t_x h_{10}\bigr]
+         + t_y\bigl[(1 - t_x)h_{01} + t_x h_{11}\bigr].
+  \label{eq:bilineal-metros}
+\end{equation}
+Si alguna de las cuatro muestras es $\mathrm{NaN}$, se toma el promedio de las muestras finitas disponibles en
+la celda $2\times2$.
+
+\subsection{Filtro anti-picos \texorpdfstring{$3\times3$}{3x3} (\texttt{despikeElevationGrid})}
+\label{sec:relieve3d-despike}
+
+Incluso decodificando a resolución nativa, una tesela fuente puede contener un píxel anómalo aislado. Para
+suprimir agujas puntuales sin suavizar las aristas reales de cañones o crestas, \texttt{despikeElevationGrid}
+aplica un filtro de mediana condicional sobre la vecindad perforada de 8 vecinos inmediatos
+$\mathcal{N}_{3\times3}(c,r)$:
+\begin{equation}
+  \mathcal{N}_{3\times3}(c,r) = \Bigl\{\, h(c+\delta_c,\ r+\delta_r) \;\Big|\;
+  \delta_c,\delta_r\in\{-1,0,1\},\ (\delta_c,\delta_r)\neq(0,0) \,\Bigr\}.
+\end{equation}
+Sea $m_{c,r} = \operatorname{mediana}\bigl(\mathcal{N}_{3\times3}(c,r)\bigr)$ la mediana de los vecinos finitos.
+Con un umbral de salto puntual $\tau_{\mathrm{spike}} = 80\,\unit{m}$, la altura filtrada $\tilde h(c,r)$ es:
+\begin{equation}
+  \tilde h(c,r) =
+  \begin{cases}
+    m_{c,r}, & \text{si } \bigl|h(c,r) - m_{c,r}\bigr| > \tau_{\mathrm{spike}} \;\vee\; \neg\text{finito}\bigl(h(c,r)\bigr),\\[4pt]
+    h(c,r), & \text{en otro caso.}
+  \end{cases}
+  \label{eq:despike}
+\end{equation}
+Sobre una ladera real con pendiente continua (por ejemplo, en el Cañón del Sumidero), los valores vecinos a
+ambos lados rodean al valor central, por lo que $|h(c,r)-m_{c,r}|\approx 0$ y la ladera permanece intacta. En
+cambio, un artefacto aislado de $+256\,\unit{m}$ supera $\tau_{\mathrm{spike}}=80\,\unit{m}$ y se sustituye
+exactamente por $m_{c,r}$.
+
+Tras este paso se calculan las métricas definitivas de telemetría de la ROI:
+\begin{equation}
+  h_{\min} = \min_{c,r} \tilde h(c,r),
+  \qquad
+  h_{\max} = \max_{c,r} \tilde h(c,r),
+  \qquad
+  \Delta z = h_{\max} - h_{\min}.
+  \label{eq:telemetria-relieve}
+\end{equation}
+
+\begin{ejemplo}[Efecto del filtro anti-picos en una ladera con aguja de $+256\,\unit{m}$]
+Considérese una submatriz de $3\times3$ nodos sobre una ladera uniforme que asciende $20\,\unit{m}$ hacia el
+este y $15\,\unit{m}$ hacia el sur, centrada en $570\,\unit{m}$. Los 8 vecinos del nodo central tienen alturas
+$\{535, 555, 575, 550, 590, 565, 585, 605\}\,\unit{m}$, cuya mediana ordenada es
+$m = 0.5\times(565+575) = 570\,\unit{m}$. Si el nodo central sufre un salto de byte en el canal $R$ y vale
+$570 + 256 = 826\,\unit{m}$, la desviación respecto a la vecindad es $|826 - 570| = 256\,\unit{m} > 80\,\unit{m}$.
+La ecuación~\eqref{eq:despike} restaura el nodo central a $570\,\unit{m}$ sin alterar un solo milímetro del
+resto de la ladera (comprobado en \src{web/tests/terrain3d.test.mjs}).
+\end{ejemplo}
+
+\subsection{Geometría del bloque 3D, exageración vertical y zócalo}
+\label{sec:relieve3d-bloque}
+
+En la escena de Three.js (\src{web/src/components/Terrain3DViewer.tsx}), el lado horizontal mayor de la ROI se
+normaliza a $L_0 = 100$ unidades de escena mediante el factor de escala métrica:
+\begin{equation}
+  k = \frac{L_0}{\max(W_m,\ H_m,\ 1\,\unit{m})},
+  \qquad
+  W = k\,W_m,
+  \qquad
+  H = k\,H_m.
+  \label{eq:escala-escena}
+\end{equation}
+Dado el factor de exageración vertical $E_v \in [1.0, 5.0]$ controlado por el usuario (con valor inicial
+$E_v = 2.0$), el desplazamiento vertical de cada vértice de la superficie \texttt{PlaneGeometry} por encima del
+plano base de la ROI es
+\begin{equation}
+  Z(c,r) = k\,E_v\,\bigl(\tilde h(c,r) - h_{\min}\bigr) \ge 0.
+  \label{eq:z-vertice}
+\end{equation}
+Para que la maqueta luzca como un corte topográfico limpio y nunca como un cubo desproporcionado, las cuatro
+paredes perimetrales y la tapa inferior (en tonos gris pizarra \texttt{\#334155} y \texttt{\#1e293b}) descienden
+hasta una profundidad fija e independiente de $E_v$ igual al $3.5\,\text{\%}$ del lado horizontal mayor:
+\begin{equation}
+  Z_{\mathrm{base}} = -0.035\,\max(W, H).
+  \label{eq:zocalo-fijo}
+\end{equation}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_satelital.png}
+  \caption{Maqueta topográfica interactiva en el visor de Relieve 3D (\texttt{Terrain3DViewer}) con textura
+  \emph{Satelital (Esri World Imagery)}, exageración vertical de $2.0\times$, zócalo delgado en gris pizarra y
+  panel lateral de controles y telemetría ($\Delta z$, $h_{\min}$, $h_{\max}$, extensión y zoom de teselas).}
+  \label{fig:visor-3d-satelital}
+\end{figure}
+
+\subsection{Sombreado direccional Lambertiano (modo Hipsométrico)}
+\label{sec:relieve3d-hillshade}
+
+Cuando el usuario elige la textura \textbf{Hipsométrico (Elevación)}, \texttt{hypsometricCanvas} combina una
+rampa altitudinal con un sombreado topográfico analítico (\emph{hillshade}). Sea
+$t = (\tilde h - h_{\min})/\max(h_{\max}-h_{\min},1)\in[0,1]$ la altitud normalizada:
+\begin{itemize}
+  \item Si la ROI alcanza el nivel del mar ($h_{\min}\le 0.5\,\unit{m}$) y el punto cumple
+        $\tilde h(c,r)\le 0.5\,\unit{m}$, se asigna color azul costero constante $\mathrm{RGB}=(38,118,178)$
+        sin sombreado de pendiente.
+  \item Para el terreno emergido, se interpola por tramos entre verde de tierras bajas $(38,115,77)$ en $t=0$,
+        verde claro $(110,168,88)$ en $t=0.20$, ocre de laderas $(224,206,128)$ en $t=0.45$, marrón montañoso
+        $(166,112,68)$ en $t=0.72$, gris roca $(132,108,94)$ en $t=0.90$ y blanco de cumbres $(245,245,245)$ en
+        $t=1.0$.
+\end{itemize}
+Con pasos horizontales $\Delta x = W_m/(N_c-1)$ y $\Delta y = H_m/(N_r-1)$, las derivadas parciales por
+diferencias centradas y factor de realce visual $f_z = 2.2$ son:
+\begin{equation}
+  p = f_z\,\frac{\tilde h(c+1,r) - \tilde h(c-1,r)}{2\,\Delta x},
+  \qquad
+  q = f_z\,\frac{\tilde h(c,r-1) - \tilde h(c,r+1)}{2\,\Delta y},
+  \label{eq:grad-hillshade}
+\end{equation}
+donde $x$ crece hacia el este e $y$ crece hacia el norte (mientras que el índice de fila $r$ crece hacia el
+sur). Iluminando desde el noroeste (azimut $315^\circ$, elevación $42^\circ$) con el vector unitario
+$\hat{\mathbf s} = (-0.526,\ 0.526,\ 0.669)$, el producto escalar con la normal unitaria de la superficie
+$\hat{\mathbf n} = (-p,-q,1)/\sqrt{p^2+q^2+1}$ modula cada canal de color $C\in\{R,G,B\}$ mediante:
+\begin{equation}
+  \cos\gamma = \frac{-p\,s_x - q\,s_y + s_z}{\sqrt{p^2 + q^2 + 1}},
+  \qquad
+  S = \operatorname{clip}\!\bigl(0.45 + 0.85\max(0,\cos\gamma),\ 0.48,\ 1.22\bigr),
+  \qquad
+  C_{\mathrm{out}} = \min\bigl(255,\ \operatorname{round}(C\cdot S)\bigr).
+  \label{eq:lambert-hillshade}
+\end{equation}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_hipsometrico.png}
+  \caption{La misma ROI representada en modo \emph{Hipsométrico (Elevación)} dentro del visor 3D. El azul
+  costero delimita los cuerpos de agua a $0\,\unit{m}$, mientras la rampa altitudinal y el sombreado
+  Lambertiano~\eqref{eq:lambert-hillshade} destacan las divisorias de cuenca y los cañones.}
+  \label{fig:visor-3d-hipsometrico}
+\end{figure}
+
+\section{Máscara geométrica SAR en 3D: pendiente crítica, \emph{layover} y sombra}
+\label{sec:relieve3d-mascara-sar}
+
+Como se explicó en la sección~\ref{sec:gcov}, el producto NISAR GCOV normaliza el brillo por el área iluminada
+mediante RTC, pero en la versión actual del catálogo reporta \texttt{shadowMaskingApplied = False}: las zonas
+afectadas por inversión topográfica (\emph{layover}) o por sombra geométrica del haz no vienen enmascaradas en
+la capa \texttt{mask}. El cuarto modo de textura superficial del visor 3D, \textbf{Máscara SAR (Geometría)},
+calcula y proyecta directamente sobre la montaña tridimensional dónde son confiables las mediciones de
+retrodispersión y dónde domina la distorsión geométrica del radar.
+
+\begin{intuicion}
+Imagínese iluminar una maqueta de montañas con una linterna colocada a un costado a $43^\circ$ respecto a la
+vertical (el ángulo de incidencia nominal $\theta_i$ de NISAR):
+\begin{itemize}
+  \item En los \textbf{valles y llanuras suaves} ($\alpha \le 15^\circ$), la luz ilumina el suelo de manera
+        uniforme: cualquier cambio de brillo entre dos fechas ($\Delta\gamma^0$) refleja un cambio en la
+        superficie.
+  \item En las \textbf{paredes que miran de frente a la linterna} con una inclinación igual o mayor a $43^\circ$,
+        la cima de la montaña queda más cerca de la linterna que su propia falda. El radar recibe al mismo
+        tiempo el eco de la cima y el de la base: eso es el \textbf{\emph{layover}} (en rojo).
+  \item En las \textbf{paredes que le dan la espalda a la linterna} con una inclinación más pronunciada que el
+        rayo rasante ($90^\circ - 43^\circ = 47^\circ$), el haz pasa de largo por encima de la cresta y la
+        ladera queda a oscuras: eso es la \textbf{sombra radar} (en morado oscuro).
+\end{itemize}
+Si el satélite cambia de órbita ascendente (iluminando desde el este hacia el oeste) a órbita descendente
+(iluminando desde el oeste hacia el este), las paredes que estaban en \emph{layover} pasan a estar en sombra y
+viceversa.
+\end{intuicion}
+
+\subsection{Geometría de mirada lateral izquierda de NISAR}
+\label{sec:relieve3d-geometria-nisar}
+
+A diferencia de otros sensores que apuntan a la derecha, el radar de banda L de NISAR es de \textbf{mirada
+lateral izquierda} (\texttt{lookDirection = Left}):
+\begin{itemize}
+  \item \textbf{Órbita Ascendente (p.\,ej. pila T62/F10):} el satélite viaja de sur a norte con rumbo aproximado
+        de $350^\circ$ (ligeramente inclinado al oeste por la inclinación orbital). Al mirar $90^\circ$ a su
+        izquierda, el haz se propaga desde el satélite hacia el terreno con azimut horizontal
+        $\psi_{\mathrm{asc}} \approx 260^\circ$ (hacia el oeste-suroeste).
+  \item \textbf{Órbita Descendente (p.\,ej. pila T55/F80):} el satélite viaja de norte a sur con rumbo aproximado
+        de $190^\circ$. Al mirar $90^\circ$ a su izquierda, el haz se propaga desde el satélite hacia el terreno
+        con azimut horizontal $\psi_{\mathrm{desc}} \approx 100^\circ$ (hacia el este-sureste).
+\end{itemize}
+
+Sea $\psi \in \{260^\circ, 100^\circ\}$ el azimut de propagación del haz medido desde el norte en sentido
+horario. El vector unitario horizontal de propagación del haz en coordenadas locales este--norte es:
+\begin{equation}
+  \hat{\mathbf l}_{\mathrm{h}} = (l_x,\ l_y) = \left(\sin\psi,\ \cos\psi\right).
+  \label{eq:vector-haz-sar}
+\end{equation}
+
+\subsection{Derivadas reales del terreno y pendiente proyectada hacia el radar}
+\label{sec:relieve3d-ecuaciones-sar}
+
+En cada nodo $(c,r)$ de la malla saneada $\tilde h$, la función \texttt{computeSarGeometricMask} calcula las
+derivadas parciales físicas (sin factor de exageración artificial, en unidades adimensionales $\unit{m/m}$)
+usando diferencias centradas en el interior y diferencias laterales en los bordes:
+\begin{equation}
+  z_x(c,r) = \frac{\partial \tilde h}{\partial x}
+  \approx \frac{\tilde h(c_{\mathrm{next}},r) - \tilde h(c_{\mathrm{prev}},r)}{(c_{\mathrm{next}} - c_{\mathrm{prev}})\,\Delta x},
+  \qquad
+  z_y(c,r) = \frac{\partial \tilde h}{\partial y}
+  \approx \frac{\tilde h(c,r_{\mathrm{prev}}) - \tilde h(c,r_{\mathrm{next}})}{(r_{\mathrm{next}} - r_{\mathrm{prev}})\,\Delta y}.
+  \label{eq:derivadas-reales-sar}
+\end{equation}
+De aquí se obtienen dos magnitudes geométricas fundamentales:
+\begin{enumerate}
+  \item \textbf{Magnitud de la pendiente topográfica real $\alpha$:}
+        \begin{equation}
+          \tan\alpha(c,r) = \sqrt{z_x^2(c,r) + z_y^2(c,r)},
+          \qquad
+          \alpha(c,r) = \arctan\sqrt{z_x^2(c,r) + z_y^2(c,r)}.
+          \label{eq:pendiente-real}
+        \end{equation}
+  \item \textbf{Pendiente direccional proyectada en el sentido del haz radar ($s_{\mathrm{rad}}$):}
+        \begin{equation}
+          s_{\mathrm{rad}}(c,r) = \nabla\tilde h(c,r)\cdot\hat{\mathbf l}_{\mathrm{h}}
+          = z_x(c,r)\,l_x + z_y(c,r)\,l_y,
+          \qquad
+          \alpha_{\mathrm{rad}}(c,r) = \arctan\bigl(s_{\mathrm{rad}}(c,r)\bigr).
+          \label{eq:pendiente-proyectada}
+        \end{equation}
+\end{enumerate}
+
+El signo de $s_{\mathrm{rad}}$ tiene una interpretación física inmediata:
+\begin{itemize}
+  \item Si $s_{\mathrm{rad}} > 0$, la elevación del terreno \emph{sube} a medida que avanza el pulso del radar
+        a lo largo de $\hat{\mathbf l}_{\mathrm{h}}$; es decir, la ladera está \textbf{orientada de frente hacia
+        el satélite}.
+  \item Si $s_{\mathrm{rad}} < 0$, la elevación del terreno \emph{desciende} en el sentido de avance del pulso;
+        es decir, la ladera \textbf{le da la espalda al satélite}.
+\end{itemize}
+
+\subsection{Umbrales de clasificación en cuatro categorías}
+\label{sec:relieve3d-clases-sar}
+
+Dado el ángulo de incidencia nominal $\theta_i = 43^\circ$ (representativo de la franja de NISAR en la ROI de
+Chiapas, donde $\theta_i\in[42.3^\circ,45.4^\circ]$ según la figura E de la sección~\ref{sec:figuras}) y el
+umbral de pendiente crítica $\alpha_c = 15^\circ$, cada celda $(c,r)$ se clasifica evaluando las siguientes
+desigualdades en orden de prioridad estricta:
+\begin{equation}
+  \mathrm{Clase}(c,r) =
+  \begin{cases}
+    \text{\textbf{Layover / escorzo severo}}, &
+      \text{si } s_{\mathrm{rad}}(c,r) \ge \tan\theta_i
+      \quad\bigl(\alpha_{\mathrm{rad}} \ge \theta_i\bigr),\\[6pt]
+    \text{\textbf{Sombra radar}}, &
+      \text{si } -s_{\mathrm{rad}}(c,r) \ge \tan(90^\circ - \theta_i)
+      \quad\bigl(-\alpha_{\mathrm{rad}} \ge 90^\circ - \theta_i\bigr),\\[6pt]
+    \text{\textbf{Pendiente crítica}}, &
+      \text{si } \sqrt{z_x^2 + z_y^2} > \tan\alpha_c
+      \quad\bigl(\alpha > 15^\circ\text{ sin layover ni sombra}\bigr),\\[6pt]
+    \text{\textbf{Confiable}}, &
+      \text{en otro caso} \quad\bigl(\alpha \le 15^\circ\text{ sin layover ni sombra}\bigr).
+  \end{cases}
+  \label{eq:clasificacion-sar}
+\end{equation}
+
+Para $\theta_i = 43^\circ$ y $\alpha_c = 15^\circ$, los tres umbrales adimensionales de pendiente son:
+\begin{equation}
+  \tan 15^\circ \approx 0.2679,
+  \qquad
+  \tan 43^\circ \approx 0.9325,
+  \qquad
+  \tan(90^\circ - 43^\circ) = \tan 47^\circ \approx 1.0724.
+\end{equation}
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabularx}{\linewidth}{p{.23\linewidth}p{.16\linewidth}p{.24\linewidth}X}
+\toprule
+\textbf{Categoría} & \textbf{Color} & \textbf{Condición geométrica} & \textbf{Implicación para interpretar $\Delta\gamma^0$}\\\midrule
+Confiable & Verde \texttt{\#22C55E} & $\alpha \le 15^\circ$, sin layover ni sombra & Geometría estable; región óptima para cuantificar cambios de humedad, agua o vegetación.\\
+Pendiente crítica & Ámbar \texttt{\#F59E0B} & $\alpha > 15^\circ$, sin layover ni sombra & Acortamiento moderado; la corrección RTC trabaja cerca de sus límites de resolución del DEM.\\
+Layover / escorzo & Rojo \texttt{\#EF4444} & $s_{\mathrm{rad}} \ge \tan\theta_i$ & Superposición de ecos de cima y base; no interpretar cambios puntuales de $\Delta\gamma^0$.\\
+Sombra radar & Morado \texttt{\#1E1B4B} & $-s_{\mathrm{rad}} \ge \tan(90^\circ-\theta_i)$ & Zona ciega sin iluminación directa del haz; dominada por ruido térmico del receptor.\\\bottomrule
+\end{tabularx}
+\caption{Categorías de la máscara geométrica SAR en el visor 3D (\texttt{computeSarGeometricMask}).}
+\label{tab:clases-mascara-sar}
+\end{table}
+
+Finalmente, sobre los $N_{\mathrm{tot}} = N_c N_r = 25\,921$ puntos de la malla se contabiliza la fracción
+porcentual de área cubierta por cada régimen geométrico:
+\begin{equation}
+  P_k = 100\,\frac{N_k}{N_{\mathrm{tot}}}\,\mathrm{\%},
+  \qquad
+  k \in \{\text{confiable},\ \text{crítica},\ \text{layover},\ \text{sombra}\},
+  \qquad
+  \sum_k P_k = 100\,\mathrm{\%}.
+  \label{eq:porcentajes-sar}
+\end{equation}
+
+\begin{ejemplo}[Inversión entre \emph{layover} y sombra al cambiar de órbita en una pared del cañón]
+Considérese una pared escarpada del Cañón del Sumidero cuya altura sube hacia el oeste con pendiente constante
+de $+200\,\unit{m}$ por cada $100\,\unit{m}$ horizontales ($z_x = -2.0$, $z_y = 0$, es decir
+$\alpha = \arctan(2.0) = 63.4^\circ$).
+\begin{itemize}
+  \item \textbf{En órbita Ascendente ($\psi = 260^\circ$):} $l_x = \sin 260^\circ = -0.9848$. La pendiente
+        proyectada en dirección del haz es $s_{\mathrm{rad}} = (-2.0)(-0.9848) = +1.9696$. Como
+        $1.9696 \ge \tan 43^\circ = 0.9325$, toda la pared cae en \textbf{Layover} ($100\,\mathrm{\%}$).
+  \item \textbf{En órbita Descendente ($\psi = 100^\circ$):} $l_x = \sin 100^\circ = +0.9848$. Ahora la
+        pendiente proyectada es $s_{\mathrm{rad}} = (-2.0)(+0.9848) = -1.9696$. Como
+        $-s_{\mathrm{rad}} = 1.9696 \ge \tan 47^\circ = 1.0724$, exactamente la misma pared pasa a estar en
+        \textbf{Sombra radar} ($100\,\mathrm{\%}$).
+\end{itemize}
+Este ejemplo demuestra por qué el visor incluye el selector en tiempo real entre \emph{Ascendente (T62/F10)} y
+\emph{Descendente (T55/F80)}, y por qué nunca deben mezclarse órbitas opuestas en un mapa de cambio
+$\Delta\gamma^0$.
+\end{ejemplo}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_mascara_sar_asc.png}
+  \caption{Modo \emph{Máscara SAR (Geometría)} sobre el relieve 3D en órbita \textbf{Ascendente (T62/F10)}.
+  En verde se observan los valles y planicies confiables ($\alpha\le 15^\circ$), en ámbar las laderas de
+  pendiente crítica ($>15^\circ$), y en rojo/morado las paredes del cañón afectadas por \emph{layover} y sombra.}
+  \label{fig:visor-3d-sar-asc}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_mascara_sar_desc.png}
+  \caption{Inversión geométrica al conmutar a órbita \textbf{Descendente (T55/F80)} en el subpanel del visor
+  3D. Las laderas orientadas al oeste/este invierten sus regiones de \emph{layover} (rojo) y sombra radar
+  (morado oscuro), actualizando en vivo los porcentajes de la leyenda.}
+  \label{fig:visor-3d-sar-desc}
+\end{figure}
+
+\section{Gestión de memoria WebGL y verificación del módulo}
+\label{sec:relieve3d-webgl}
+
+Para garantizar que abrir y cerrar repetidamente el visor 3D no degrade el rendimiento del navegador ni agote
+los contextos WebGL disponibles para MapLibre GL, el ciclo de desmontaje de \texttt{Terrain3DViewer} ejecuta
+una liberación determinista de recursos:
+\begin{enumerate}
+  \item Cancela el bucle de animación (\texttt{cancelAnimationFrame}) y desconecta el \texttt{ResizeObserver}.
+  \item Destruye la instancia de \texttt{OrbitControls} (\texttt{controls.dispose()}).
+  \item Libera explícitamente en GPU las tres geometrías (\texttt{surfaceGeom}, \texttt{wallGeom},
+        \texttt{bottomGeom}), los cuatro materiales (\texttt{surfaceMat}, \texttt{wireMat}, \texttt{wallMat},
+        \texttt{bottomMat}) y todas las instancias de \texttt{CanvasTexture} creadas.
+  \item Invoca \texttt{renderer.dispose()}, fuerza la liberación del contexto nativo con
+        \texttt{renderer.forceContextLoss()} y retira el nodo \texttt{<canvas>} del DOM.
+\end{enumerate}
+
+La suite automatizada \src{web/tests/terrain3d.test.mjs} verifica de forma aislada la decodificación
+\eqref{eq:terrarium-decode}, el cálculo del rectángulo envolvente, la matemática de teselas Web Mercator
+\eqref{eq:mercator-tiles}, el saneamiento costero \eqref{eq:saneamiento-costero}, la eliminación de agujas de
+$+256\,\unit{m}$ mediante \eqref{eq:despike} sin alterar pendientes reales, la clasificación geométrica SAR
+\eqref{eq:clasificacion-sar} en terreno plano y acantilados para ambas órbitas, la traducción bilingüe ES/EN y la
+presencia de las llamadas de limpieza WebGL.
+
 \part{Derivaciones y demostraciones}
 \label{part:derivaciones}
 
@@ -3971,5 +4483,517 @@ ilustrativos.
 (10) $x_f=2\sqrt{19.62}\times10=88.6$\,m. (11) $\cos\omega_0=-\tan16.8^\circ\cdot0=0$, $\omega_0=90^\circ$, 12\,h.
 (12) $\cos(40^\circ-10^\circ)=\cos30^\circ=0.866$.
 
+\clearpage
+\part{Visor de relieve 3D de la ROI y máscara geométrica SAR}
+\label{part:relieve3d}
+
+Esta parte documenta el módulo interactivo y completamente aislado de visualización tridimensional del terreno
+de la región de interés (\src{web/src/utils/terrain3d.ts} y \src{web/src/components/Terrain3DViewer.tsx}).
+Su propósito es doble: ofrecer una maqueta topográfica 3D de la ROI activa (con rotación libre de $360^\circ$,
+exageración vertical y texturas satelital o hipsométrica) y construir sobre esa misma malla una
+\textbf{máscara geométrica exploratoria para SAR} que identifique zonas de pendiente crítica, escorzo severo
+(\emph{layover}) y sombra radar según la geometría de mirada lateral de NISAR.
+
+\begin{atencion}
+El visor 3D es un módulo de inspección visual y geomorfológica ejecutado íntegramente en el navegador del
+cliente. No reemplaza al proveedor científico NASADEM del pipeline (\src{pipeline/elevation/nasadem.py}), no
+modifica la base de datos PostGIS y sus métricas de telemetría no se emplean como entrada de los cálculos
+numéricos de retrodispersión, simulación hidráulica DG2 ni irradiancia solar.
+\end{atencion}
+
+\section{Arquitectura aislada y flujo de construcción del bloque 3D}
+\label{sec:relieve3d-arquitectura}
+
+Para no penalizar el tiempo de carga inicial ni desmontar el lienzo 2D de MapLibre GL, el componente
+\texttt{Terrain3DViewer} se importa de forma diferida mediante \texttt{React.lazy} y \texttt{Suspense} desde
+\src{web/src/App.tsx}. El motor gráfico Three.js (\texttt{WebGLRenderer}, \texttt{PerspectiveCamera} y
+\texttt{OrbitControls}) se descarga en un paquete independiente (\texttt{Terrain3DViewer-*.js}) únicamente
+cuando el usuario pulsa el botón \textbf{Relieve 3D} en la barra superior (\src{web/src/components/Header.tsx}).
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=4mm,
+  caja/.style={draw,rounded corners,fill=blue!6,align=center,text width=2.3cm,minimum height=1.35cm,font=\small},
+  sal/.style={caja,fill=green!9},
+  fl/.style={-{Stealth},thick}]
+\node[caja] (a) {Geometría ROI\\(EPSG:4326)};
+\node[caja,right=of a] (b) {BBox y zoom\\$z\in[8,13]$};
+\node[caja,right=of b] (c) {Decodificación 1:1\\Terrarium (m)};
+\node[caja,right=of c] (d) {Remuestreo bilineal\\+ Despike $3\times3$};
+\node[sal,right=of d] (e) {Malla 3D $160\times160$\\+ Máscara SAR};
+\draw[fl] (a)--(b); \draw[fl] (b)--(c); \draw[fl] (c)--(d); \draw[fl] (d)--(e);
+\end{tikzpicture}
+\caption{Cadena de procesamiento en cliente del módulo de Relieve 3D (\src{web/src/utils/terrain3d.ts}).
+La conversión de canales RGB a metros ocurre a resolución nativa $1:1$ antes de cualquier interpolación
+espacial.}
+\label{fig:flujo-relieve3d}
+\end{figure}
+
+\section{Formulación matemática de la malla de elevación}
+\label{sec:relieve3d-matematicas}
+
+\subsection{Rectángulo envolvente, proyección Web Mercator y selección de zoom}
+\label{sec:relieve3d-mercator}
+
+Dada una geometría de ROI activa en coordenadas geográficas WGS84 ($\mathrm{EPSG}{:}4326$) ---ya sea un
+\texttt{Polygon}, un \texttt{MultiPolygon} administrativo o un anillo de recorte manual---, la función
+\texttt{bboxFromGeometry} extrae su rectángulo envolvente
+\begin{equation}
+  \mathcal{B} = [\lambda_{\min},\ \varphi_{\min},\ \lambda_{\max},\ \varphi_{\max}],
+  \label{eq:bbox-relieve}
+\end{equation}
+donde $\lambda\in[-180^\circ,180^\circ]$ es la longitud y $\varphi\in[-85.0511^\circ,85.0511^\circ]$ es la
+latitud acotada al dominio de la proyección Web Mercator ($\mathrm{EPSG}{:}3857$). Para evitar descargas
+excesivas en el cliente, se exige que la extensión angular cumpla
+$\Delta\lambda = \lambda_{\max}-\lambda_{\min}\le 3^\circ$ y
+$\Delta\varphi = \varphi_{\max}-\varphi_{\min}\le 3^\circ$.
+
+Para un nivel de zoom entero $z\in[8,13]$, el número de teselas por eje es $2^z$. Las coordenadas continuas
+de tesela $(X_t,Y_t)\in[0,2^z)$ se obtienen mediante la transformación de Mercator esférica:
+\begin{equation}
+  X_t(\lambda,z) = \frac{\lambda + 180^\circ}{360^\circ}\,2^z,
+  \qquad
+  Y_t(\varphi,z) = \frac{1}{2}\left[
+    1 - \frac{1}{\pi}\ln\!\left(\tan\!\left(\frac{\varphi\pi}{180^\circ}\right)
+    + \sec\!\left(\frac{\varphi\pi}{180^\circ}\right)\right)
+  \right] 2^z .
+  \label{eq:mercator-tiles}
+\end{equation}
+Los índices enteros de las teselas que cubren $\mathcal{B}$ son
+$x_0=\lfloor X_t(\lambda_{\min},z)\rfloor$, $x_1=\lfloor X_t(\lambda_{\max},z)-10^{-9}\rfloor$,
+$y_0=\lfloor Y_t(\varphi_{\max},z)\rfloor$ e $y_1=\lfloor Y_t(\varphi_{\min},z)-10^{-9}\rfloor$ (donde el eje
+$Y_t$ crece de norte a sur). El algoritmo \texttt{chooseZoom} selecciona el nivel más detallado que no supere
+el presupuesto máximo $N_{\max}=36$ teselas:
+\begin{equation}
+  z^\ast = \max\Bigl\{\, z\in\{8,9,10,11,12,13\} \;\Big|\;
+  (x_1 - x_0 + 1)(y_1 - y_0 + 1) \le N_{\max} \,\Bigr\}.
+  \label{eq:choose-zoom}
+\end{equation}
+
+Las dimensiones horizontales métricas $(W_m,H_m)$ del rectángulo $\mathcal{B}$, necesarias para conservar la
+proporción horizontal de la maqueta y calcular gradientes de pendiente en metros por metro, se aproximan sobre
+la esfera de radio medio $R_\oplus = 6\,371\,008.8\,\unit{m}$ evaluada en la latitud media
+$\bar\varphi = (\varphi_{\min}+\varphi_{\max})/2$:
+\begin{equation}
+  W_m = R_\oplus\,\frac{(\lambda_{\max}-\lambda_{\min})\pi}{180^\circ}\,\cos\!\left(\frac{\bar\varphi\pi}{180^\circ}\right),
+  \qquad
+  H_m = R_\oplus\,\frac{(\varphi_{\max}-\varphi_{\min})\pi}{180^\circ}.
+  \label{eq:bbox-metros}
+\end{equation}
+
+\subsection{Decodificación nativa 1:1 de teselas AWS Terrarium}
+\label{sec:relieve3d-terrarium}
+
+La elevación proviene de las teselas abiertas \textbf{AWS Terrarium} ($256\times256$ píxeles PNG de 8 bits por
+canal, derivadas de SRTM/NASADEM y otras fuentes públicas). Cada píxel almacena la altura codificada en los
+canales rojo $R$, verde $G$ y azul $B$, con $R,G,B\in\{0,1,\ldots,255\}$:
+\begin{equation}
+  h_{\mathrm{raw}}(R,G,B) = \left(256\,R + G + \frac{B}{256}\right) - 32\,768\quad[\unit{m}].
+  \label{eq:terrarium-decode}
+\end{equation}
+En esta representación de punto fijo en base 256:
+\begin{itemize}
+  \item El canal $R$ aporta escalones gruesos de $256\,\unit{m}$ (con $R=128, G=0, B=0$ correspondientes a
+        $0\,\unit{m}$ exactos).
+  \item El canal $G$ aporta metros enteros ($0$ a $255\,\unit{m}$).
+  \item El canal $B$ aporta fracciones de metro con resolución de $1/256\,\unit{m}\approx 3.9\,\unit{mm}$.
+\end{itemize}
+
+\warn{Nunca se debe escalar ni interpolar una imagen Terrarium en el espacio de color RGB antes de aplicar la
+ecuación~\eqref{eq:terrarium-decode}. Si un píxel con $h=255\,\unit{m}$ ($R=128,G=255,B=0$) y un vecino con
+$h=256\,\unit{m}$ ($R=129,G=0,B=0$) se promedian linealmente en RGB, el píxel intermedio recibe $R=128,G=128$
+($h=128\,\unit{m}$) o, si el redondeo sube $R$ a $129$ mientras $G$ permanece alto, produce un pico espurio
+de $+256\,\unit{m}$ (una «aguja» de un solo vértice). Por ello, \src{web/src/utils/terrain3d.ts} carga cada
+tesela con \texttt{createImageBitmap(blob, \{colorSpaceConversion: 'none'\})}, la vuelca a su resolución
+nativa $1:1$ ($256\times256$) con \texttt{imageSmoothingEnabled = false} y convierte inmediatamente cada píxel
+a un \texttt{Float32Array} en metros.}
+
+\subsection{Saneamiento costero y recorte de batimetría}
+\label{sec:relieve3d-saneamiento}
+
+En regiones costeras (como la ROI de Acapulco), las teselas Terrarium incluyen batimetría oceánica que desciende
+hasta $-9\,651\,\unit{m}$. Si esos valores negativos entraran directamente a la maqueta 3D, el desnivel total
+$\Delta z$ se inflaría artificialmente a más de $10\,000\,\unit{m}$, generando paredes laterales desproporcionadas
+y comprimiendo la rampa hipsométrica terrestre a un tono uniforme.
+
+La función \texttt{sanitizeElevationSample} valida la opacidad $\alpha\in[0,255]$, descarta valores corruptos
+por encima del techo físico $h_{\mathrm{ceil}}=9\,000\,\unit{m}$ y aplica un piso al nivel del mar
+$h_{\mathrm{floor}}=0\,\unit{m}$:
+\begin{equation}
+  h_{\mathrm{san}}(R,G,B,\alpha) =
+  \begin{cases}
+    \mathrm{NaN}, & \text{si } \alpha < 255 \;\vee\; \neg\text{finito}(h_{\mathrm{raw}}) \;\vee\; h_{\mathrm{raw}} > 9\,000\,\unit{m},\\[4pt]
+    \max\bigl(0\,\unit{m},\ h_{\mathrm{raw}}(R,G,B)\bigr), & \text{en otro caso.}
+  \end{cases}
+  \label{eq:saneamiento-costero}
+\end{equation}
+De este modo, la superficie marina queda nivelada a $0\,\unit{m}$ sin picos sobre el agua y las cotas mínima y
+máxima reflejan exclusivamente el relieve emergido de la ROI.
+
+\subsection{Remuestreo bilineal en metros hacia la malla \texorpdfstring{$161\times161$}{161x161}}
+\label{sec:relieve3d-bilineal}
+
+Una vez ensamblado el mosaico nativo de alturas saneadas $M(x,y)$ en metros (de dimensiones
+$W_s\times H_s$ píxeles), se recorta la subventana continua $[s_x, s_x+s_w]\times[s_y, s_y+s_h]$ que
+corresponde exactamente a los bordes de $\mathcal{B}$ y se remuestrea a la malla de la geometría 3D de
+$N_c\times N_r = 161\times161$ vértices ($160\times160$ segmentos).
+
+Para cada nodo $(c,r)$ con $c\in\{0,\ldots,N_c-1\}$ y $r\in\{0,\ldots,N_r-1\}$, las coordenadas continuas en
+el mosaico fuente son
+\begin{equation}
+  f_x = s_x + \frac{c}{N_c - 1}\,s_w,
+  \qquad
+  f_y = s_y + \frac{r}{N_r - 1}\,s_h,
+\end{equation}
+con índices base $x_0=\lfloor f_x\rfloor$, $y_0=\lfloor f_y\rfloor$, $x_1=\min(W_s-1,x_0+1)$,
+$y_1=\min(H_s-1,y_0+1)$ y pesos fraccionarios $t_x = f_x - x_0$, $t_y = f_y - y_0$. Si las cuatro muestras
+vecinas $h_{00}=M(x_0,y_0)$, $h_{10}=M(x_1,y_0)$, $h_{01}=M(x_0,y_1)$ y $h_{11}=M(x_1,y_1)$ son finitas, la
+función \texttt{resampleElevationBilinear} evalúa la interpolación bilineal directamente en metros:
+\begin{equation}
+  h(c,r) = (1 - t_y)\bigl[(1 - t_x)h_{00} + t_x h_{10}\bigr]
+         + t_y\bigl[(1 - t_x)h_{01} + t_x h_{11}\bigr].
+  \label{eq:bilineal-metros}
+\end{equation}
+Si alguna de las cuatro muestras es $\mathrm{NaN}$, se toma el promedio de las muestras finitas disponibles en
+la celda $2\times2$.
+
+\subsection{Filtro anti-picos \texorpdfstring{$3\times3$}{3x3} (\texttt{despikeElevationGrid})}
+\label{sec:relieve3d-despike}
+
+Incluso decodificando a resolución nativa, una tesela fuente puede contener un píxel anómalo aislado. Para
+suprimir agujas puntuales sin suavizar las aristas reales de cañones o crestas, \texttt{despikeElevationGrid}
+aplica un filtro de mediana condicional sobre la vecindad perforada de 8 vecinos inmediatos
+$\mathcal{N}_{3\times3}(c,r)$:
+\begin{equation}
+  \mathcal{N}_{3\times3}(c,r) = \Bigl\{\, h(c+\delta_c,\ r+\delta_r) \;\Big|\;
+  \delta_c,\delta_r\in\{-1,0,1\},\ (\delta_c,\delta_r)\neq(0,0) \,\Bigr\}.
+\end{equation}
+Sea $m_{c,r} = \operatorname{mediana}\bigl(\mathcal{N}_{3\times3}(c,r)\bigr)$ la mediana de los vecinos finitos.
+Con un umbral de salto puntual $\tau_{\mathrm{spike}} = 80\,\unit{m}$, la altura filtrada $\tilde h(c,r)$ es:
+\begin{equation}
+  \tilde h(c,r) =
+  \begin{cases}
+    m_{c,r}, & \text{si } \bigl|h(c,r) - m_{c,r}\bigr| > \tau_{\mathrm{spike}} \;\vee\; \neg\text{finito}\bigl(h(c,r)\bigr),\\[4pt]
+    h(c,r), & \text{en otro caso.}
+  \end{cases}
+  \label{eq:despike}
+\end{equation}
+Sobre una ladera real con pendiente continua (por ejemplo, en el Cañón del Sumidero), los valores vecinos a
+ambos lados rodean al valor central, por lo que $|h(c,r)-m_{c,r}|\approx 0$ y la ladera permanece intacta. En
+cambio, un artefacto aislado de $+256\,\unit{m}$ supera $\tau_{\mathrm{spike}}=80\,\unit{m}$ y se sustituye
+exactamente por $m_{c,r}$.
+
+Tras este paso se calculan las métricas definitivas de telemetría de la ROI:
+\begin{equation}
+  h_{\min} = \min_{c,r} \tilde h(c,r),
+  \qquad
+  h_{\max} = \max_{c,r} \tilde h(c,r),
+  \qquad
+  \Delta z = h_{\max} - h_{\min}.
+  \label{eq:telemetria-relieve}
+\end{equation}
+
+\begin{ejemplo}[Efecto del filtro anti-picos en una ladera con aguja de $+256\,\unit{m}$]
+Considérese una submatriz de $3\times3$ nodos sobre una ladera uniforme que asciende $20\,\unit{m}$ hacia el
+este y $15\,\unit{m}$ hacia el sur, centrada en $570\,\unit{m}$. Los 8 vecinos del nodo central tienen alturas
+$\{535, 555, 575, 550, 590, 565, 585, 605\}\,\unit{m}$, cuya mediana ordenada es
+$m = 0.5\times(565+575) = 570\,\unit{m}$. Si el nodo central sufre un salto de byte en el canal $R$ y vale
+$570 + 256 = 826\,\unit{m}$, la desviación respecto a la vecindad es $|826 - 570| = 256\,\unit{m} > 80\,\unit{m}$.
+La ecuación~\eqref{eq:despike} restaura el nodo central a $570\,\unit{m}$ sin alterar un solo milímetro del
+resto de la ladera (comprobado en \src{web/tests/terrain3d.test.mjs}).
+\end{ejemplo}
+
+\subsection{Geometría del bloque 3D, exageración vertical y zócalo}
+\label{sec:relieve3d-bloque}
+
+En la escena de Three.js (\src{web/src/components/Terrain3DViewer.tsx}), el lado horizontal mayor de la ROI se
+normaliza a $L_0 = 100$ unidades de escena mediante el factor de escala métrica:
+\begin{equation}
+  k = \frac{L_0}{\max(W_m,\ H_m,\ 1\,\unit{m})},
+  \qquad
+  W = k\,W_m,
+  \qquad
+  H = k\,H_m.
+  \label{eq:escala-escena}
+\end{equation}
+Dado el factor de exageración vertical $E_v \in [1.0, 5.0]$ controlado por el usuario (con valor inicial
+$E_v = 2.0$), el desplazamiento vertical de cada vértice de la superficie \texttt{PlaneGeometry} por encima del
+plano base de la ROI es
+\begin{equation}
+  Z(c,r) = k\,E_v\,\bigl(\tilde h(c,r) - h_{\min}\bigr) \ge 0.
+  \label{eq:z-vertice}
+\end{equation}
+Para que la maqueta luzca como un corte topográfico limpio y nunca como un cubo desproporcionado, las cuatro
+paredes perimetrales y la tapa inferior (en tonos gris pizarra \texttt{\#334155} y \texttt{\#1e293b}) descienden
+hasta una profundidad fija e independiente de $E_v$ igual al $3.5\,\%$ del lado horizontal mayor:
+\begin{equation}
+  Z_{\mathrm{base}} = -0.035\,\max(W, H).
+  \label{eq:zocalo-fijo}
+\end{equation}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_satelital.png}
+  \caption{Maqueta topográfica interactiva en el visor de Relieve 3D (\texttt{Terrain3DViewer}) con textura
+  \emph{Satelital (Esri World Imagery)}, exageración vertical de $2.0\times$, zócalo delgado en gris pizarra y
+  panel lateral de controles y telemetría ($\Delta z$, $h_{\min}$, $h_{\max}$, extensión y zoom de teselas).}
+  \label{fig:visor-3d-satelital}
+\end{figure}
+
+\subsection{Sombreado direccional Lambertiano (modo Hipsométrico)}
+\label{sec:relieve3d-hillshade}
+
+Cuando el usuario elige la textura \textbf{Hipsométrico (Elevación)}, \texttt{hypsometricCanvas} combina una
+rampa altitudinal con un sombreado topográfico analítico (\emph{hillshade}). Sea
+$t = (\tilde h - h_{\min})/\max(h_{\max}-h_{\min},1)\in[0,1]$ la altitud normalizada:
+\begin{itemize}
+  \item Si la ROI alcanza el nivel del mar ($h_{\min}\le 0.5\,\unit{m}$) y el punto cumple
+        $\tilde h(c,r)\le 0.5\,\unit{m}$, se asigna color azul costero constante $\mathrm{RGB}=(38,118,178)$
+        sin sombreado de pendiente.
+  \item Para el terreno emergido, se interpola por tramos entre verde de tierras bajas $(38,115,77)$ en $t=0$,
+        verde claro $(110,168,88)$ en $t=0.20$, ocre de laderas $(224,206,128)$ en $t=0.45$, marrón montañoso
+        $(166,112,68)$ en $t=0.72$, gris roca $(132,108,94)$ en $t=0.90$ y blanco de cumbres $(245,245,245)$ en
+        $t=1.0$.
+\end{itemize}
+Con pasos horizontales $\Delta x = W_m/(N_c-1)$ y $\Delta y = H_m/(N_r-1)$, las derivadas parciales por
+diferencias centradas y factor de realce visual $f_z = 2.2$ son:
+\begin{equation}
+  p = f_z\,\frac{\tilde h(c+1,r) - \tilde h(c-1,r)}{2\,\Delta x},
+  \qquad
+  q = f_z\,\frac{\tilde h(c,r-1) - \tilde h(c,r+1)}{2\,\Delta y},
+  \label{eq:grad-hillshade}
+\end{equation}
+donde $x$ crece hacia el este e $y$ crece hacia el norte (mientras que el índice de fila $r$ crece hacia el
+sur). Iluminando desde el noroeste (azimut $315^\circ$, elevación $42^\circ$) con el vector unitario
+$\hat{\mathbf s} = (-0.526,\ 0.526,\ 0.669)$, el producto escalar con la normal unitaria de la superficie
+$\hat{\mathbf n} = (-p,-q,1)/\sqrt{p^2+q^2+1}$ modula cada canal de color $C\in\{R,G,B\}$ mediante:
+\begin{equation}
+  \cos\gamma = \frac{-p\,s_x - q\,s_y + s_z}{\sqrt{p^2 + q^2 + 1}},
+  \qquad
+  S = \operatorname{clip}\!\bigl(0.45 + 0.85\max(0,\cos\gamma),\ 0.48,\ 1.22\bigr),
+  \qquad
+  C_{\mathrm{out}} = \min\bigl(255,\ \operatorname{round}(C\cdot S)\bigr).
+  \label{eq:lambert-hillshade}
+\end{equation}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_hipsometrico.png}
+  \caption{La misma ROI representada en modo \emph{Hipsométrico (Elevación)} dentro del visor 3D. El azul
+  costero delimita los cuerpos de agua a $0\,\unit{m}$, mientras la rampa altitudinal y el sombreado
+  Lambertiano~\eqref{eq:lambert-hillshade} destacan las divisorias de cuenca y los cañones.}
+  \label{fig:visor-3d-hipsometrico}
+\end{figure}
+
+\section{Máscara geométrica SAR en 3D: pendiente crítica, \emph{layover} y sombra}
+\label{sec:relieve3d-mascara-sar}
+
+Como se explicó en la sección~\ref{sec:gcov}, el producto NISAR GCOV normaliza el brillo por el área iluminada
+mediante RTC, pero en la versión actual del catálogo reporta \texttt{shadowMaskingApplied = False}: las zonas
+afectadas por inversión topográfica (\emph{layover}) o por sombra geométrica del haz no vienen enmascaradas en
+la capa \texttt{mask}. El cuarto modo de textura superficial del visor 3D, \textbf{Máscara SAR (Geometría)},
+calcula y proyecta directamente sobre la montaña tridimensional dónde son confiables las mediciones de
+retrodispersión y dónde domina la distorsión geométrica del radar.
+
+\begin{intuicion}
+Imagínese iluminar una maqueta de montañas con una linterna colocada a un costado a $43^\circ$ respecto a la
+vertical (el ángulo de incidencia nominal $\theta_i$ de NISAR):
+\begin{itemize}
+  \item En los \textbf{valles y llanuras suaves} ($\alpha \le 15^\circ$), la luz ilumina el suelo de manera
+        uniforme: cualquier cambio de brillo entre dos fechas ($\Delta\gamma^0$) refleja un cambio en la
+        superficie.
+  \item En las \textbf{paredes que miran de frente a la linterna} con una inclinación igual o mayor a $43^\circ$,
+        la cima de la montaña queda más cerca de la linterna que su propia falda. El radar recibe al mismo
+        tiempo el eco de la cima y el de la base: eso es el \textbf{\emph{layover}} (en rojo).
+  \item En las \textbf{paredes que le dan la espalda a la linterna} con una inclinación más pronunciada que el
+        rayo rasante ($90^\circ - 43^\circ = 47^\circ$), el haz pasa de largo por encima de la cresta y la
+        ladera queda a oscuras: eso es la \textbf{sombra radar} (en morado oscuro).
+\end{itemize}
+Si el satélite cambia de órbita ascendente (iluminando desde el este hacia el oeste) a órbita descendente
+(iluminando desde el oeste hacia el este), las paredes que estaban en \emph{layover} pasan a estar en sombra y
+viceversa.
+\end{intuicion}
+
+\subsection{Geometría de mirada lateral izquierda de NISAR}
+\label{sec:relieve3d-geometria-nisar}
+
+A diferencia de otros sensores que apuntan a la derecha, el radar de banda L de NISAR es de \textbf{mirada
+lateral izquierda} (\texttt{lookDirection = Left}):
+\begin{itemize}
+  \item \textbf{Órbita Ascendente (p.\,ej. pila T62/F10):} el satélite viaja de sur a norte con rumbo aproximado
+        de $350^\circ$ (ligeramente inclinado al oeste por la inclinación orbital). Al mirar $90^\circ$ a su
+        izquierda, el haz se propaga desde el satélite hacia el terreno con azimut horizontal
+        $\psi_{\mathrm{asc}} \approx 260^\circ$ (hacia el oeste-suroeste).
+  \item \textbf{Órbita Descendente (p.\,ej. pila T55/F80):} el satélite viaja de norte a sur con rumbo aproximado
+        de $190^\circ$. Al mirar $90^\circ$ a su izquierda, el haz se propaga desde el satélite hacia el terreno
+        con azimut horizontal $\psi_{\mathrm{desc}} \approx 100^\circ$ (hacia el este-sureste).
+\end{itemize}
+
+Sea $\psi \in \{260^\circ, 100^\circ\}$ el azimut de propagación del haz medido desde el norte en sentido
+horario. El vector unitario horizontal de propagación del haz en coordenadas locales este--norte es:
+\begin{equation}
+  \hat{\mathbf l}_{\mathrm{h}} = (l_x,\ l_y) = \left(\sin\psi,\ \cos\psi\right).
+  \label{eq:vector-haz-sar}
+\end{equation}
+
+\subsection{Derivadas reales del terreno y pendiente proyectada hacia el radar}
+\label{sec:relieve3d-ecuaciones-sar}
+
+En cada nodo $(c,r)$ de la malla saneada $\tilde h$, la función \texttt{computeSarGeometricMask} calcula las
+derivadas parciales físicas (sin factor de exageración artificial, en unidades adimensionales $\unit{m/m}$)
+usando diferencias centradas en el interior y diferencias laterales en los bordes:
+\begin{equation}
+  z_x(c,r) = \frac{\partial \tilde h}{\partial x}
+  \approx \frac{\tilde h(c_{\mathrm{next}},r) - \tilde h(c_{\mathrm{prev}},r)}{(c_{\mathrm{next}} - c_{\mathrm{prev}})\,\Delta x},
+  \qquad
+  z_y(c,r) = \frac{\partial \tilde h}{\partial y}
+  \approx \frac{\tilde h(c,r_{\mathrm{prev}}) - \tilde h(c,r_{\mathrm{next}})}{(r_{\mathrm{next}} - r_{\mathrm{prev}})\,\Delta y}.
+  \label{eq:derivadas-reales-sar}
+\end{equation}
+De aquí se obtienen dos magnitudes geométricas fundamentales:
+\begin{enumerate}
+  \item \textbf{Magnitud de la pendiente topográfica real $\alpha$:}
+        \begin{equation}
+          \tan\alpha(c,r) = \sqrt{z_x^2(c,r) + z_y^2(c,r)},
+          \qquad
+          \alpha(c,r) = \arctan\sqrt{z_x^2(c,r) + z_y^2(c,r)}.
+          \label{eq:pendiente-real}
+        \end{equation}
+  \item \textbf{Pendiente direccional proyectada en el sentido del haz radar ($s_{\mathrm{rad}}$):}
+        \begin{equation}
+          s_{\mathrm{rad}}(c,r) = \nabla\tilde h(c,r)\cdot\hat{\mathbf l}_{\mathrm{h}}
+          = z_x(c,r)\,l_x + z_y(c,r)\,l_y,
+          \qquad
+          \alpha_{\mathrm{rad}}(c,r) = \arctan\bigl(s_{\mathrm{rad}}(c,r)\bigr).
+          \label{eq:pendiente-proyectada}
+        \end{equation}
+\end{enumerate}
+
+El signo de $s_{\mathrm{rad}}$ tiene una interpretación física inmediata:
+\begin{itemize}
+  \item Si $s_{\mathrm{rad}} > 0$, la elevación del terreno \emph{sube} a medida que avanza el pulso del radar
+        a lo largo de $\hat{\mathbf l}_{\mathrm{h}}$; es decir, la ladera está \textbf{orientada de frente hacia
+        el satélite}.
+  \item Si $s_{\mathrm{rad}} < 0$, la elevación del terreno \emph{desciende} en el sentido de avance del pulso;
+        es decir, la ladera \textbf{le da la espalda al satélite}.
+\end{itemize}
+
+\subsection{Umbrales de clasificación en cuatro categorías}
+\label{sec:relieve3d-clases-sar}
+
+Dado el ángulo de incidencia nominal $\theta_i = 43^\circ$ (representativo de la franja de NISAR en la ROI de
+Chiapas, donde $\theta_i\in[42.3^\circ,45.4^\circ]$ según la figura E de la sección~\ref{sec:figuras}) y el
+umbral de pendiente crítica $\alpha_c = 15^\circ$, cada celda $(c,r)$ se clasifica evaluando las siguientes
+desigualdades en orden de prioridad estricta:
+\begin{equation}
+  \mathrm{Clase}(c,r) =
+  \begin{cases}
+    \text{\textbf{Layover / escorzo severo}}, &
+      \text{si } s_{\mathrm{rad}}(c,r) \ge \tan\theta_i
+      \quad\bigl(\alpha_{\mathrm{rad}} \ge \theta_i\bigr),\\[6pt]
+    \text{\textbf{Sombra radar}}, &
+      \text{si } -s_{\mathrm{rad}}(c,r) \ge \tan(90^\circ - \theta_i)
+      \quad\bigl(-\alpha_{\mathrm{rad}} \ge 90^\circ - \theta_i\bigr),\\[6pt]
+    \text{\textbf{Pendiente crítica}}, &
+      \text{si } \sqrt{z_x^2 + z_y^2} > \tan\alpha_c
+      \quad\bigl(\alpha > 15^\circ\text{ sin layover ni sombra}\bigr),\\[6pt]
+    \text{\textbf{Confiable}}, &
+      \text{en otro caso} \quad\bigl(\alpha \le 15^\circ\text{ sin layover ni sombra}\bigr).
+  \end{cases}
+  \label{eq:clasificacion-sar}
+\end{equation}
+
+Para $\theta_i = 43^\circ$ y $\alpha_c = 15^\circ$, los tres umbrales adimensionales de pendiente son:
+\begin{equation}
+  \tan 15^\circ \approx 0.2679,
+  \qquad
+  \tan 43^\circ \approx 0.9325,
+  \qquad
+  \tan(90^\circ - 43^\circ) = \tan 47^\circ \approx 1.0724.
+\end{equation}
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabularx}{\linewidth}{p{.23\linewidth}p{.16\linewidth}p{.24\linewidth}X}
+\toprule
+\textbf{Categoría} & \textbf{Color} & \textbf{Condición geométrica} & \textbf{Implicación para interpretar $\Delta\gamma^0$}\\\midrule
+Confiable & Verde \texttt{\#22C55E} & $\alpha \le 15^\circ$, sin layover ni sombra & Geometría estable; región óptima para cuantificar cambios de humedad, agua o vegetación.\\
+Pendiente crítica & Ámbar \texttt{\#F59E0B} & $\alpha > 15^\circ$, sin layover ni sombra & Acortamiento moderado; la corrección RTC trabaja cerca de sus límites de resolución del DEM.\\
+Layover / escorzo & Rojo \texttt{\#EF4444} & $s_{\mathrm{rad}} \ge \tan\theta_i$ & Superposición de ecos de cima y base; no interpretar cambios puntuales de $\Delta\gamma^0$.\\
+Sombra radar & Morado \texttt{\#1E1B4B} & $-s_{\mathrm{rad}} \ge \tan(90^\circ-\theta_i)$ & Zona ciega sin iluminación directa del haz; dominada por ruido térmico del receptor.\\\bottomrule
+\end{tabularx}
+\caption{Categorías de la máscara geométrica SAR en el visor 3D (\texttt{computeSarGeometricMask}).}
+\label{tab:clases-mascara-sar}
+\end{table}
+
+Finalmente, sobre los $N_{\mathrm{tot}} = N_c N_r = 25\,921$ puntos de la malla se contabiliza la fracción
+porcentual de área cubierta por cada régimen geométrico:
+\begin{equation}
+  P_k = 100\,\frac{N_k}{N_{\mathrm{tot}}}\,\mathrm{\%},
+  \qquad
+  k \in \{\text{confiable},\ \text{crítica},\ \text{layover},\ \text{sombra}\},
+  \qquad
+  \sum_k P_k = 100\,\mathrm{\%}.
+  \label{eq:porcentajes-sar}
+\end{equation}
+
+\begin{ejemplo}[Inversión entre \emph{layover} y sombra al cambiar de órbita en una pared del cañón]
+Considérese una pared escarpada del Cañón del Sumidero cuya altura sube hacia el oeste con pendiente constante
+de $+200\,\unit{m}$ por cada $100\,\unit{m}$ horizontales ($z_x = -2.0$, $z_y = 0$, es decir
+$\alpha = \arctan(2.0) = 63.4^\circ$).
+\begin{itemize}
+  \item \textbf{En órbita Ascendente ($\psi = 260^\circ$):} $l_x = \sin 260^\circ = -0.9848$. La pendiente
+        proyectada en dirección del haz es $s_{\mathrm{rad}} = (-2.0)(-0.9848) = +1.9696$. Como
+        $1.9696 \ge \tan 43^\circ = 0.9325$, toda la pared cae en \textbf{Layover} ($100\,\mathrm{\%}$).
+  \item \textbf{En órbita Descendente ($\psi = 100^\circ$):} $l_x = \sin 100^\circ = +0.9848$. Ahora la
+        pendiente proyectada es $s_{\mathrm{rad}} = (-2.0)(+0.9848) = -1.9696$. Como
+        $-s_{\mathrm{rad}} = 1.9696 \ge \tan 47^\circ = 1.0724$, exactamente la misma pared pasa a estar en
+        \textbf{Sombra radar} ($100\,\mathrm{\%}$).
+\end{itemize}
+Este ejemplo demuestra por qué el visor incluye el selector en tiempo real entre \emph{Ascendente (T62/F10)} y
+\emph{Descendente (T55/F80)}, y por qué nunca deben mezclarse órbitas opuestas en un mapa de cambio
+$\Delta\gamma^0$.
+\end{ejemplo}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_mascara_sar_asc.png}
+  \caption{Modo \emph{Máscara SAR (Geometría)} sobre el relieve 3D en órbita \textbf{Ascendente (T62/F10)}.
+  En verde se observan los valles y planicies confiables ($\alpha\le 15^\circ$), en ámbar las laderas de
+  pendiente crítica ($>15^\circ$), y en rojo/morado las paredes del cañón afectadas por \emph{layover} y sombra.}
+  \label{fig:visor-3d-sar-asc}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_visor_3d_mascara_sar_desc.png}
+  \caption{Inversión geométrica al conmutar a órbita \textbf{Descendente (T55/F80)} en el subpanel del visor
+  3D. Las laderas orientadas al oeste/este invierten sus regiones de \emph{layover} (rojo) y sombra radar
+  (morado oscuro), actualizando en vivo los porcentajes de la leyenda.}
+  \label{fig:visor-3d-sar-desc}
+\end{figure}
+
+\section{Gestión de memoria WebGL y verificación del módulo}
+\label{sec:relieve3d-webgl}
+
+Para garantizar que abrir y cerrar repetidamente el visor 3D no degrade el rendimiento del navegador ni agote
+los contextos WebGL disponibles para MapLibre GL, el ciclo de desmontaje de \texttt{Terrain3DViewer} ejecuta
+una liberación determinista de recursos:
+\begin{enumerate}
+  \item Cancela el bucle de animación (\texttt{cancelAnimationFrame}) y desconecta el \texttt{ResizeObserver}.
+  \item Destruye la instancia de \texttt{OrbitControls} (\texttt{controls.dispose()}).
+  \item Libera explícitamente en GPU las tres geometrías (\texttt{surfaceGeom}, \texttt{wallGeom},
+        \texttt{bottomGeom}), los cuatro materiales (\texttt{surfaceMat}, \texttt{wireMat}, \texttt{wallMat},
+        \texttt{bottomMat}) y todas las instancias de \texttt{CanvasTexture} creadas.
+  \item Invoca \texttt{renderer.dispose()}, fuerza la liberación del contexto nativo con
+        \texttt{renderer.forceContextLoss()} y retira el nodo \texttt{<canvas>} del DOM.
+\end{enumerate}
+
+La suite automatizada \src{web/tests/terrain3d.test.mjs} verifica de forma aislada la decodificación
+\eqref{eq:terrarium-decode}, el cálculo del rectángulo envolvente, la matemática de teselas Web Mercator
+\eqref{eq:mercator-tiles}, el saneamiento costero \eqref{eq:saneamiento-costero}, la eliminación de agujas de
+$+256\,\unit{m}$ mediante \eqref{eq:despike} sin alterar pendientes reales, la clasificación geométrica SAR
+\eqref{eq:clasificacion-sar} en terreno plano y acantilados para ambas órbitas, la traducción bilingüe ES/EN y la
+presencia de las llamadas de limpieza WebGL.
 
 \end{document}
