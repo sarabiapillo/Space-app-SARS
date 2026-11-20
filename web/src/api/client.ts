@@ -407,6 +407,8 @@ export interface FloodRoiResult {
   /** Hydraulic indicators (null in older runs). */
   froude?: {min_depth_m: number; frames: Array<{frame_index: number; cells: number; max: number | null; mean: number | null; supercritical_cells: number}>} | null
   time_of_concentration?: {minutes: number; flow_length_m: number; slope_m_m: number; upslope_area_km2: number; outlet: [number, number]} | null
+  /** Road exposure on OpenStreetMap roads (© OpenStreetMap contributors). */
+  roads?: {available: boolean; reason?: string; attribution?: string; osm_timestamp?: string; total_km?: number | null; thresholds_m?: {caution: number; cut: number}; frames?: Array<{frame_index: number; caution_km: number; cut_km: number}>; maximum?: {caution_km: number; cut_km: number} | null} | null
 }
 /** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
 export interface FloodRoiFlow {

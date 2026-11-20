@@ -207,6 +207,24 @@ def test_kirpich_time_of_concentration_on_the_longest_flow_path_to_the_main_outl
     assert tc['upslope_area_km2'] == pytest.approx(.36)
 
 
+def test_road_exposure_per_frame_and_maximum_with_osm_provenance(tmp_path):
+    from pyproj import Transformer
+    velocity_outputs(tmp_path, '.5 .2\n0 0\n', '0 0\n0 0\n', '0 0\n0 0\n')
+    to_lonlat = Transformer.from_crs('EPSG:32615', 'EPSG:4326', always_xy=True)
+    road = {'id': 1, 'highway': 'primary', 'coords': [list(to_lonlat.transform(x, 1850045)) for x in (500000, 500060)]}
+    roads = {'roads': [road], 'provenance': {'attribution': '© OpenStreetMap contributors', 'osm_timestamp': 't'}}
+    result = summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615', roads=roads)['roads']
+    assert result['available'] and result['attribution'] == '© OpenStreetMap contributors'
+    assert result['thresholds_m'] == {'caution': .15, 'cut': .35} and result['total_km'] == pytest.approx(.06, abs=1e-4)
+    assert [f['frame_index'] for f in result['frames']] == [0, 1]
+    assert result['frames'][0]['cut_km'] == 0
+    assert result['frames'][1]['cut_km'] == pytest.approx(.03, abs=1e-4) and result['frames'][1]['caution_km'] == pytest.approx(.03, abs=1e-4)
+    assert result['maximum']['cut_km'] == pytest.approx(.03, abs=1e-4)
+    unavailable = summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615', roads={'roads': None, 'reason': 'unavailable'})
+    assert unavailable['roads'] == {'available': False, 'reason': 'unavailable'}
+    assert summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['roads'] is None
+
+
 def test_flow_is_null_without_velocity_files_or_crs(tmp_path):
     minimal_outputs(tmp_path)
     assert summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['flow'] is None

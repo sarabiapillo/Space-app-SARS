@@ -118,6 +118,8 @@ class RoiRunResultsView(APIView):
             # Hydraulic indicators (null in older runs): Froude per frame and Kirpich time of concentration.
             result['froude'] = run['result'].get('froude')
             result['time_of_concentration'] = run['result'].get('time_of_concentration')
+            # Road exposure on OpenStreetMap roads (© OpenStreetMap contributors, ODbL); null in older runs.
+            result['roads'] = run['result'].get('roads')
             # Chart inputs; null for runs summarized before depth classes existed.
             result['depth_classes_m'] = run['result'].get('depth_classes_m')
             result['rainfall_segments'] = _rainfall_segments(run)

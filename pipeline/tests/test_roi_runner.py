@@ -141,7 +141,7 @@ def test_parameter_file_boundary_and_start_directives():
 def test_native_fixed_level_starts_and_keeps_still_water(root):
     # Flat 100 m terrain with a west sea at 100.5 m: the whole domain starts 0.5 m deep and must stay at rest.
     job = start_roi_run('alice', with_sea(), root=root, config=config(), launch=False)
-    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']))
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
     assert state['state'] == 'succeeded', state
     work = root / job['id'] / 'work'
     bci = (work / 'boundary.bci').read_text().splitlines()
@@ -182,7 +182,7 @@ def test_losses_and_pressure_are_recorded_in_state(root):
 def test_native_pressure_raises_the_sea_and_infiltration_reduces_the_rain(root):
     p = with_sea(); p['hydraulics'].update(infiltration='runoff_coefficient', atmospheric_pressure_hpa=1003.25)
     job = start_roi_run('alice', p, root=root, config=config(), launch=False)
-    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']))
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
     assert state['state'] == 'succeeded', state
     surge, coefficient = 1000 / 9810, job['losses']['runoff_coefficient']
     bci = (root / job['id'] / 'work' / 'boundary.bci').read_text().splitlines()
@@ -190,6 +190,29 @@ def test_native_pressure_raises_the_sea_and_infiltration_reduces_the_rain(root):
     assert state['result']['frames'][0]['stats']['min_m'] == pytest.approx(.5 + surge, abs=1e-3)
     rain = state['provenance']['rain']['profile']['rainfall']['amount_m']
     assert rain == pytest.approx(.002 * coefficient)
+
+
+def no_roads(bounds):
+    return {'roads': [], 'provenance': {'attribution': '© OpenStreetMap contributors', 'osm_timestamp': 'test'}}
+
+
+def test_native_roads_are_fetched_for_the_domain_and_a_failure_does_not_stop_the_run(root):
+    # The fetcher runs in the forked preparation process: it reports the bounds it got through its result.
+    def fetch(bounds):
+        return {'roads': [], 'provenance': {'bounds': list(bounds)}}
+    job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=fetch)
+    assert state['state'] == 'succeeded', state
+    west, south, east, north = state['result']['roads']['bounds']
+    assert west <= -92.9999 and east >= -92.9993 and south <= 16.7998 and north >= 16.8005  # covers the domain
+    assert state['result']['roads']['available'] and state['result']['roads']['total_km'] == 0
+
+    def broken(bounds):
+        raise OSError('Overpass down')
+    job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=broken)
+    assert state['state'] == 'succeeded', state
+    assert state['result']['roads'] == {'available': False, 'reason': 'unavailable'}
 
 
 def flat_provider(root, run_id):
@@ -212,7 +235,7 @@ def test_acquisition_failure_is_terminal_and_sanitized(root):
         def acquire_roi(self, geometry):
             raise RuntimeError('authentication secret=private')
     job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
-    state = run_roi_worker(root, job['id'], provider=Failed())
+    state = run_roi_worker(root, job['id'], provider=Failed(), roads_fetcher=no_roads)
     assert state['state'] == 'failed' and state['error'] == 'acquisition_failed'
     assert 'private' not in json.dumps(state) and get_roi_run(root, job['id']) == state
 
@@ -235,7 +258,7 @@ def test_native_roi_dem_rain_and_depth_cogs(root):
             return records
     job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
     run_id = job['id']
-    state = run_roi_worker(root, run_id, provider=Provider())
+    state = run_roi_worker(root, run_id, provider=Provider(), roads_fetcher=no_roads)
     assert state['state'] == 'succeeded', state
     assert state['synthetic'] and not state['hydraulic_accuracy_validated']
     assert state['solver_returncode'] == 0

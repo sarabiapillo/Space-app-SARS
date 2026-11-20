@@ -109,6 +109,7 @@ class RoiHttpTests(SimpleTestCase):
         self.assertIsNone(body['depth_classes_m'])  # seeded run predates depth classes
         self.assertIsNone(body['froude'])
         self.assertIsNone(body['time_of_concentration'])
+        self.assertIsNone(body['roads'])
         self.assertEqual(len(body['artifacts']), 4)
         self.assertTrue(all('file' not in item and item['url'].startswith(status) and item['nodata'] == body['grid']['nodata'] for item in body['artifacts']))
         self.assertTrue(all(frame['time_s'] is None for frame in body['frames']))

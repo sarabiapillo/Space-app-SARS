@@ -43,6 +43,7 @@ from .rainfall_netcdf import export_rainfall_netcdf
 from .boundaries import format_boundary, normalize_boundary
 from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
+from .roads import fetch_roads
 from .results import summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -291,7 +292,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
     return get_roi_run(root,run_id)
 
 
-def _prepare(directory, request, cfg, provider, stage):
+def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads):
     geography = request['computed']['geographic_acquisition']
     records = provider.acquire_roi(geography)
     stage.write_text('preparation')
@@ -332,6 +333,12 @@ def _prepare(directory, request, cfg, provider, stage):
     profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':rainfall},**request['rainfall_profile'])
     export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
                            max_values=cfg['max_rain_values'])
+    # OpenStreetMap roads for road-cut indicators; optional: an Overpass failure never stops the run.
+    try:
+        roads = roads_fetcher(shape(request['computed']['geographic_acquisition']).bounds)
+    except Exception:
+        roads = {'roads': None, 'reason': 'unavailable'}
+    (directory/'roads.json').write_text(json.dumps(roads, allow_nan=False))
     return actual
 
 
@@ -370,11 +377,11 @@ def solver_parameter_file(request):
     return parameter
 
 
-def _preparation_child(directory, request, cfg, provider, stage):
+def _preparation_child(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads):
     os.setsid()
     try:
         stage.write_text('acquisition')
-        actual = _prepare(directory,request,cfg,provider,stage)
+        actual = _prepare(directory,request,cfg,provider,stage,roads_fetcher)
         stage.write_text(json.dumps({'extent_m':actual}))
     except Exception as exc:
         # No exception messages or traceback: may contain credential/path data.
@@ -382,7 +389,7 @@ def _preparation_child(directory, request, cfg, provider, stage):
         os._exit(1)
 
 
-def run_roi_worker(root, run_id, *, provider=None):
+def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
     """Claim exclusivo; preparación en grupo de proceso con deadline; estado terminal."""
     directory = _directory(root,run_id)
     try:
@@ -401,7 +408,7 @@ def run_roi_worker(root, run_id, *, provider=None):
     stage = directory/'preparation.stage'
     try:
         context = multiprocessing.get_context('fork')
-        child = context.Process(target=_preparation_child,args=(directory,request,cfg,provider,stage))
+        child = context.Process(target=_preparation_child,args=(directory,request,cfg,provider,stage,roads_fetcher))
         child.start(); child.join(cfg['preparation_timeout_s'])
         if child.is_alive():
             os.killpg(child.pid,signal.SIGKILL); child.join()
@@ -447,7 +454,8 @@ def run_roi_worker(root, run_id, *, provider=None):
             raise ValueError('invalid solver output')
         state.update(state='results',stage='results'); _save(directory,state)
         summary = summarize_results(outputs,save_interval_s=s['save_interval_s'],crs=request['terrain']['target_crs'],max_cells=cfg['max_cells'],
-                                    initial_depth=work/'initial.wd' if _still_water(request) else None)
+                                    initial_depth=work/'initial.wd' if _still_water(request) else None,
+                                    roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
         if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
             raise ValueError('output budget exceeded')
         artifacts=[]

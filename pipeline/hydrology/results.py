@@ -15,6 +15,8 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from pyproj import Geod, Transformer
 
+from .roads import CAUTION_M, CUT_M, road_exposure
+
 
 _HEADERS = ('ncols', 'nrows', 'xllcorner', 'yllcorner', 'cellsize', 'nodata_value')
 _FRAME = re.compile(r'^(.+)-(\d+)\.wd$')
@@ -157,7 +159,7 @@ def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_00
             'crs': projected.to_string(), 'units': 'm'}
 
 
-def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_000, initial_depth=None):
+def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_000, initial_depth=None, roads=None):
     """Ordena cuadros por índice; solo calcula tiempos programados, no tiempos físicos."""
     if (isinstance(save_interval_s, bool) or not isinstance(save_interval_s, (int, float)) or
             not math.isfinite(save_interval_s) or save_interval_s <= 0):
@@ -193,6 +195,17 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
             start = read_depth_ascii(initial_depth, max_cells=max_cells)
             eligible &= ~((start['values'] != start['nodata']) & (start['values'] > 0))
             grids.append(start)
+    road_result = None
+    if roads is not None:
+        if roads.get('roads') is None or crs is None:
+            road_result = {'available': False, 'reason': roads.get('reason', 'unavailable') if crs else 'no metric CRS'}
+        else:
+            provenance = {k: v for k, v in roads.get('provenance', {}).items() if k != 'query'}
+            road_result = {'available': True, **provenance, 'roads': len(roads['roads']),
+                           'thresholds_m': {'caution': CAUTION_M, 'cut': CUT_M},
+                           'method': 'real OpenStreetMap vehicular roads; road length by water depth class of the '
+                                     'cell under it (thresholds of the terrapulseai_v2.1 simulator)',
+                           'total_km': None, 'frames': [], 'maximum': None}
     frames = []
     reference = None
     for index, path in frame_paths + [(None, maxima[0])]:
@@ -204,6 +217,14 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
             raise ValueError('mixed grids across frames/max')
         record = {'file': path.name, 'source_sha256': _sha(path),
                   'stats': {**data['stats'], 'depth_class_cells': _depth_class_cells(data)}}
+        if road_result and road_result['available']:
+            exposure = road_exposure(roads['roads'], data, crs)
+            road_result['total_km'] = exposure['total_km']
+            exposure = {'caution_km': exposure['caution_km'], 'cut_km': exposure['cut_km']}
+            if index is None:
+                road_result['maximum'] = exposure
+            else:
+                road_result['frames'].append({'frame_index': index, **exposure})
         if index is None:
             maximum = record
         else:
@@ -237,7 +258,8 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
-            'mass_balance': balance, 'flow': flow, 'froude': froude, 'time_of_concentration': concentration, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
+            'mass_balance': balance, 'flow': flow, 'froude': froude, 'time_of_concentration': concentration,
+            'roads': road_result, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
 
 
