@@ -30,9 +30,9 @@ Delivery: work-unit commits on the feature branch (ask-on-risk). Runners: `pytes
 | T6 | S5 | inline | done | `c554030`; preview test 5 class colours; web/backend palette sync test |
 | T7 | S6 | inline | done | `0bd1535`; RED -> GREEN; browser flow-check 23/23, compact 5/5; node 104/104 |
 | T8 | S7, S8 | inline | done | commit below; RED -> GREEN (losses 15, runner); pipeline 488 pass (4 solar_api base); backend 14/14; node 106/106; browser 24/24; real coastal run dfaef3bb |
-| T9 | S9, S10 | inline | in progress | |
-| T10 | S12 | inline | pending | |
-| T11 | S11 | inline | pending | |
+| T9 | S9, S10 | inline | done | `14fad78`; RED 2 -> GREEN |
+| T10 | S12 | inline | done | `f2dd534`; fake-fetcher tests; real Overpass in lake run (4 roads, 1.33 km) |
+| T11 | S11 | inline | done | commit after f2dd534; real Montebello run 79202a24 |
 
 Route evidence: no Writer trigger (units depend on each other or are under ~100 lines; no parallel batch). Risk: T2 adds an optional result field and a solver keyword (`voutput` does not change `.wd`/`.max`: byte-identical in a real rerun).
 
@@ -54,3 +54,5 @@ Route evidence: no Writer trigger (units depend on each other or are under ~100 
 - **L14** (2026-11-19) User: "lo que hace la simulacion de inundacion en terrapulseai_v2.1 lo hace tambien nuestro simulador? Por cierto, agrega Infiltración y Presión atmosférica, como lo hace ese simulador." v2.1 simulate.py identical to ours; its panel still calls it. T8 opened.
 - **L15** T8 real coastal run dfaef3bb (n15w093, eta 0 + 990 hPa -> +0.237 m, N/E closed): sea started full in 971 cells and held; solver rain 18,412 m3 = 0.656 x 28,073 m3; mass error 5.6 m3. i18n test renamed: the panel now offers pressure through the ROI API, not the old simulator state.
 - **L16** (2026-11-19) User: "Si, hazlo." to HydroLAKES for lakes and OpenStreetMap for roads, plus Froude and time of concentration. HydroLAKES zip reachable (820,295,132 bytes); Overpass reachable (~35 s per query).
+- **L17** T11 evidence: first real lake runs failed (negative depths). Control without lakes had none. Causes fixed: lake 115768 cut by the domain edge drained through the FREE boundary (17 % in 900 s) -> edge-cut lakes skipped; cone profile reached 20 m -> paraboloid capped at 3x mean; level capped at the lowest outside neighbour. Run 79202a24: lake 1073769 volume 1,063,260 + rain 20,627 = 1,083,900 m3, mass error 0.8 m3; Froude max 3.0 (8/371 supercritical); Kirpich 29.9 min; roads cut 0.04 km, caution 0.07 km.
+- **L18** Suites: pipeline 504 pass (4 test_solar_api fail on base); backend 14/14; node 107/107; browser 25/25. HydroLAKES zip + GeoPackage (1.4 GB) in data/reference/hydrolakes (not in git).
