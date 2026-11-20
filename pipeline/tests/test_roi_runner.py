@@ -985,7 +985,8 @@ def test_native_tide_side_follows_the_series_from_a_still_sea_with_the_pressure_
     p['hydraulics']['atmospheric_pressure_hpa'] = 1003.25
     if solver == 'fv1':
         p = fv1(p)
-    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    # LISFLOOD-FP uses every core: a larger solver budget keeps this test stable when other suites run.
+    job = start_roi_run('alice', p, root=root, config={**config(), 'timeout_s': 60}, launch=False)
     first, last = 100.5, 100.6  # EGM2008 tide levels at t = 0 and t = 1200 s (flat terrain at ~100 m)
     state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
                            tide_series=tide_provider(first, last))

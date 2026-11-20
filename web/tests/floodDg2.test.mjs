@@ -511,3 +511,11 @@ test('run notes summarize the tide levels and GEBCO cells, and name their datase
   assert.match(runErrorMessage('tide_unavailable', tr), /EOT20/)
   assert.match(runErrorMessage('bathymetry_unavailable', tr), /GEBCO_2026/)
 })
+
+test('a run where both solvers left negative-depth artifacts is explained in plain words', async () => {
+  const { runErrorMessage } = await import('../src/utils/floodDg2.ts')
+  const t = (es) => es
+  const message = runErrorMessage('negative_depth_artifacts', t)
+  assert.notEqual(message, 'negative_depth_artifacts')
+  assert.match(message, /Ni DG2 ni FV1/)
+})

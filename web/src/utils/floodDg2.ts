@@ -367,6 +367,7 @@ export function runErrorMessage(code: string | null | undefined, t: Translate) {
     case 'soil_moisture_unavailable': return t('No se pudo consultar la humedad del suelo (NISAR SME2 / SMAP L4); elige la humedad previa I, II o III.', 'Soil moisture (NISAR SME2 / SMAP L4) could not be queried; choose antecedent moisture I, II or III.')
     case 'tide_unavailable': return t('No se pudo calcular la marea (EOT20 / DTUUH22MDT no instalados en el servidor o sin océano a menos de 10 km del lado de marea).', 'The tide could not be computed (EOT20 / DTUUH22MDT not installed on the server, or no ocean within 10 km of the tide side).')
     case 'bathymetry_unavailable': return t('No se pudo leer el fondo marino (GEBCO_2026).', 'The sea floor (GEBCO_2026) could not be read.')
+    case 'negative_depth_artifacts': return t('Ni DG2 ni FV1 dieron un resultado confiable: los dos dejaron profundidades negativas que suman más del 10 % del agua. Prueba celdas más grandes, una zona menos empinada o menos lluvia.', 'Neither DG2 nor FV1 gave a reliable result: both left negative depths adding up to more than 10 % of the water. Try larger cells, a less steep area or less rain.')
     default: return code ?? ''
   }
 }
