@@ -58,7 +58,7 @@ function App() {
   const [generalSeismic, setGeneralSeismic] = useState<SeismicSimulationState | undefined>(undefined)
   const [duplicating, setDuplicating] = useState(false)
   const [teamPageOpen, setTeamPageOpen] = useState(false)
-  const [terrainBBox, setTerrainBBox] = useState<LonLatBBox | null>(null)
+  const [terrain3DOpen, setTerrain3DOpen] = useState(false)
   const [locationPreview, setLocationPreview] = useState<AdministrativeGeometry | null>(null)
   const [gcovFootprint, setGcovFootprint] = useState<unknown | null>(null)
   const [toast, setToast] = useState<ToastMessage | null>(null)
@@ -510,10 +510,17 @@ function App() {
   }
 
   const closeModal = useCallback(() => setDuplicating(false), [])
-  const closeTerrain3D = useCallback(() => setTerrainBBox(null), [])
+  const closeTerrain3D = useCallback(() => setTerrain3DOpen(false), [])
+
+  const activeTerrainBBox: LonLatBBox | null = useMemo(() => {
+    const bbox = bboxFromGeometry(confirmedROI)
+    if (!bbox) return null
+    if (bbox[2] - bbox[0] > TERRAIN3D_MAX_DEG || bbox[3] - bbox[1] > TERRAIN3D_MAX_DEG) return null
+    return bbox
+  }, [confirmedROI])
 
   const handleOpenTerrain3D = () => {
-    if (terrainBBox) { setTerrainBBox(null); return }
+    if (terrain3DOpen) { setTerrain3DOpen(false); return }
     const bbox = bboxFromGeometry(confirmedROI)
     if (!bbox) {
       notify('error', localizeText('Selecciona primero una ROI para ver su relieve 3D.'))
@@ -523,7 +530,7 @@ function App() {
       notify('error', localizeText('La ROI es demasiado grande para el relieve 3D (máximo 3° por lado).'))
       return
     }
-    setTerrainBBox(bbox)
+    setTerrain3DOpen(true)
   }
 
   return (
@@ -558,7 +565,7 @@ function App() {
         onDuplicateForSeismic={handleDuplicateForSeismic}
         onOpenTeamPage={() => setTeamPageOpen(true)}
         onOpenTerrain3D={handleOpenTerrain3D}
-        terrain3DOpen={terrainBBox !== null}
+        terrain3DOpen={terrain3DOpen && activeTerrainBBox !== null}
       />
 
       <div className="app__body">
@@ -679,11 +686,11 @@ function App() {
       )}
 
       {teamPageOpen && <TeamLandingPage onClose={() => setTeamPageOpen(false)} />}
-      {terrainBBox && (
+      {terrain3DOpen && activeTerrainBBox && (
         <Suspense fallback={<div className="terrain3d-overlay"><div className="terrain3d-status">{t('Cargando visor 3D…', 'Loading 3D viewer…')}</div></div>}>
           <Terrain3DViewer
-            key={terrainBBox.join(',')}
-            bbox={terrainBBox}
+            key={activeTerrainBBox.join(',')}
+            bbox={activeTerrainBBox}
             roiName={current.effectiveRoiMetadata?.name || current.nombre}
             onClose={closeTerrain3D}
           />

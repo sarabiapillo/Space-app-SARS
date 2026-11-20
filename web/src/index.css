@@ -7000,3 +7000,69 @@ button:disabled {
 .terrain3d-telemetry dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
 .terrain3d-source { margin: 4px 0 0; font-size: 11px; color: #334155; }
 .terrain3d-note { margin: 0; font-size: 11px; color: #64748b; line-height: 1.4; }
+
+.terrain3d-sar-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.terrain3d-orbit-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.terrain3d-orbit-toggle button {
+  padding: 5px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+}
+.terrain3d-orbit-toggle button:hover {
+  background: #f1f5f9;
+}
+.terrain3d-orbit-toggle button.is-active {
+  border-color: #0f766e;
+  background: #e0f2f1;
+  color: #0f766e;
+  font-weight: 600;
+}
+.terrain3d-sar-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.terrain3d-sar-legend li {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  color: #1e293b;
+}
+.terrain3d-sar-legend strong {
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+.terrain3d-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+.terrain3d-swatch--reliable { background: #22c55e; }
+.terrain3d-swatch--steep { background: #f59e0b; }
+.terrain3d-swatch--layover { background: #ef4444; }
+.terrain3d-swatch--shadow { background: #1e1b4b; }

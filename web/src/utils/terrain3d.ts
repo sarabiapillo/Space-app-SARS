@@ -220,8 +220,78 @@ export function sanitizeElevationGrid(
   return { heights, minM, maxM }
 }
 
-/** Umbral por defecto (en metros) para eliminar picos aislados tipo "aguja" de 1 vértice. */
+/** Umbral por defecto (en metros) para eliminar picos aislados tipo "aguja" en montaña. */
 export const DESPIKE_THRESHOLD_M = 80
+/** Umbral estricto (en metros) para zonas bajas o costeras (< 100 m, ej. Cancún). */
+export const DESPIKE_LOWLAND_THRESHOLD_M = 15
+/** Salto máximo permitido entre un píxel y sus vecinos inmediatos dentro de una tesela nativa. */
+export const NATIVE_TILE_MAX_STEP_M = 150
+
+/**
+ * Umbral adaptativo de despike en función de la mediana local y de la desviación absoluta mediana (MAD)
+ * de los vecinos en la ventana 3×3:
+ * - En zonas bajas o costeras (`median < 100 m`, p. ej. Cancún), el tope máximo es estricto (15 m) y
+ *   además se acota a `max(6 m, 4.5 * MAD + 5 m)` para eliminar cualquier aguja sobre planicies.
+ * - En zonas de montaña (`median >= 100 m`), se permite hasta `maxThresholdM` (80 m por defecto) o
+ *   `max(18 m, 4.5 * MAD + 12 m)` según la pendiente local.
+ */
+export function adaptiveDespikeThreshold(
+  localMedianM: number,
+  localMadM: number,
+  maxThresholdM = DESPIKE_THRESHOLD_M,
+): number {
+  const cap = localMedianM < 100 ? Math.min(DESPIKE_LOWLAND_THRESHOLD_M, maxThresholdM) : maxThresholdM
+  const floor = localMedianM < 100 ? 6 : 18
+  const margin = localMedianM < 100 ? 5 : 12
+  return Math.min(cap, Math.max(floor, localMadM * 4.5 + margin))
+}
+
+/**
+ * Comprobación de cordura (sanity check) sobre una tesela decodificada a resolución nativa (p. ej. 256×256):
+ * Si el salto de altura entre un píxel y la mediana de sus vecinos ortogonales/diagonales inmediatos
+ * supera un valor ilógico (`maxStepM`, 150 m por defecto en un solo píxel, o 20 m en planicies costeras
+ * donde la mediana vecina es `< 50 m`), suaviza el píxel reemplazándolo por la mediana vecina antes de
+ * integrarlo al mosaico general.
+ */
+export function sanitizeDecodedTilePixels(
+  tileHeights: Float32Array,
+  width = TILE,
+  height = TILE,
+  maxStepM = NATIVE_TILE_MAX_STEP_M,
+): Float32Array {
+  const out = new Float32Array(tileHeights)
+  const neighbors: number[] = []
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass === 0 ? tileHeights : out
+    for (let r = 0; r < height; r++) {
+      for (let c = 0; c < width; c++) {
+        const idx = r * width + c
+        const val = src[idx]
+        neighbors.length = 0
+        for (let dr = -1; dr <= 1; dr++) {
+          const nr = r + dr
+          if (nr < 0 || nr >= height) continue
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue
+            const nc = c + dc
+            if (nc < 0 || nc >= width) continue
+            const nVal = src[nr * width + nc]
+            if (Number.isFinite(nVal)) neighbors.push(nVal)
+          }
+        }
+        if (neighbors.length < 3) continue
+        neighbors.sort((a, b) => a - b)
+        const mid = neighbors.length >> 1
+        const median = neighbors.length % 2 === 1 ? neighbors[mid] : 0.5 * (neighbors[mid - 1] + neighbors[mid])
+        const effectiveMaxStep = median < 50 ? Math.min(20, maxStepM) : maxStepM
+        if (!Number.isFinite(val) || Math.abs(val - median) > effectiveMaxStep) {
+          out[idx] = median
+        }
+      }
+    }
+  }
+  return out
+}
 
 /**
  * Carga una tesela PNG de Terrarium sin conversión de perfil de color (`colorSpaceConversion: 'none'`)
@@ -238,8 +308,9 @@ async function loadRawTileSource(url: string, signal?: AbortSignal): Promise<Can
 }
 
 /**
- * Descarga y decodifica una tesela Terrarium a resolución nativa 1:1 (256 × 256) directamente
- * a metros saneados (`Float32Array`), sin escalar nunca en espacio RGB.
+ * Descarga con reintentos automáticos y decodifica una tesela Terrarium a resolución nativa 1:1
+ * (256 × 256) directamente a metros saneados (`Float32Array`), aplicando validación estricta de saltos
+ * entre píxeles adyacentes antes de pasarla al mosaico general.
  */
 async function decodeTerrariumTileNative(
   z: number,
@@ -249,13 +320,20 @@ async function decodeTerrariumTileNative(
 ): Promise<Float32Array> {
   const primaryUrl = TERRARIUM_PROXY_URL.replace('{z}', String(z)).replace('{x}', String(wx)).replace('{y}', String(ty))
   const fallbackUrl = TERRARIUM_URL.replace('{z}', String(z)).replace('{x}', String(wx)).replace('{y}', String(ty))
-  let source: CanvasImageSource
-  try {
-    source = await loadRawTileSource(primaryUrl, signal)
-  } catch (err) {
-    if ((err as DOMException)?.name === 'AbortError') throw err
-    source = await loadRawTileSource(fallbackUrl, signal)
+  const urls = [primaryUrl, fallbackUrl, fallbackUrl]
+  let source: CanvasImageSource | null = null
+  let lastErr: unknown = null
+  for (const url of urls) {
+    try {
+      source = await loadRawTileSource(url, signal)
+      break
+    } catch (err) {
+      if ((err as DOMException)?.name === 'AbortError') throw err
+      lastErr = err
+    }
   }
+  if (!source) throw lastErr ?? new Error(`tile ${z}/${wx}/${ty}`)
+
   const tileCanvas = document.createElement('canvas')
   tileCanvas.width = TILE
   tileCanvas.height = TILE
@@ -267,12 +345,12 @@ async function decodeTerrariumTileNative(
     source.close()
   }
   const px = ctx.getImageData(0, 0, TILE, TILE).data
-  const out = new Float32Array(TILE * TILE)
+  const rawTile = new Float32Array(TILE * TILE)
   for (let i = 0; i < TILE * TILE; i++) {
     const raw = decodeTerrarium(px[i * 4], px[i * 4 + 1], px[i * 4 + 2])
-    out[i] = sanitizeElevationSample(raw, px[i * 4 + 3], MIN_ELEVATION_FLOOR_M)
+    rawTile[i] = sanitizeElevationSample(raw, px[i * 4 + 3], MIN_ELEVATION_FLOOR_M)
   }
-  return out
+  return sanitizeDecodedTilePixels(rawTile, TILE, TILE, NATIVE_TILE_MAX_STEP_M)
 }
 
 /**
@@ -323,59 +401,79 @@ export function resampleElevationBilinear(
 }
 
 /**
- * Filtro anti-picos 3×3 (despike) sobre una malla de elevaciones en metros:
- * Para cada celda calcula la mediana de sus vecinos inmediatos disponibles (8 en el interior);
- * si `|elev - medianaVecinos| > thresholdM` (típico artefacto de +256 m por salto del canal R en
- * Terrarium), reemplaza el vértice por la mediana de sus vecinos y recalcula `minM` y `maxM`.
+ * Filtro anti-picos 3×3 adaptativo en múltiples pasadas (despike) sobre una malla de elevaciones en metros:
+ * - En cada pasada calcula la mediana y la desviación absoluta mediana (MAD) de los 8 vecinos inmediatos.
+ * - Utiliza un umbral dinámico estricto en zonas bajas (`< 100 m`, tope 15 m, ideal para Cancún o planicies
+ *   costeras) y adaptativo a la pendiente real en zonas montañosas (hasta `thresholdM`).
+ * - Ejecuta `passes` pasadas consecutivas (2 por defecto) para eliminar tanto agujas aisladas como
+ *   pequeños clústeres de ruido surgidos del remuestreo, recalculando `minM` y `maxM` al final.
  */
 export function despikeElevationGrid(
   inputHeights: Float32Array,
   cols: number,
   rows: number,
   thresholdM = DESPIKE_THRESHOLD_M,
+  passes = 2,
 ): { heights: Float32Array; minM: number; maxM: number } {
-  const heights = new Float32Array(inputHeights.length)
+  let current = new Float32Array(inputHeights)
   const neighbors: number[] = []
+  const deviations: number[] = []
+  const totalPasses = Math.max(1, passes)
+
+  for (let pass = 0; pass < totalPasses; pass++) {
+    const next = new Float32Array(current.length)
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const idx = r * cols + c
+        const center = current[idx]
+        neighbors.length = 0
+        for (let dr = -1; dr <= 1; dr++) {
+          const nr = r + dr
+          if (nr < 0 || nr >= rows) continue
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue
+            const nc = c + dc
+            if (nc < 0 || nc >= cols) continue
+            const val = current[nr * cols + nc]
+            if (Number.isFinite(val)) neighbors.push(val)
+          }
+        }
+        let outVal = center
+        if (neighbors.length >= 3) {
+          neighbors.sort((a, b) => a - b)
+          const mid = neighbors.length >> 1
+          const median = neighbors.length % 2 === 1 ? neighbors[mid] : 0.5 * (neighbors[mid - 1] + neighbors[mid])
+          deviations.length = 0
+          for (let k = 0; k < neighbors.length; k++) {
+            deviations.push(Math.abs(neighbors[k] - median))
+          }
+          deviations.sort((a, b) => a - b)
+          const mad = deviations.length % 2 === 1 ? deviations[mid] : 0.5 * (deviations[mid - 1] + deviations[mid])
+          const dynamicThreshold = adaptiveDespikeThreshold(median, mad, thresholdM)
+          if (!Number.isFinite(center) || Math.abs(center - median) > dynamicThreshold) {
+            outVal = median
+          }
+        }
+        next[idx] = outVal
+      }
+    }
+    current = next
+  }
+
   let minM = Infinity
   let maxM = -Infinity
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c
-      const center = inputHeights[idx]
-      neighbors.length = 0
-      for (let dr = -1; dr <= 1; dr++) {
-        const nr = r + dr
-        if (nr < 0 || nr >= rows) continue
-        for (let dc = -1; dc <= 1; dc++) {
-          if (dr === 0 && dc === 0) continue
-          const nc = c + dc
-          if (nc < 0 || nc >= cols) continue
-          const val = inputHeights[nr * cols + nc]
-          if (Number.isFinite(val)) neighbors.push(val)
-        }
-      }
-      let outVal = center
-      if (neighbors.length >= 3) {
-        neighbors.sort((a, b) => a - b)
-        const mid = neighbors.length >> 1
-        const median = neighbors.length % 2 === 1 ? neighbors[mid] : 0.5 * (neighbors[mid - 1] + neighbors[mid])
-        if (!Number.isFinite(center) || Math.abs(center - median) > thresholdM) {
-          outVal = median
-        }
-      }
-      heights[idx] = outVal
-      if (Number.isFinite(outVal)) {
-        if (outVal < minM) minM = outVal
-        if (outVal > maxM) maxM = outVal
-      }
+  for (let i = 0; i < current.length; i++) {
+    const v = current[i]
+    if (Number.isFinite(v)) {
+      if (v < minM) minM = v
+      if (v > maxM) maxM = v
     }
   }
   if (!Number.isFinite(minM)) throw new Error('sin elevación válida')
-  for (let i = 0; i < heights.length; i++) {
-    if (!Number.isFinite(heights[i])) heights[i] = minM
+  for (let i = 0; i < current.length; i++) {
+    if (!Number.isFinite(current[i])) current[i] = minM
   }
-  return { heights, minM, maxM }
+  return { heights: current, minM, maxM }
 }
 
 /** Rejilla de elevación (cols × rows) del bbox, decodificada 1:1 en metros y remuestreada en metros. */
@@ -390,33 +488,57 @@ export async function fetchTerrainGrid(bbox: LonLatBBox, cols: number, rows: num
   const mosaic = new Float32Array(srcW * srcH)
   mosaic.fill(Number.NaN)
 
-  const jobs: Promise<void>[] = []
-  let failed = 0
+  const tilePromises: Promise<{ offX: number; offY: number; tileHeights: Float32Array | null }>[] = []
+  let validTiles = 0
   for (let ty = y0; ty <= y1; ty++) {
     for (let tx = x0; tx <= x1; tx++) {
       if (ty < 0 || ty >= n) continue
       const wx = ((tx % n) + n) % n
       const offX = (tx - x0) * TILE
       const offY = (ty - y0) * TILE
-      jobs.push(
+      tilePromises.push(
         decodeTerrariumTileNative(zoom, wx, ty, signal).then(
           (tileHeights) => {
-            for (let r = 0; r < TILE; r++) {
-              const dstRow = (offY + r) * srcW + offX
-              const srcRow = r * TILE
-              mosaic.set(tileHeights.subarray(srcRow, srcRow + TILE), dstRow)
-            }
+            validTiles++
+            return { offX, offY, tileHeights }
           },
           (err) => {
             if ((err as DOMException)?.name === 'AbortError') throw err
-            failed++
+            return { offX, offY, tileHeights: null }
           },
         ),
       )
     }
   }
-  await Promise.all(jobs)
-  if (failed > 0) throw new Error(`${failed} teselas no disponibles`)
+  // Espera estrictamente a que TODAS las teselas hayan resuelto antes de ensamblar y remuestrear
+  const resolvedTiles = await Promise.all(tilePromises)
+  if (validTiles === 0) throw new Error(`${resolvedTiles.length} teselas no disponibles`)
+
+  for (const { offX, offY, tileHeights } of resolvedTiles) {
+    if (!tileHeights) continue
+    for (let r = 0; r < TILE; r++) {
+      const dstRow = (offY + r) * srcW + offX
+      const srcRow = r * TILE
+      mosaic.set(tileHeights.subarray(srcRow, srcRow + TILE), dstRow)
+    }
+  }
+
+  // Si alguna tesela individual falló tras los reintentos, rellenar sus NaN con la mediana global válida
+  // para no dejar huecos que generen picos por interpolación con NaN
+  if (validTiles < resolvedTiles.length) {
+    let sum = 0
+    let count = 0
+    for (let i = 0; i < mosaic.length; i++) {
+      if (Number.isFinite(mosaic[i])) {
+        sum += mosaic[i]
+        count++
+      }
+    }
+    const fillVal = count > 0 ? sum / count : MIN_ELEVATION_FLOOR_M
+    for (let i = 0; i < mosaic.length; i++) {
+      if (!Number.isFinite(mosaic[i])) mosaic[i] = fillVal
+    }
+  }
 
   const sx = (lonToTileX(bbox[0], zoom) - x0) * TILE
   const sy = (latToTileY(bbox[3], zoom) - y0) * TILE
@@ -425,7 +547,7 @@ export async function fetchTerrainGrid(bbox: LonLatBBox, cols: number, rows: num
 
   const resampled = resampleElevationBilinear(mosaic, srcW, srcH, sx, sy, sw, sh, cols, rows)
   const sanitized = sanitizeElevationGrid(resampled, null, MIN_ELEVATION_FLOOR_M)
-  const { heights, minM, maxM } = despikeElevationGrid(sanitized.heights, cols, rows, DESPIKE_THRESHOLD_M)
+  const { heights, minM, maxM } = despikeElevationGrid(sanitized.heights, cols, rows, DESPIKE_THRESHOLD_M, 2)
   return { heights, cols, rows, minM, maxM, bbox, zoom, ...bboxSizeMeters(bbox) }
 }
 
@@ -526,4 +648,193 @@ export function hypsometricCanvas(grid: TerrainGrid): HTMLCanvasElement {
   }
   ctx.putImageData(img, 0, 0)
   return canvas
+}
+
+/** Dirección de órbita del radar NISAR (mirada lateral izquierda). */
+export type SarOrbitDirection = 'ascending' | 'descending'
+
+/** Clases geométricas de confiabilidad y distorsión topográfica SAR. */
+export type SarGeometricClass = 'reliable' | 'steep' | 'layover' | 'shadow'
+
+/** Ángulo de incidencia nominal representativo de NISAR L-band (rango 33°–47°). */
+export const DEFAULT_SAR_INCIDENCE_DEG = 43
+/** Umbral de pendiente crítica (en grados) donde aumenta la distorsión radiométrica. */
+export const SAR_CRITICAL_SLOPE_DEG = 15
+
+export interface SarMaskOptions {
+  orbit?: SarOrbitDirection
+  incidenceDeg?: number
+  criticalSlopeDeg?: number
+}
+
+export interface SarMaskStats {
+  reliablePct: number
+  steepPct: number
+  layoverPct: number
+  shadowPct: number
+  totalCells: number
+  orbit: SarOrbitDirection
+  incidenceDeg: number
+}
+
+/**
+ * Color RGB [0..255] para cada categoría de la máscara geométrica SAR:
+ * - Confiable (verde `#22C55E`)
+ * - Pendiente crítica > 15° (ámbar `#F59E0B`)
+ * - Layover / escorzo severo (rojo `#EF4444`)
+ * - Sombra radar (morado carbón `#1E1B4B`)
+ */
+export function sarClassColor(cls: SarGeometricClass): [number, number, number] {
+  switch (cls) {
+    case 'reliable':
+      return [34, 197, 94]
+    case 'steep':
+      return [245, 158, 11]
+    case 'layover':
+      return [239, 68, 68]
+    case 'shadow':
+      return [30, 27, 75]
+  }
+}
+
+/**
+ * Clasifica cada celda de la rejilla topográfica en una de las 4 clases geométricas SAR y
+ * devuelve además los colores sombreados (RGBA) y el resumen porcentual de la ROI.
+ *
+ * Geometría NISAR (radar de mirada izquierda):
+ * - Órbita Ascendente (`ascending`, rumbo ~350°): el haz mira hacia el Oeste-Suroeste (azimut ~260°).
+ * - Órbita Descendente (`descending`, rumbo ~190°): el haz mira hacia el Este-Sureste (azimut ~100°).
+ *
+ * Para un punto con derivadas locales `(zx = ∂z/∂x, zy = ∂z/∂y)` (x = Este, y = Norte) y vector
+ * unitario de propagación del haz desde el sensor hacia el terreno `(lx, ly)`:
+ * - Pendiente real: `α = arctan(√(zx² + zy²))`
+ * - Pendiente proyectada hacia el radar (positiva cuando la altura crece en el sentido de propagación
+ *   del haz, es decir, cuando la normal de la ladera apunta de regreso hacia el sensor):
+ *   `s_rad = zx·lx + zy·ly`
+ *   * `s_rad > 0`: ladera orientada hacia el radar → Layover si `s_rad ≥ tan(θ_i)`.
+ *   * `s_rad < 0`: ladera opuesta al radar → Sombra si `-s_rad ≥ tan(90° - θ_i)`.
+ */
+export function computeSarGeometricMask(
+  grid: Pick<TerrainGrid, 'heights' | 'cols' | 'rows' | 'widthM' | 'heightM'>,
+  options: SarMaskOptions = {},
+): { classes: Uint8Array; rgba: Uint8ClampedArray; stats: SarMaskStats } {
+  const orbit: SarOrbitDirection = options.orbit ?? 'ascending'
+  const incidenceDeg = Math.max(20, Math.min(70, options.incidenceDeg ?? DEFAULT_SAR_INCIDENCE_DEG))
+  const criticalSlopeDeg = options.criticalSlopeDeg ?? SAR_CRITICAL_SLOPE_DEG
+
+  const { heights, cols, rows, widthM, heightM } = grid
+  const total = cols * rows
+  const classes = new Uint8Array(total) // 0=reliable, 1=steep, 2=layover, 3=shadow
+  const rgba = new Uint8ClampedArray(total * 4)
+
+  const dx = Math.max(widthM / Math.max(cols - 1, 1), 1e-3)
+  const dy = Math.max(heightM / Math.max(rows - 1, 1), 1e-3)
+
+  // Dirección del haz radar (desde el satélite hacia el terreno): azimut medido desde el Norte en sentido horario
+  const lookAzimuthDeg = orbit === 'ascending' ? 260 : 100
+  const lookRad = (lookAzimuthDeg * Math.PI) / 180
+  const lx = Math.sin(lookRad) // componente Este
+  const ly = Math.cos(lookRad) // componente Norte
+
+  const tanIncidence = Math.tan((incidenceDeg * Math.PI) / 180)
+  const tanGrazing = Math.tan(((90 - incidenceDeg) * Math.PI) / 180)
+  const tanCritical = Math.tan((criticalSlopeDeg * Math.PI) / 180)
+
+  // Vector de iluminación direccional suave (NO) para conservar la percepción de volumen 3D
+  const sunX = -0.526
+  const sunY = 0.526
+  const sunZ = 0.669
+
+  let reliableCount = 0
+  let steepCount = 0
+  let layoverCount = 0
+  let shadowCount = 0
+
+  for (let r = 0; r < rows; r++) {
+    const rPrev = Math.max(0, r - 1)
+    const rNext = Math.min(rows - 1, r + 1)
+    const spanY = Math.max(1, rNext - rPrev) * dy
+    for (let c = 0; c < cols; c++) {
+      const cPrev = Math.max(0, c - 1)
+      const cNext = Math.min(cols - 1, c + 1)
+      const spanX = Math.max(1, cNext - cPrev) * dx
+
+      const i = r * cols + c
+      const zx = (heights[r * cols + cNext] - heights[r * cols + cPrev]) / spanX
+      // Filas crecen de Norte (r=0) a Sur (r=rows-1), por lo que ∂z/∂Norte = (z[rPrev] - z[rNext]) / spanY
+      const zy = (heights[rPrev * cols + c] - heights[rNext * cols + c]) / spanY
+
+      const slopeMag = Math.hypot(zx, zy)
+      // Pendiente proyectada hacia el sensor: positiva cuando el terreno sube en la dirección de propagación del haz (lx, ly)
+      const slopeTowardRadar = zx * lx + zy * ly
+
+      let cls: SarGeometricClass
+      if (slopeTowardRadar >= tanIncidence) {
+        cls = 'layover'
+        classes[i] = 2
+        layoverCount++
+      } else if (-slopeTowardRadar >= tanGrazing) {
+        cls = 'shadow'
+        classes[i] = 3
+        shadowCount++
+      } else if (slopeMag > tanCritical) {
+        cls = 'steep'
+        classes[i] = 1
+        steepCount++
+      } else {
+        cls = 'reliable'
+        classes[i] = 0
+        reliableCount++
+      }
+
+      const [R, G, B] = sarClassColor(cls)
+      const invLen = 1 / Math.hypot(zx, zy, 1)
+      const dot = (-zx * sunX - zy * sunY + sunZ) * invLen
+      const shade = cls === 'shadow'
+        ? Math.max(0.75, Math.min(1.15, 0.75 + Math.max(0, dot) * 0.4))
+        : Math.max(0.62, Math.min(1.18, 0.58 + Math.max(0, dot) * 0.65))
+
+      rgba[i * 4] = Math.min(255, Math.round(R * shade))
+      rgba[i * 4 + 1] = Math.min(255, Math.round(G * shade))
+      rgba[i * 4 + 2] = Math.min(255, Math.round(B * shade))
+      rgba[i * 4 + 3] = 255
+    }
+  }
+
+  const denom = Math.max(total, 1)
+  return {
+    classes,
+    rgba,
+    stats: {
+      reliablePct: (reliableCount / denom) * 100,
+      steepPct: (steepCount / denom) * 100,
+      layoverPct: (layoverCount / denom) * 100,
+      shadowPct: (shadowCount / denom) * 100,
+      totalCells: total,
+      orbit,
+      incidenceDeg,
+    },
+  }
+}
+
+/**
+ * Genera el `<canvas>` de textura para el modo "Máscara Geométrica SAR" junto con las estadísticas
+ * porcentuales de la ROI.
+ */
+export function sarMaskCanvas(
+  grid: TerrainGrid,
+  options: SarMaskOptions = {},
+): { canvas: HTMLCanvasElement; stats: SarMaskStats } {
+  const { cols, rows } = grid
+  const { rgba, stats } = computeSarGeometricMask(grid, options)
+  const canvas = document.createElement('canvas')
+  canvas.width = cols
+  canvas.height = rows
+  const ctx = canvas.getContext('2d')
+  if (ctx) {
+    const img = ctx.createImageData(cols, rows)
+    img.data.set(rgba)
+    ctx.putImageData(img, 0, 0)
+  }
+  return { canvas, stats }
 }

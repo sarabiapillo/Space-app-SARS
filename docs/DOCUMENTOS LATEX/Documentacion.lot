@@ -1,0 +1,27 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {table}{\numberline {1}{\ignorespaces Qué entra, qué sale y qué se comprueba en cada eslabón de la cadena de observación.}}{13}{table.caption.5}%
+\contentsline {table}{\numberline {2}{\ignorespaces Los tres niveles de afirmación y cómo se distinguen.}}{14}{table.caption.7}%
+\contentsline {table}{\numberline {3}{\ignorespaces Longitudes de onda representativas y su interacción cualitativa con la vegetación. Los valores son órdenes de magnitud de uso común, no especificaciones de una misión.}}{18}{table.caption.9}%
+\contentsline {table}{\numberline {4}{\ignorespaces Moteado ideal en dB para $L$ looks independientes (ecuación~\eqref {eq:db-gamma}). El sesgo es la diferencia entre la media de los valores en dB y el dB de la media lineal.}}{20}{table.caption.11}%
+\contentsline {table}{\numberline {5}{\ignorespaces Lo que sí y lo que no se puede deducir del brillo de un píxel SAR.}}{22}{table.caption.15}%
+\contentsline {table}{\numberline {6}{\ignorespaces Sensibilidad de la potencia recibida a cada factor de la ecuación~\eqref {eq:radar} (los demás constantes). Se obtiene de $10\log _{10}$ de la razón.}}{24}{table.caption.16}%
+\contentsline {table}{\numberline {7}{\ignorespaces Los tres coeficientes y sus áreas de referencia. Dividir entre un área menor produce un coeficiente mayor.}}{25}{table.caption.18}%
+\contentsline {table}{\numberline {8}{\ignorespaces Equivalencias de decibeles a razón de potencia. Cada $+3$\,dB multiplica por $\approx 2$; cada $+10$\,dB, por 10.}}{26}{table.caption.21}%
+\contentsline {table}{\numberline {9}{\ignorespaces Tendencias cualitativas habituales. Las magnitudes dependen del sitio, de la geometría y de la estación; esta tabla no es un criterio de clasificación.}}{29}{table.caption.28}%
+\contentsline {table}{\numberline {10}{\ignorespaces Resultado del multilook del ejemplo de la figura~\ref {fig:multilook_bloques}. El bloque inferior derecho tiene $N_v=1<2$ y se marca como NaN.}}{34}{table.caption.45}%
+\contentsline {table}{\numberline {14}{\ignorespaces Estadísticas de $\gamma ^0$ en dB para la ROI de la Etapa 1 (HH y HV, resolución completa). Valores tomados de \texttt {metadatos.json} de la carpeta de figuras.}}{44}{table.caption.64}%
+\contentsline {table}{\numberline {15}{\ignorespaces Fuentes independientes para contrastar un cambio de respuesta radar.}}{46}{table.caption.67}%
+\contentsline {table}{\numberline {16}{\ignorespaces Traducción de cada término de la ecuación~\eqref {eq:conserv} a su significado físico.}}{48}{table.caption.69}%
+\contentsline {table}{\numberline {17}{\ignorespaces Cada módulo responde una pregunta acotada. Confundirlas es la fuente de interpretaciones erróneas más frecuente.}}{53}{table.caption.80}%
+\contentsline {table}{\numberline {20}{\ignorespaces De un resultado técnicamente correcto a uno científicamente defendible.}}{66}{table.caption.81}%
+\contentsline {table}{\numberline {21}{\ignorespaces Sensibilidades cualitativas esperadas del simulador.}}{68}{table.caption.87}%
+\contentsline {table}{\numberline {22}{\ignorespaces Plantilla de registro de una prueba de verificación.}}{69}{table.caption.88}%
+\contentsline {table}{\numberline {23}{\ignorespaces Fuentes de error de la irradiancia directa calculada y su dirección.}}{74}{table.caption.94}%
+\contentsline {table}{\numberline {24}{\ignorespaces Irradiancia directa sobre superficies al mediodía del 15 de noviembre (ilustrativo, $T_L=3$).}}{76}{table.caption.96}%
+\contentsline {table}{\numberline {25}{\ignorespaces Valores lineales de $\gamma ^0_{HH}$ de la región de ejemplo (inventados).}}{88}{table.caption.133}%
+\contentsline {table}{\numberline {26}{\ignorespaces Los mismos valores en dB y su diferencia píxel a píxel $\Delta =\mathrm {B}-\mathrm {A}$.}}{88}{table.caption.134}%
+\contentsline {table}{\numberline {28}{\ignorespaces Conversiones que aparecen con frecuencia en el documento.}}{92}{table.caption.142}%
+\contentsline {table}{\numberline {29}{\ignorespaces Índice temático de las figuras (los números exactos aparecen en la lista de figuras).}}{93}{table.caption.151}%
+\contentsline {table}{\numberline {30}{\ignorespaces Fórmulas de radar de uso frecuente.}}{95}{table.caption.185}%
+\contentsline {table}{\numberline {31}{\ignorespaces Fórmulas de aguas someras de uso frecuente.}}{96}{table.caption.187}%
+\contentsline {table}{\numberline {32}{\ignorespaces Fórmulas solares de uso frecuente.}}{96}{table.caption.189}%
