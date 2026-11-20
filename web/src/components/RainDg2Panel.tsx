@@ -8,7 +8,7 @@ import { floodRoiPolygon } from '../utils/floodRoi'
 import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
 import {
   buildRoiFloodRequest, coastPreset, createFloodRunController, DG2_DEFAULT_MAX_CELLS, estimateDomainCells, exampleFormValues,
-  flowArrowFeatures, formStepStatus, inlandPreset, pngDownloadName, type FloodDg2Form,
+  flowArrowFeatures, formStepStatus, inlandPreset, pngDownloadName, withFormChange, type FloodDg2Form,
 } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 import { FloodDg2Charts } from './FloodDg2Charts'
@@ -60,8 +60,8 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
     const {flood:prev,onFloodChange:change}=latest.current
     if(prev.rasterUrl || prev.resultRoiKey) change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,flowArrows:null,stats:null,charts:null,resultRoiKey:undefined})
   },[roiKey])
-  // Any change withdraws the confirmation, so the user confirms the values that are actually sent.
-  const set=(name:keyof Form,value:string|boolean)=>setForm(f=>({...f,[name]:value,confirm:name==='confirm' && value===true}))
+  // Any change withdraws the confirmation (except the non-urban declaration beside it): see withFormChange.
+  const set=(name:keyof Form,value:string|boolean)=>setForm(f=>withFormChange(f,name,value))
   const roi=floodRoiPolygon(croppedRegion)
   const launch=async()=>{try {const req=buildRoiFloodRequest(form,roi,t);const {flood:prev,onFloodChange:change}=latest.current; change({...prev,enabled:false,rasterUrl:null,rasterBounds:null,flowArrows:null,stats:null,charts:null,resultRoiKey:undefined}); const outcome=await controller.current!.start(req,roiKey);if(outcome?.result){const first=outcome.result.artifacts.find(a=>a.frame_index===undefined||a.frame_index===null)??outcome.result.artifacts[0];if(first){await controller.current!.select(outcome.run,outcome.result,first.name,roiKey)}}}catch(e){setView({roiKey,error:e instanceof Error?e.message:String(e)})}}
   const choose=async(name:string)=>{if(!view?.run||!view.result)return;await controller.current!.select(view.run,view.result,name,roiKey)}

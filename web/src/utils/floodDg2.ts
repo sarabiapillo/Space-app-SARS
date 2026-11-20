@@ -75,6 +75,15 @@ export function utmEpsgFor(lon: number, lat: number) {
 /** Fills the form with illustrative example values (not recommendations) so the user can review and run a
  * small test. Declarations and modelling choices (domain, infiltration, lakes, nonurban, confirmation) stay
  * the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a ROI). */
+/**
+ * Applies one form change. Any value change withdraws the confirmation, so the user confirms the values
+ * actually sent; the non-urban declaration sits beside the confirmation and leaves it as it is.
+ */
+export function withFormChange<F extends { confirm: boolean }>(form: F, name: keyof F & string, value: string | boolean): F {
+  const confirm = name === 'confirm' ? value === true : name === 'nonurban' ? form.confirm : false
+  return { ...form, [name]: value, confirm }
+}
+
 export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): FloodDg2Form {
   const ring = outerRing(roi)
   const lons = ring?.map(p => p[0]) ?? [], lats = ring?.map(p => p[1]) ?? []

@@ -315,3 +315,13 @@ test('result summary: flooded area, maximum depth, volumes, Froude, time of conc
   assert.deepEqual(old, {floodedHa:null, floodedPct:null, maxDepthM:1, domainM3:null, rainM3:null, froude:null, tcMin:null, roads:null})
   assert.equal(dg2Summary({...result, roads:{available:false}}, null).roads, 'unavailable')
 })
+
+test('changing a value withdraws the confirmation, but the non-urban declaration beside it does not', async () => {
+  const { withFormChange } = await import('../src/utils/floodDg2.ts')
+  const confirmed = { amount: '30', nonurban: false, confirm: true }
+  assert.equal(withFormChange(confirmed, 'nonurban', true).confirm, true)
+  assert.equal(withFormChange(confirmed, 'nonurban', true).nonurban, true)
+  assert.equal(withFormChange(confirmed, 'amount', '80').confirm, false)
+  assert.equal(withFormChange({ ...confirmed, confirm: false }, 'confirm', true).confirm, true)
+  assert.equal(withFormChange(confirmed, 'confirm', false).confirm, false)
+})
