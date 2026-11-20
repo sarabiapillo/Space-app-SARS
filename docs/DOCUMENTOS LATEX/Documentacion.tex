@@ -50,7 +50,7 @@
 \newcommand{\sz}{\ensuremath{\sigma^{0}}}
 \newcommand{\por}{\ensuremath{\times}}
 \newcommand{\flecha}{\ensuremath{\rightarrow}}
-\pdfstringdefDisableCommands{\def\gz{gamma0}\def\sz{sigma0}\def\por{x}\def\flecha{->}}
+\pdfstringdefDisableCommands{\def\gz{gamma0}\def\sz{sigma0}\def\por{x}\def\flecha{->}\def\src#1{}}
 
 % --- \part compacto: sin página propia
 \makeatletter
@@ -832,104 +832,365 @@ $+10$\,dB, por 10.}
 \end{itemize}
 
 \section{Cambio entre dos fechas comparables}
+\label{sec:cambio}
 
-Para dos escenas comparables (mismo producto, trayectoria, marco, dirección, polarización,
-resolución, CRID y madurez) en la misma malla:
+Esta sección documenta el pipeline matemático y computacional de detección de cambio entre dos adquisiciones
+comparables de NISAR GCOV (Frequency~A, banda~L), implementado en \src{pipeline/preprocess.py},
+\src{pipeline/change.py} y \src{pipeline/roi_explore.py}, así como su recálculo interactivo en el servicio web
+(\texttt{POST /api/roi-jobs/\{id\}/change} y \src{web/src/components/ChangeControls.tsx}).
+
+Para que dos escenas puedan compararse píxel a píxel, deben superar primero el control de comparabilidad
+(\src{pipeline/compat.py}): coincidir exactamente en producto (\texttt{GCOV}), trayectoria (\emph{track}), marco
+(\emph{frame}), dirección de órbita (\texttt{ASCENDING} o \texttt{DESCENDING}), polarización (\texttt{HH},
+\texttt{HV}), resolución espacial ($10\times 10\,\unit{m}$), versión de procesamiento (\texttt{CRID}) y nivel de
+madurez (\texttt{PROVISIONAL} o \texttt{VALIDATED}, sin mezclar jamás con \texttt{BETA}). Además, los recortes
+deben compartir exactamente la misma malla cartográfica en UTM (mismo CRS, misma transformación afín y mismas
+dimensiones); el pipeline \textbf{nunca remuestrea} una escena para forzar su comparación con otra.
+
+\subsection{Preprocesamiento y filtro Multilook $n\times n$ en potencia lineal}
+\label{subsec:cambio-multilook}
+
+Antes de calcular cualquier diferencia entre fechas, cada escena individual pasa por tres etapas en
+\src{pipeline/preprocess.py}:
+\begin{enumerate}
+  \item \textbf{Enmascaramiento de validez y geometría ROI:} todo píxel cuya capa \texttt{mask} del producto
+        valga $0$ (inválido) o $255$ (fuera de la franja de adquisición), o cuyo centroide caiga fuera del
+        polígono de la ROI proyectado al CRS UTM del producto (por ejemplo, \texttt{EPSG:32615} en Chiapas),
+        se asigna a $\mathrm{NaN}$.
+  \item \textbf{Selección de magnitud radiométrica RTC:} por defecto se emplea la retrodispersión corregida por
+        terreno $\gz$ (\emph{terrain-flattened gamma naught}) en potencia lineal. Opcionalmente, en línea de
+        comandos puede seleccionarse $\sz = \gz \cdot F$, donde $F$ es la capa \texttt{rtcGammaToSigmaFactor}
+        del producto GCOV.
+  \item \textbf{Reducción de moteado (\emph{speckle}) mediante Multilook $n\times n$ en potencia lineal:}
+        para atenuar la variabilidad granular coherente antes de comparar las dos fechas, la matriz de potencia
+        lineal $P_t(i,j) \equiv \gz_t(i,j)$ en la fecha $t \in \{t_1, t_2\}$ se divide en bloques disjuntos
+        $B_{I,J}$ de $n\times n$ píxeles comenzando desde la esquina superior izquierda (descartando filas o
+        columnas sobrantes en el borde derecho/inferior). Sea $V_{I,J} = \{(i,j) \in B_{I,J} : P_t(i,j) \text{ es finito y } P_t(i,j) > 0\}$
+        el subconjunto de píxeles válidos dentro del bloque $(I,J)$. El valor promediado en escala lineal es:
+        \begin{equation}
+          \bar{P}_t(I,J) =
+          \begin{cases}
+            \displaystyle\frac{1}{|V_{I,J}|} \sum_{(i,j)\in V_{I,J}} P_t(i,j), & \text{si } |V_{I,J}| \ge f_{\min}\,n^2, \\[10pt]
+            \mathrm{NaN}, & \text{si } |V_{I,J}| < f_{\min}\,n^2,
+          \end{cases}
+          \label{eq:cambio-multilook-lineal}
+        \end{equation}
+        donde la fracción mínima de cobertura válida por bloque está fijada en $f_{\min} = 0.5$
+        (\texttt{min\_valid\_fraction = 0.5}).
+\end{enumerate}
+
+Con píxeles nativos GCOV de $\Delta x = \Delta y = 10\,\unit{m}$, el valor por defecto del pipeline de cambio
+es $n = 5$ (bloques de $5\times 5$ píxeles), lo que produce una malla de salida con resolución espacial efectiva
+de:
 \begin{equation}
-  \Delta\sigma^0_{\text{dB}}(x,y) = \sigma^0_{\text{dB},t_2}(x,y) - \sigma^0_{\text{dB},t_1}(x,y)
-  = 10\log_{10}\frac{\sigma^0_{t_2}(x,y)}{\sigma^0_{t_1}(x,y)} .
+  \Delta x_{\mathrm{ML}} = n \cdot \Delta x = 5 \times 10\,\unit{m} = 50\,\unit{m}, \qquad
+  A_{\mathrm{p\acute{\imath}xel}} = |a_{\mathrm{ML}} \cdot e_{\mathrm{ML}}| = 50\,\unit{m} \times 50\,\unit{m} = 0.0025\,\unit{km^2}.
+  \label{eq:cambio-res-50m}
+\end{equation}
+En la interfaz web, el usuario puede alternar dinámicamente entre $n \in \{2, 5, 10\}$, equivalentes a
+resoluciones efectivas de $20\,\unit{m}$, $50\,\unit{m}$ (por defecto) y $100\,\unit{m}$.
+
+\begin{cuidado}
+\warn{El filtro Multilook siempre debe calcularse sobre la potencia lineal $\gz$ antes de aplicar el logaritmo.}
+Promediar valores que ya fueron convertidos a decibeles equivale a calcular una media geométrica de potencias
+($\frac{1}{N}\sum 10\log_{10} P_k = 10\log_{10}(\prod P_k)^{1/N}$), la cual, por la desigualdad de Jensen,
+introduce un sesgo sistemático hacia abajo ($\approx -2.5\,\unit{dB}$ para $L=1$) y distorsiona la razón de
+cambio entre fechas. Por ello, \src{pipeline/roi_explore.py} conserva en disco los GeoTIFF de potencia lineal
+enmascarada (\path{layers/<granuleId>/geotiff/gamma0_<capa>.tif}) y ejecuta cualquier recálculo de resolución a
+partir de ellos.
+\end{cuidado}
+
+\subsection{Diferencia logarítmica de retrodispersión ($\Delta\gz_{\mathrm{dB}}$)}
+\label{subsec:cambio-delta-db}
+
+Una vez obtenido el campo promediado en potencia lineal $\bar{P}_t(I,J)$ para ambas fechas sobre la misma malla
+de resolución $n\Delta x$, cada fecha se transforma a escala logarítmica en decibeles:
+\begin{equation}
+  \gz_{\mathrm{dB},t}(I,J) =
+  \begin{cases}
+    10\log_{10}\!\bigl(\bar{P}_t(I,J)\bigr), & \text{si } \bar{P}_t(I,J) > 0, \\
+    \mathrm{NaN}, & \text{en otro caso.}
+  \end{cases}
+  \label{eq:cambio-a-db}
+\end{equation}
+
+Para dos escenas comparables en los instantes $t_1$ (referencia) y $t_2$ (adquisición posterior), la diferencia
+temporal de retrodispersión (\texttt{delta\_db} en \src{pipeline/change.py}) se define píxel a píxel como:
+\begin{equation}
+  \Delta\gz_{\mathrm{dB}}(I,J) = \gz_{\mathrm{dB},t_2}(I,J) - \gz_{\mathrm{dB},t_1}(I,J)
+  = 10\log_{10}\!\left(\frac{\bar{P}_{t_2}(I,J)}{\bar{P}_{t_1}(I,J)}\right).
   \label{eq:delta}
 \end{equation}
-La diferencia en dB equivale al logaritmo de la razón de potencias.
+Si una celda $(I,J)$ es $\mathrm{NaN}$ en $t_1$ o en $t_2$, su diferencia $\Delta\gz_{\mathrm{dB}}(I,J)$ se
+propaga como $\mathrm{NaN}$. La misma expresión es válida si se trabaja con $\sz$ ($\Delta\sz_{\mathrm{dB}} =
+\sz_{\mathrm{dB},t_2} - \sz_{\mathrm{dB},t_1}$), dado que el factor geométrico de conversión $F(I,J)$ es
+invariante para la misma geometría orbital.
 
-\paragraph{Anomalía estandarizada (planeada, aún no implementada).}
-Respecto a la estadística de la región o de una línea base:
-\begin{equation}
-  z(x,y) = \frac{\Delta\sigma^0_{\text{dB}}(x,y) - \mu}{s},
-\end{equation}
-donde $\mu$ y $s$ son la media y la desviación estándar de referencia. Los parámetros exactos se
-documentarán en \texttt{pipeline/change.py} cuando exista.
+\subsection{Qué significa un valor de $\Delta\gz_{\mathrm{dB}}$}
 
-\paragraph{Advertencia.} Un $\Delta\sigma^0$ describe un cambio en la respuesta radar; por sí solo
-no identifica su causa física.
-
-\label{sec:cambio}
-\subsection{Qué significa un valor de $\Delta\sigma^0$}
-
-La ecuación~\eqref{eq:delta} dice que la diferencia en dB es el logaritmo de la razón de potencias. Eso se
-traduce en lectura directa de la tabla~\ref{tab:db-razon}: un $\Delta\sigma^0=+3$\,dB significa que la segunda
-fecha devolvió el doble de potencia que la primera, y $-3$\,dB, la mitad. El signo indica la dirección del
-cambio de \emph{respuesta radar}, no de una cantidad física concreta.
+La ecuación~\eqref{eq:delta} expresa que la resta en decibeles mide exactamente el logaritmo del cociente de
+potencias devueltas al radar entre $t_2$ y $t_1$. En términos de la tabla~\ref{tab:db-razon}: un cambio
+$\Delta\gz_{\mathrm{dB}} = +3\,\unit{dB}$ significa que la celda devolvió el \textbf{doble de potencia} en la
+segunda fecha ($\bar{P}_{t_2}/\bar{P}_{t_1} \approx 2$), mientras que $\Delta\gz_{\mathrm{dB}} = -3\,\unit{dB}$
+indica que la potencia retrodispersada cayó a la \textbf{mitad} ($\bar{P}_{t_2}/\bar{P}_{t_1} \approx 0.5$).
+En los productos visuales del sistema (COG y PNG en \texttt{EPSG:3857}), $\Delta\gz_{\mathrm{dB}}$ se
+representa con una rampa divergente fija azul--blanco--rojo saturada en $[-6, +6]\,\unit{dB}$: azul para
+disminución ($\Delta < 0$), blanco para estabilidad ($\Delta \approx 0$) y rojo para incremento ($\Delta > 0$).
 
 \begin{figure}[htbp]
 \centering
 \begin{tikzpicture}[node distance=5mm,
-  caja/.style={draw,rounded corners,fill=blue!6,align=center,text width=2.5cm,minimum height=1.2cm,font=\small},
+  caja/.style={draw,rounded corners,fill=blue!6,align=center,text width=2.6cm,minimum height=1.25cm,font=\small},
   fl/.style={-{Stealth},thick}]
-\node[caja] (a) {Fecha $t_1$\\$\sigma^0_{dB,t_1}$};
-\node[caja,right=of a] (b) {Fecha $t_2$\\$\sigma^0_{dB,t_2}$};
-\node[caja,right=12mm of b] (c) {Diferencia\\$\Delta\sigma^0_{dB}$};
-\node[caja,right=of c,fill=orange!10] (d) {Interpretación (hipótesis)};
+\node[caja] (a) {Fecha $t_1$\\$\bar{P}_{t_1} \to \gz_{\mathrm{dB},t_1}$};
+\node[caja,right=of a] (b) {Fecha $t_2$\\$\bar{P}_{t_2} \to \gz_{\mathrm{dB},t_2}$};
+\node[caja,right=10mm of b] (c) {Diferencia y $z_{\mathrm{rob}}$\\$\Delta\gz_{\mathrm{dB}},\; \sigma_{\mathrm{MAD}}$};
+\node[caja,right=of c,fill=orange!10] (d) {Interpretación\\(hipótesis + validación)};
 \draw[fl] (b)--(c); \draw[fl] (a.south) |- ++(0,-6mm) -| (c.south);
 \draw[fl] (c)--(d);
-\node[font=\scriptsize,below=7mm of c,text width=5cm,align=center] {misma malla, misma geometría, mismo CRID y madurez};
+\node[font=\scriptsize,below=7mm of c,text width=6.2cm,align=center] {misma malla UTM, Multilook $n\times n$ en lineal, mismo CRID y madurez};
 \end{tikzpicture}
-\caption{El cambio se calcula píxel a píxel entre dos escenas comparables y solo después se interpreta. La
-interpretación nunca es parte de la medición.}
+\caption{Flujo de cálculo de cambio en TerraPulse AI: el Multilook se aplica en potencia lineal sobre cada fecha
+comparable antes de restar en dB y estandarizar con estadísticas robustas. La interpretación física nunca forma
+parte de la medición.}
 \label{fig:flujo-delta}
 \end{figure}
 
-\subsection{Tres razones por las que dos fechas pueden diferir}
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_cambio_sar_mapa_delta.png}
+  \caption{Visualización del mapa de cambio $\Delta\gz_{\mathrm{dB}}$ en la interfaz web de TerraPulse AI
+  (modo \textbf{Cambio $\Delta$}) sobre una ROI en Chiapas. La paleta divergente azul--blanco--rojo
+  ($-6\,\unit{dB}$ a $+6\,\unit{dB}$) muestra espacialmente las zonas donde la retrodispersión disminuyó (azul),
+  permaneció estable (blanco) o aumentó (rojo) entre $t_1$ y $t_2$.}
+  \label{fig:cambio-sar-mapa-web}
+\end{figure}
+
+\subsection{Tres razones por las que dos fechas pueden diferir y el efecto del moteado}
 
 \begin{description}[style=nextline]
-  \item[Cambio real de la superficie.] Cambió la humedad del suelo, la presencia de agua, la estructura de
-        la vegetación o el uso del suelo. Es lo que se busca.
-  \item[Diferencia de adquisición o procesamiento.] Distinta trayectoria, marco, dirección de mirada,
-        polarización, versión de procesamiento o madurez del producto. El control de comparabilidad existe
-        para eliminar esta fuente.
-  \item[Variabilidad estadística.] El moteado de cada fecha es independiente, así que aun sin cambio real el
-        $\Delta\sigma^0$ tiene una dispersión.
+  \item[Cambio físico real de la superficie.] Variación en la humedad dieléctrica del suelo, inundación o
+        desecación de cuerpos de agua, alteración de la estructura del dosel vegetal, labranza agrícola o
+        cambios de cobertura. Es la señal de interés.
+  \item[Diferencia de adquisición o procesamiento.] Distinta geometría de mirada, trayectoria, marco, versión de
+        procesador (\texttt{CRID}) o nivel de madurez. El filtro estricto de \src{pipeline/compat.py} elimina
+        esta fuente de error por diseño.
+  \item[Variabilidad estadística residual (\emph{speckle}).] El moteado residual tras el Multilook es
+        estadísticamente independiente entre $t_1$ y $t_2$, por lo que genera una distribución de diferencias
+        no nula incluso sobre terreno completamente invariante.
 \end{description}
 
-\subsection{La dispersión que introduce el moteado}
-
-Si en cada fecha el valor en dB tiene desviación estándar $\sigma_L$ por moteado (ecuación~\eqref{eq:db-gamma}),
-y las dos fechas son independientes, la desviación de la diferencia es
+Si en cada fecha el nivel en decibeles tiene una desviación estándar por moteado igual a $\sigma_L$
+(ecuación~\eqref{eq:db-gamma}) y ambas adquisiciones son independientes, la desviación estándar teórica de la
+diferencia $\Delta\gz_{\mathrm{dB}}$ en ausencia de cambio real es:
 \begin{equation}
   \sigma_{\Delta} = \sqrt{2}\,\sigma_L .
   \label{eq:sigma-delta}
 \end{equation}
-Con $L=1$ resulta $\approx7.9$\,dB, con $L=4$ unos $3.3$\,dB y con $L=16$ cerca de $1.6$\,dB
-(figura~\ref{fig:delta_distribucion}). Así, un píxel aislado que cambia $+3$\,dB entre dos fechas
-\emph{no} permite afirmar nada: está dentro del ruido esperado aun sin cambio.
+Con $L=1$ resulta $\sigma_{\Delta} \approx 7.9\,\unit{dB}$, con $L=4$ unos $3.3\,\unit{dB}$ y con $L=16$ cerca de
+$1.6\,\unit{dB}$ (figura~\ref{fig:delta_distribucion}). Así, un píxel aislado sin promediar que cambia $+3\,\unit{dB}$
+entre dos fechas \emph{no} permite afirmar nada: está dentro de la fluctuación aleatoria esperada.
 
-\figura{delta_distribucion}{0.78}{Distribución de $\Delta\sigma^0_{dB}$ cuando \emph{no} hay cambio real,
-solo moteado independiente en cada fecha, para $L=1,4,16$ looks. Simulación de 400\,000 pares.}
+\figura{delta_distribucion}{0.78}{Distribución teórica de $\Delta\sigma^0_{\mathrm{dB}}$ cuando \emph{no} hay cambio
+real en el terreno, solo moteado independiente en cada fecha, para $L=1,4,16$ looks equivalentes. Simulación de
+400\,000 pares.}
 
-La manera de recuperar sensibilidad es agregar. Si se promedian $N$ píxeles independientes de una región
-homogénea, la dispersión baja aproximadamente como $1/\sqrt{N}$:
+Al aplicar el filtro Multilook sobre una región o bloque con $N_{\mathrm{ind}}$ muestras independientes, la
+dispersión de la diferencia disminuye en proporción a $1/\sqrt{N_{\mathrm{ind}}}$:
 \begin{equation}
-  \sigma_{\Delta,\mathrm{región}} \approx \frac{\sqrt2\,\sigma_L}{\sqrt{N_{\mathrm{ind}}}} .
+  \sigma_{\Delta,\mathrm{regi\acute{o}n}} \approx \frac{\sqrt{2}\,\sigma_L}{\sqrt{N_{\mathrm{ind}}}} .
   \label{eq:sigma-region}
 \end{equation}
-Con $L=4$ y $N_{\mathrm{ind}}=100$ píxeles independientes, la dispersión baja de 3.3 a 0.33\,dB. La palabra
-\emph{independientes} es crucial: píxeles vecinos suelen estar correlacionados, y entonces $N_{\mathrm{ind}}$
-es menor que el número de píxeles.
+Debido a que los píxeles vecinos de un producto GCOV geocodificado a $10\,\unit{m}$ presentan correlación
+espacial, el número efectivo de muestras independientes $N_{\mathrm{ind}}$ dentro de una ventana de $n\times n$
+es menor que $n^2$. Por ello, en lugar de asumir una fórmula teórica ideal, TerraPulse AI \textbf{mide
+empíricamente} el piso de ruido directamente sobre la distribución de $\Delta\gz_{\mathrm{dB}}$ de cada ROI
+mediante estadística robusta.
 
-\subsection{La anomalía estandarizada}
+\subsection{Anomalía estandarizada: puntaje $z$ robusto con MAD}
+\label{subsec:cambio-zscore-mad}
 
-La anomalía $z$ (planeada, no implementada) responde a una pregunta distinta: no «¿cuánto cambió este píxel?»
-sino «¿cuánto cambió respecto a lo que cambia normalmente?». Restar $\mu$ elimina un cambio promedio que afecta
-a toda la región (por ejemplo, una diferencia sistemática de calibración o una humedad general), y dividir por
-$s$ expresa el resto en unidades de dispersión típica. Un valor $z=3$ indica un píxel que se aleja tres
-desviaciones de la referencia. Lo que sea «grande» debe fijarse \emph{antes} de mirar el resultado y registrarse
-junto con $\mu$ y $s$; de lo contrario el umbral se ajusta inconscientemente a lo que se quiere ver.
+Para cuantificar qué tan inusual es el cambio de cada celda respecto al comportamiento de fondo de su propia
+región de interés, \src{pipeline/change.py} (\texttt{robust\_zscore}) implementa el puntaje $z$ robusto basado
+en la mediana y la \textbf{Desviación Absoluta Mediana (MAD)}.
+
+Sea $\Omega$ el conjunto de todas las celdas válidas (finitas) del mapa de diferencia $\Delta(I,J) \equiv
+\Delta\gz_{\mathrm{dB}}(I,J)$ dentro de la ROI. Primero se calcula la mediana espacial del cambio:
+\begin{equation}
+  m_{\Delta} = \operatorname{mediana}_{(I,J)\in\Omega}\!\bigl(\Delta(I,J)\bigr).
+  \label{eq:cambio-mediana}
+\end{equation}
+A continuación, se obtiene la desviación absoluta mediana respecto a $m_{\Delta}$ y se escala por el factor de
+consistencia gaussiana $k = 1 / \Phi^{-1}(0.75) \approx 1.4826$ (\texttt{MAD\_TO\_SIGMA = 1.4826}):
+\begin{equation}
+  \mathrm{MAD} = \operatorname{mediana}_{(I,J)\in\Omega}\!\Bigl(\bigl|\Delta(I,J) - m_{\Delta}\bigr|\Bigr),
+  \qquad
+  \sigma_{\mathrm{MAD}} = 1.4826 \cdot \mathrm{MAD}.
+  \label{eq:cambio-mad-sigma}
+\end{equation}
+Con este estimador robusto de escala $\sigma_{\mathrm{MAD}}$ (almacenado en los manifiestos como
+\texttt{mad\_robusto\_dB} y \texttt{ruido\_dB}), la anomalía estandarizada o puntaje $z$ robusto de cada celda
+se define como:
+\begin{equation}
+  z_{\mathrm{rob}}(I,J) = \frac{\Delta\gz_{\mathrm{dB}}(I,J) - m_{\Delta}}{1.4826\,\mathrm{MAD}}
+  = \frac{\Delta\gz_{\mathrm{dB}}(I,J) - m_{\Delta}}{\sigma_{\mathrm{MAD}}}.
+  \label{eq:cambio-z-robusto}
+\end{equation}
+En el caso degenerado en que todos los píxeles válidos sean idénticos ($\sigma_{\mathrm{MAD}} = 0$), la función
+asigna $z_{\mathrm{rob}}(I,J) = 0$ a todas las celdas válidas para evitar división por cero. El resultado se
+exporta como un GeoTIFF en punto flotante de 32 bits (\path{zscore_<pol>.tif}) y se resume mediante el
+porcentaje de área de la ROI que supera tres desviaciones robustas ($|z_{\mathrm{rob}}| > 3$, campo
+\texttt{pct\_abs\_z\_mayor\_3}).
+
+\begin{intuicion}
+\textbf{¿Por qué usar la mediana y la MAD ($1.4826\,\mathrm{MAD}$) en lugar de la media $\mu$ y la desviación
+estándar clásica $s$?}
+Si una inundación o quema agrícola altera fuertemente el $5\,\text{\%}$ de los píxeles de una ROI con saltos de
+$+8\,\unit{dB}$ o $-10\,\unit{dB}$, esos mismos píxeles contaminan la media aritmética $\mu$ e inflan
+artificialmente la desviación estándar clásica $s$, enmascarando el fenómeno (un efecto conocido como
+\emph{auto-enmascaramiento por valores atípicos}). En cambio, la mediana y la MAD tienen un punto de ruptura
+del $50\,\text{\%}$: ignoran las colas extremas donde ocurrió el cambio real y miden exclusivamente la dispersión de
+fondo de la mayoría de los píxeles estables de la ROI. El factor $1.4826$ garantiza que, si el ruido de fondo
+sigue una distribución normal $\mathcal{N}(\mu, \sigma^2)$, entonces $\sigma_{\mathrm{MAD}}$ converge exactamente
+a la desviación estándar verdadera $\sigma$.
+\end{intuicion}
+
+\subsection{Regla de clasificación por umbral y alerta automática de piso de ruido}
+\label{subsec:cambio-clasificacion-ruido}
+
+Dado un umbral de detección $\tau_{\mathrm{dB}} > 0$ fijado en decibeles (por defecto $\tau_{\mathrm{dB}} =
+3.0\,\unit{dB}$, ajustable en la web en el conjunto $\{1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0\}\,\unit{dB}$), la
+función \texttt{classify} de \src{pipeline/change.py} particiona la malla en tres clases discretas codificadas
+en un GeoTIFF entero de 8 bits con signo (\path{cambio_<pol>.tif}, con $\text{NoData} = -128$):
+\begin{equation}
+  C(I,J) =
+  \begin{cases}
+    -1, & \text{si } \Delta\gz_{\mathrm{dB}}(I,J) \le -\tau_{\mathrm{dB}} \quad\text{(disminución $\ge \tau_{\mathrm{dB}}$)}, \\[4pt]
+    \phantom{-}0, & \text{si } \bigl|\Delta\gz_{\mathrm{dB}}(I,J)\bigr| < \tau_{\mathrm{dB}} \quad\text{(estable dentro del umbral)}, \\[4pt]
+    +1, & \text{si } \Delta\gz_{\mathrm{dB}}(I,J) \ge +\tau_{\mathrm{dB}} \quad\text{(aumento $\ge \tau_{\mathrm{dB}}$)}, \\[4pt]
+    -128, & \text{si } \Delta\gz_{\mathrm{dB}}(I,J) \text{ es } \mathrm{NaN} \quad\text{(sin dato / fuera de ROI)}.
+  \end{cases}
+  \label{eq:cambio-clases}
+\end{equation}
+
+Sobre las celdas válidas $\Omega$, el sistema contabiliza el área física y el porcentaje de cada clase:
+\begin{equation}
+  A_{c} = N_{c} \cdot A_{\mathrm{p\acute{\imath}xel}}, \qquad
+  P_{c} = 100 \cdot \frac{N_{c}}{|\Omega|}, \qquad
+  N_{c} = \bigl|\{(I,J)\in\Omega : C(I,J) = c\}\bigr|, \quad c \in \{-1, 0, +1\}.
+  \label{eq:cambio-areas}
+\end{equation}
+
+\paragraph{Diseño de umbral fijo en dB con verificación contra el ruido de la ROI.}
+Mantener el umbral $\tau_{\mathrm{dB}}$ en decibeles fijos (en lugar de clasificar directamente por
+$|z_{\mathrm{rob}}| > 3$) tiene una ventaja científica decisiva: un cambio de $\pm 3\,\unit{dB}$ significa
+exactamente lo mismo en potencia física (doble o mitad de energía retrodispersada) en cualquier región y fecha,
+lo que permite comparar áreas en $\unit{km^2}$ entre distintas ROIs. Sin embargo, un umbral fijo de, por
+ejemplo, $3\,\unit{dB}$ puede ser perfectamente seguro en una ROI con Multilook $5\times 5$ y resultar demasiado
+bajo en una ROI ruidosa con Multilook $2\times 2$.
+
+Para resolver esto sin sacrificar la comparabilidad en decibeles, \src{pipeline/change.py} evalúa en cada
+ejecución la razón señal-umbral respecto al ruido empírico $\sigma_{\mathrm{MAD}}$ de la propia ROI
+(\texttt{NOISE\_FACTOR = 3.0}):
+\begin{equation}
+  R_{\tau/\text{ruido}} = \frac{\tau_{\mathrm{dB}}}{\sigma_{\mathrm{MAD}}},
+  \qquad
+  \text{Alerta de ruido} =
+  \begin{cases}
+    \texttt{True}, & \text{si } \tau_{\mathrm{dB}} < 3\,\sigma_{\mathrm{MAD}} \iff R_{\tau/\text{ruido}} < 3.0, \\
+    \texttt{False}, & \text{si } \tau_{\mathrm{dB}} \ge 3\,\sigma_{\mathrm{MAD}} \iff R_{\tau/\text{ruido}} \ge 3.0.
+  \end{cases}
+  \label{eq:cambio-regla-aviso-ruido}
+\end{equation}
+Cuando se activa $\tau_{\mathrm{dB}} < 3\,\sigma_{\mathrm{MAD}}$ (\texttt{umbral\_cerca\_del\_ruido = true}),
+el backend inyecta automáticamente una advertencia trazable en \path{change.json} y el componente
+\src{web/src/components/ChangeControls.tsx} despliega un aviso preventivo en la interfaz indicando que el umbral
+seleccionado es inferior a $3\times$ el ruido medido de la ROI y que una fracción significativa del área contada
+puede deberse a \emph{speckle} (recomendando subir la resolución a $50$ o $100\,\unit{m}$ o incrementar
+$\tau_{\mathrm{dB}}$).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{fig/IMG_cambio_sar_controles_histograma.png}
+  \caption{Panel lateral de controles y métricas del mapa de cambio (\src{ChangeControls.tsx}) junto con las
+  estadísticas de la ROI. Muestra las áreas que bajan ($\downarrow$) o suben ($\uparrow$) más que el umbral
+  $\tau_{\mathrm{dB}}$, la mediana $m_{\Delta}$, los selectores de resolución Multilook ($20/50/100\,\unit{m}$) y
+  umbral ($\pm 1.5$ a $\pm 6\,\unit{dB}$), el piso de ruido medido $\sigma_{\mathrm{MAD}}$, la razón
+  $\tau_{\mathrm{dB}}/\sigma_{\mathrm{MAD}}$, el porcentaje con $|z_{\mathrm{rob}}|>3$ y el aviso automático
+  cuando $\tau_{\mathrm{dB}} < 3\,\sigma_{\mathrm{MAD}}$.}
+  \label{fig:cambio-sar-controles}
+\end{figure}
+
+\subsection{Arquitectura de recálculo dinámico por ROI (\texttt{POST /api/roi-jobs/\{id\}/change})}
+\label{subsec:cambio-api-recalculo}
+
+El cálculo de cambio opera tanto para el caso de estudio regional de Chiapas desde la terminal
+(\texttt{python -m pipeline.change}) como para cualquier ROI dibujada por el usuario en el mapa web:
+\begin{enumerate}
+  \item \textbf{Cálculo inicial al crear la ROI:} cuando \src{pipeline/roi_explore.py} termina de recortar por
+        HTTPS un par comparable de escenas GCOV, guarda la potencia lineal $\gz$ a resolución nativa ($10\,\unit{m}$)
+        en \path{layers/<granuleId>/geotiff/gamma0_<capa>.tif} e invoca \texttt{build\_change} con los
+        parámetros por defecto ($n=5 \Rightarrow 50\,\unit{m}$, $\tau_{\mathrm{dB}} = 3.0\,\unit{dB}$).
+  \item \textbf{Recálculo en caliente sin re-descarga:} cuando el usuario cambia la resolución
+        ($n \in \{2, 5, 10\}$) o el umbral ($\tau_{\mathrm{dB}} \in \{1.5, 2, 2.5, 3, 4, 5, 6\}\,\unit{dB}$)
+        en la interfaz, el frontend envía una petición \texttt{POST /api/roi-jobs/\{id\}/change} con
+        \texttt{\{"multilook": n, "umbral\_dB": u\}}. El servidor ejecuta \texttt{recompute\_change} leyendo
+        directamente los GeoTIFF de potencia lineal locales, completando el nuevo Multilook, $\Delta\gz_{\mathrm{dB}}$,
+        $z_{\mathrm{rob}}$, clasificación y PNG en \textbf{0.1 a 1.5 segundos} sin contactar de nuevo a ASF.
+  \item \textbf{Caché transaccional en disco:} cada combinación se almacena en
+        \path{layers/cambio/ml<n>_u<umbral>/} protegida por un directorio cerrojo (\path{<combo>.lock}, con
+        expiración de 5 minutos ante fallos) para evitar condiciones de carrera. El sistema conserva siempre la
+        combinación por defecto (\texttt{ml5\_u3}) y las 4 combinaciones más recientes (\texttt{CHANGE\_CACHE\_KEEP = 4}).
+\end{enumerate}
+
+\begin{ejemplo}[Resultados reales en Chiapas y demostración del filtro de ruido en Tuxtla Gutiérrez]
+El pipeline se verificó en dos escalas espaciales reales con productos NISAR GCOV de la trayectoria~62,
+marco~10, órbita ascendente (\texttt{DHDH}, polarizaciones HH y HV):
+
+\medskip
+\noindent\textbf{1. Caso de estudio regional en Chiapas (\texttt{P05023 PROVISIONAL}, 2026-06-18 $\to$ 2026-10-16, 120 días):}
+Sobre un área válida de $1\,469.2\,\unit{km^2}$ procesada con Multilook $5\times 5$ ($50\,\unit{m}$) y umbral
+$\tau_{\mathrm{dB}} = \pm 3.0\,\unit{dB}$:
+\begin{itemize}
+  \item \textbf{Polarización HH:} mediana $m_{\Delta} = +0.21\,\unit{dB}$, ruido robusto $\sigma_{\mathrm{MAD}} = 0.91\,\unit{dB}$
+        ($R_{\tau/\text{ruido}} = 3.3 \ge 3.0$, sin aviso de ruido). El área que disminuye ($\le -3\,\unit{dB}$) es
+        $6.73\,\unit{km^2}$ ($0.46\,\text{\%}$), mientras que el área que aumenta ($\ge +3\,\unit{dB}$) alcanza
+        $27.34\,\unit{km^2}$ ($1.86\,\text{\%}$), con $97.68\,\text{\%}$ estable y $2.71\,\text{\%}$ con $|z_{\mathrm{rob}}| > 3$.
+  \item \textbf{Polarización HV:} mediana $m_{\Delta} = +0.24\,\unit{dB}$, ruido $\sigma_{\mathrm{MAD}} = 0.91\,\unit{dB}$
+        ($R_{\tau/\text{ruido}} = 3.3$). Disminuye en $3.33\,\unit{km^2}$ ($0.23\,\text{\%}$) y aumenta en
+        $32.83\,\unit{km^2}$ ($2.24\,\text{\%}$). La marcada asimetría a favor de incrementos de retrodispersión
+        (4 veces más área que sube en HH y 10 veces en HV) demuestra que la variación observada no proviene del
+        moteado aleatorio (que es simétrico), aunque identificar cuánto corresponde a crecimiento foliar o humedad
+        estacional requiere contraste con fuentes auxiliares.
+\end{itemize}
+
+\noindent\textbf{2. ROI de $9.3\,\unit{km^2}$ cerca de Tuxtla Gutiérrez (\texttt{P05036 VALIDATED}, 2026-10-28 $\to$ 2026-11-09, 12 días, HH):}
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Resolución (Multilook)} & \textbf{Ruido $\sigma_{\mathrm{MAD}}$} & \textbf{Razón $\tau_{\mathrm{dB}}/\sigma_{\mathrm{MAD}}$} & \textbf{Baja / Sube ($\ge 3\,\unit{dB}$)} & \textbf{Alerta ($\tau_{\mathrm{dB}} < 3\sigma_{\mathrm{MAD}}$)} \\
+\midrule
+$20\,\unit{m}$ ($2\times 2$)   & $1.53\,\unit{dB}$ & $2.0\times$ & $2.96\,\text{\%} \;/\; 2.88\,\text{\%}$ & \textbf{Sí (activa aviso)} \\
+$50\,\unit{m}$ ($5\times 5$)   & $0.70\,\unit{dB}$ & $4.3\times$ & $0.00\,\text{\%} \;/\; 0.03\,\text{\%}$ & No (confiable) \\
+$100\,\unit{m}$ ($10\times 10$) & $0.39\,\unit{dB}$ & $7.7\times$ & $0.00\,\text{\%} \;/\; 0.00\,\text{\%}$ & No (confiable) \\
+\bottomrule
+\end{tabular}
+\end{center}
+A $20\,\unit{m}$ de resolución en un intervalo corto de 12 días sin eventos extremos, casi el $3\,\text{\%}$ de la ROI
+se marca falsamente en cada dirección con una simetría casi perfecta ($2.96\,\text{\%}$ baja vs.\ $2.88\,\text{\%}$ sube): es
+la huella clásica del \emph{speckle}, detectada automáticamente por la condición $R_{\tau/\text{ruido}} = 2.0 < 3.0$.
+Al pasar al valor por defecto de $50\,\unit{m}$ ($5\times 5$), el ruido cae a la mitad ($0.70\,\unit{dB}$), la
+razón sube a $4.3\times$ y las falsas alarmas desaparecen ($0.00\,\text{\%} / 0.03\,\text{\%}$).
+\end{ejemplo}
 
 \begin{atencion}
-Un $\Delta\sigma^0$ alto no es una detección de inundación, de deforestación ni de ningún otro fenómeno. Es
-una diferencia de respuesta radar que, junto con contexto y datos independientes, \emph{puede} apoyar una
-hipótesis. La advertencia final de esta sección no es una fórmula de cortesía: es la frontera entre medir e
-interpretar.
+Un valor elevado de $\Delta\gz_{\mathrm{dB}}$ o de $|z_{\mathrm{rob}}|$ \textbf{no es una detección directa de
+inundación, deforestación ni daño estructural}. Es una medición cuantitativa y trazable de cambio en la
+respuesta electromagnética del radar en banda~L que, combinada con la máscara geométrica del terreno y fuentes
+independientes de validación (precipitación GPM IMERG, ópticos HLS/Sentinel-2 o productos OPERA), \emph{puede}
+sustentar una hipótesis física. Mantener explícita esta frontera entre observación radiométrica e inferencia
+causal es un principio no negociable de TerraPulse AI.
 \end{atencion}
 
 \section{Modelos de dispersión (para interpretar, no para medir)}
@@ -4725,7 +4986,7 @@ plano base de la ROI es
 \end{equation}
 Para que la maqueta luzca como un corte topográfico limpio y nunca como un cubo desproporcionado, las cuatro
 paredes perimetrales y la tapa inferior (en tonos gris pizarra \texttt{\#334155} y \texttt{\#1e293b}) descienden
-hasta una profundidad fija e independiente de $E_v$ igual al $3.5\,\%$ del lado horizontal mayor:
+hasta una profundidad fija e independiente de $E_v$ igual al $3.5\,\text{\%}$ del lado horizontal mayor:
 \begin{equation}
   Z_{\mathrm{base}} = -0.035\,\max(W, H).
   \label{eq:zocalo-fijo}
@@ -4995,5 +5256,1516 @@ La suite automatizada \src{web/tests/terrain3d.test.mjs} verifica de forma aisla
 $+256\,\unit{m}$ mediante \eqref{eq:despike} sin alterar pendientes reales, la clasificación geométrica SAR
 \eqref{eq:clasificacion-sar} en terreno plano y acantilados para ambas órbitas, la traducción bilingüe ES/EN y la
 presencia de las llamadas de limpieza WebGL.
+
+\clearpage
+\part{Simulador sísmico, atenuación GMPE, ondas P/S y procesamiento de señales}
+\label{part:sismo}
+
+Esta parte documenta el motor físico-matemático y de procesamiento digital de señales del módulo de simulación
+sísmica de TerraPulse AI (\src{web/src/utils/seismic.ts}, \src{web/src/utils/signal.ts},
+\src{web/src/utils/accelerogram.ts} y componentes asociados en \src{web/src/components/}). El módulo permite
+plantear escenarios sísmicos en el régimen tectónico de México, evaluar la atenuación de la aceleración pico del
+terreno ($\mathrm{PGA}$) con leyes regionales publicadas, proyectar anillos geodésicos de intensidad Mercalli
+Modificada ($\mathrm{MMI}$) y frentes de onda $P$ y $S$ en 2D sobre MapLibre GL, sintetizar el acelerograma
+$a(t)$ a $50\,\unit{Hz}$ para cualquier estación receptora y analizar su contenido energético y espectral
+mediante la intensidad de Arias ($I_A$), la duración significativa ($D_{5\text{--}95}$), la Transformada Rápida
+de Fourier (FFT) y el espectrograma de tiempo corto (STFT).
+
+\begin{atencion}
+Al igual que los simuladores hidráulico y solar, el módulo sísmico pertenece estrictamente al tercer nivel de la
+tabla~\ref{tab:niveles} (\emph{predicción / escenario exploratorio}). No procesa interferometría SAR (productos
+GUNW) ni sustituye a las redes instrumentales (SSN, SASMEX, RACM) o a un estudio probabilístico de peligro
+sísmico. Las cifras producidas para escenarios históricos representan la respuesta mediana del modelo analítico
+bajo los supuestos declarados, nunca mediciones observadas.
+\end{atencion}
+
+\section{Arquitectura del módulo y cadena de cálculo}
+\label{sec:sismo-arquitectura}
+
+El motor se ejecuta por completo en el navegador sin latencia de servidor, manteniendo un estado propio por cada
+mapa de trabajo (\texttt{SeismicSimulationState} en \src{web/src/types/workspace.ts} y
+\src{web/src/utils/seismicScenario.ts}). La figura~\ref{fig:flujo-sismo} resume la secuencia de seis etapas
+desde la definición de la fuente hasta el análisis espectral.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[node distance=4mm,
+  caja/.style={draw,rounded corners,fill=blue!6,align=center,text width=2.25cm,minimum height=1.35cm,font=\small},
+  sal/.style={caja,fill=orange!10},
+  fl/.style={-{Stealth},thick}]
+\node[caja] (a) {Fuente sísmica\\$(\lambda_e,\varphi_e), M_w, h$};
+\node[caja,right=of a] (b) {Geodesia y foco\\$D, R, M_0$};
+\node[caja,right=of b] (c) {GMPE + Sitio\\$\mathrm{PGA}(R,V_{s30})$};
+\node[caja,right=of c] (d) {Isosistas MMI\\y frentes $P/S$};
+\node[sal,right=of d] (e) {Señal $a(t)$ 50\,Hz\\FFT, STFT, $D_{5\text{--}95}$};
+\draw[fl] (a)--(b); \draw[fl] (b)--(c); \draw[fl] (c)--(d); \draw[fl] (d)--(e);
+\end{tikzpicture}
+\caption{Cadena de cálculo del simulador sísmico en cliente (\src{web/src/utils/seismic.ts} y
+\src{web/src/utils/signal.ts}).}
+\label{fig:flujo-sismo}
+\end{figure}
+
+\section{Sismología de la fuente y leyes de atenuación (GMPE)}
+\label{sec:sismo-gmpe}
+
+\subsection{Momento sísmico escalar \texorpdfstring{$M_0$}{M0} y magnitud de momento \texorpdfstring{$M_w$}{Mw}}
+\label{sec:sismo-momento}
+
+La energía física liberada por una ruptura geológica se cuantifica mediante el momento sísmico escalar
+$M_0 = \mu A \bar u$, donde $\mu$ es el módulo de rigidez al corte de la roca, $A$ el área de ruptura sobre el
+plano de falla y $\bar u$ el desplazamiento promedio. La relación estándar de Hanks y Kanamori (1979) vincula la
+magnitud de momento adimensional $M_w$ con $M_0$ (expresado en $\unit{dyn\cdot cm}$, con
+$1\,\unit{dyn\cdot cm} = 10^{-7}\,\unit{N\cdot m}$):
+\begin{equation}
+  M_w = \frac{2}{3}\log_{10} M_0 - 10.7
+  \quad\Longleftrightarrow\quad
+  M_0 = 10^{\frac{3}{2}(M_w + 10.7)}\quad[\unit{dyn\cdot cm}].
+  \label{eq:momento-sismico}
+\end{equation}
+Debido al factor $3/2$ en el exponente, un incremento de $+1.0$ en $M_w$ multiplica el momento sísmico por
+$10^{1.5}\approx 31.62$, y un incremento de $+2.0$ unidades lo multiplica exactamente por $1\,000$
+(implementado en \texttt{seismicMomentDynCm}).
+
+\subsection{Distancia epicentral ortodrómica \texorpdfstring{$D$}{D} y distancia hipocentral \texorpdfstring{$R$}{R}}
+\label{sec:sismo-distancias}
+
+Dado el epicentro $(\lambda_e,\varphi_e)$ y una estación o punto receptor $(\lambda,\varphi)$ en coordenadas
+geográficas, la distancia epicentral superficial $D$ sobre la esfera terrestre de radio medio
+$R_T = 6\,371\,\unit{km}$ se calcula con la fórmula del semiverseno (\emph{haversine}, función
+\texttt{haversineDistanceKm}):
+\begin{equation}
+  D = 2\,R_T\arcsin\sqrt{
+    \sin^2\!\left(\frac{\varphi - \varphi_e}{2}\right)
+    + \cos\varphi_e\cos\varphi\,\sin^2\!\left(\frac{\lambda - \lambda_e}{2}\right)
+  }\quad[\unit{km}].
+  \label{eq:sismo-haversine}
+\end{equation}
+Si la ruptura se origina a una profundidad focal $h$ (en $\unit{km}$), la distancia hipocentral tridimensional
+$R$ desde el foco puntual hasta la estación en superficie es:
+\begin{equation}
+  R = \sqrt{D^2 + h^2}\quad[\unit{km}].
+  \label{eq:sismo-hipocentral}
+\end{equation}
+
+\subsection{Ecuaciones de predicción del movimiento del suelo (GMPE) para México}
+\label{sec:sismo-modelos-gmpe}
+
+Una ley de atenuación o GMPE (\emph{Ground Motion Prediction Equation}) estima la mediana de la aceleración pico
+del suelo ($\mathrm{PGA}$) en función de la magnitud $M_w$, la distancia a la fuente $R$, la profundidad focal
+$h$ y el mecanismo tectónico. En \src{web/src/utils/seismic.ts} (\texttt{computePga\_g}), la aceleración en un
+sitio con velocidad de onda de corte superficial $V_{s30}$ se descompone en la predicción sobre roca firme de
+referencia más un término amplificador de sitio $S_{\mathrm{sitio}}(V_{s30})$:
+\begin{equation}
+  \ln\mathrm{PGA}_{\mathrm{sitio}}(M_w,R,h,V_{s30})
+  = \ln\mathrm{PGA}_{\mathrm{roca}}(M_w,R,h) + S_{\mathrm{sitio}}(V_{s30}),
+  \label{eq:gmpe-general}
+\end{equation}
+con conversión entre aceleración normalizada por la gravedad estándar ($g_0 = 980.665\,\unit{cm/s^2}$) y
+unidades CGS ($\unit{gal} = \unit{cm/s^2}$):
+\begin{equation}
+  \mathrm{PGA}_{g} = \frac{\mathrm{PGA}_{\mathrm{cgs}}}{980.665\,\unit{cm/s^2}}.
+\end{equation}
+El simulador distingue los tres regímenes sismogénicos principales de México:
+
+\subsubsection*{1. Subducción interplaca costera: modelo de Arroyo et al.\ (2010)}
+Para sismos de cabalgamiento interplaca a lo largo de la Trinchera Mesoamericana (contacto entre la placa de
+Cocos y la placa Norteamericana, desde Jalisco/Colima hasta Chiapas), se implementa la ecuación~8a de Arroyo
+et al.\ (2010) con los coeficientes de la fila $\mathrm{PGA}$ de su tabla~2 para sitios en roca (clase NEHRP B,
+función \texttt{pgaRockArroyo2010\_cgs}):
+\begin{equation}
+  \ln\mathrm{PGA}_{\mathrm{roca,cgs}}
+  = \alpha_1 + \alpha_2 M_w + \alpha_3\ln\!\left[
+    \frac{E_1(\alpha_4 R) - E_1\!\left(\alpha_4\sqrt{R^2 + r_0^2}\right)}{r_0^2}
+  \right],
+  \qquad
+  r_0^2 = 1.4447\times 10^{-5}\,e^{2.3026\,M_w},
+  \label{eq:gmpe-arroyo}
+\end{equation}
+donde $\mathrm{PGA}_{\mathrm{roca,cgs}}$ está en $\unit{cm/s^2}$, los coeficientes calibrados con registros
+mexicanos de antearco son
+\[
+  \alpha_1 = 2.4862,\qquad
+  \alpha_2 = 0.9392,\qquad
+  \alpha_3 = 0.5061,\qquad
+  \alpha_4 = 0.0150\,\unit{km^{-1}},
+\]
+con desviación estándar logarítmica publicada $\sigma_{\ln\mathrm{PGA}} = 0.75$, y $E_1(x)$ es la integral
+exponencial de primer orden:
+\begin{equation}
+  E_1(x) = \int_x^\infty \frac{e^{-u}}{u}\,\dd u, \qquad x > 0.
+  \label{eq:integral-exponencial}
+\end{equation}
+En \texttt{exponentialIntegralE1}, $E_1(x)$ se evalúa con precisión de doble flotante mediante su desarrollo en
+serie de potencias para $x\le 1$ ($E_1(x) = -\gamma_E - \ln x - \sum_{k=1}^\infty (-x)^k/(k\cdot k!)$) y
+mediante el algoritmo de fracción continua de Lentz para $x>1$ (Abramowitz y Stegun, 1972). Físicamente, el
+cociente con $E_1$ integra la radiación de una fuente circular finita de radio equivalente $r_0(M_w)$, lo que
+produce de forma natural la \emph{saturación de campo cercano} sin que la aceleración diverja cuando $R$ es
+pequeño.
+
+\subsubsection*{2. Intraplaca de profundidad intermedia: modelo de García et al.\ (2005)}
+Para sismos de falla normal dentro de la placa de Cocos subducida (\emph{inslab}, profundidades típicas de $35$
+a $138\,\unit{km}$ bajo Puebla, Morelos, Oaxaca, Guerrero y Chiapas), se implementa la ecuación~2 de García et
+al.\ (2005) para la componente horizontal de $\mathrm{PGA}$ en roca (tabla~2 del artículo, función
+\texttt{pgaRockGarcia2005\_cgs}):
+\begin{equation}
+  \log_{10}\mathrm{PGA}_{\mathrm{roca,cgs}}
+  = -0.2 + 0.59\,M_w - 0.0039\,R' - \log_{10} R' + 0.008\,h,
+  \label{eq:gmpe-garcia}
+\end{equation}
+donde $h$ es la profundidad focal en $\unit{km}$ y $R'$ incorpora el término de saturación de campo cercano
+$\Delta(M_w)$ de Atkinson y Boore (2003):
+\begin{equation}
+  R' = \sqrt{R^2 + \Delta^2},
+  \qquad
+  \Delta = 0.00750\times 10^{0.507\,M_w}\quad[\unit{km}].
+  \label{eq:saturacion-garcia}
+\end{equation}
+La desviación estándar publicada del modelo en base 10 es $\sigma_{\log_{10}\mathrm{PGA}} = 0.28$, que en
+logaritmo natural equivale a $\sigma_{\ln\mathrm{PGA}} = 0.28\ln 10 \approx 0.645$. El término $+0.008\,h$
+refleja una propiedad física bien documentada de los sismos intraplaca mexicanos: a igual magnitud y distancia,
+las rupturas más profundas presentan mayores caídas de esfuerzos (\emph{stress drop}) y generan aceleraciones
+de alta frecuencia más intensas que los sismos interplaca someros.
+
+\subsubsection*{3. Cortical somero: formulación genérica con saturación de campo cercano}
+Para fallas corticales superficiales o transformantes (como el sistema San Andrés--Laguna Salada en Baja
+California o fallas de la Faja Volcánica), se emplea el modelo paramétrico regional con término de saturación
+efectiva $h_{\mathrm{sat}}(M_w)$ de Yenier y Atkinson (2015) (\texttt{MANUAL\_CRUSTAL\_COEFFICIENTS} y
+\texttt{nearSourceSaturationKm}):
+\begin{equation}
+  \ln\mathrm{PGA}_{\mathrm{roca},g}
+  = c_1 + c_2 M_w - c_3\ln R_{\mathrm{ef}} - c_4 R_{\mathrm{ef}},
+  \qquad
+  R_{\mathrm{ef}} = \sqrt{R^2 + h_{\mathrm{sat}}^2},
+  \qquad
+  h_{\mathrm{sat}} = 10^{-0.405 + 0.235\,M_w}\quad[\unit{km}],
+  \label{eq:gmpe-cortical}
+\end{equation}
+con $c_1 = -1.95$, $c_2 = 0.88$, $c_3 = 1.05$ y $c_4 = 0.0028\,\unit{km^{-1}}$ (marcado explícitamente en la
+interfaz como modelo cortical provisional). En los tres mecanismos se aplica una salvaguarda numérica
+$\mathrm{PGA}_g \in [10^{-4},\ 2.5]\,g$.
+
+\subsection{Amplificación por efecto de sitio (\texorpdfstring{$V_{s30}$}{Vs30}) e intensidad Mercalli (MMI)}
+\label{sec:sismo-vs30-mmi}
+
+La velocidad media de las ondas de corte en los primeros $30\,\unit{m}$ del subsuelo, $V_{s30}$ (en
+$\unit{m/s}$), parametriza la impedancia sísmica del terreno. Al pasar de roca basal ($V_{\mathrm{ref}} =
+760\,\unit{m/s}$) a sedimentos más blandos ($V_{s30} < 760\,\unit{m/s}$), la conservación del flujo de energía
+elástica obliga a que la amplitud de vibración aumente. El término logarítmico de amplificación de sitio
+(\texttt{siteAmplification}) es:
+\begin{equation}
+  S_{\mathrm{sitio}}(V_{s30}) =
+  \begin{cases}
+    -0.45\,\ln\!\left(\dfrac{V_{s30}}{760\,\unit{m/s}}\right), & \text{si } V_{s30} < 760\,\unit{m/s},\\[8pt]
+    0, & \text{si } V_{s30} \ge 760\,\unit{m/s}.
+  \end{cases}
+  \label{eq:amplificacion-vs30}
+\end{equation}
+
+\begin{table}[htbp]
+\centering\small
+\begin{tabularx}{\linewidth}{p{.26\linewidth}rrrX}
+\toprule
+\textbf{Clase geotécnica} & \textbf{$V_{s30}$ [m/s]} & \textbf{$S_{\mathrm{sitio}}$} & \textbf{Factor $e^{S_{\mathrm{sitio}}}$} & \textbf{Frecuencia $f_S$ y coda $\tau_{\mathrm{coda}}$ en $a(t)$}\\\midrule
+Roca firme (\texttt{rock}) & $760$ & $0.000$ & $1.00\times$ & $f_S = 2.20\,\unit{Hz}$, $\tau_{\mathrm{coda}} = 9.0\,\unit{s}$\\
+Suelo firme / aluvial (\texttt{intermediate}) & $450$ & $0.236$ & $1.27\times$ & $f_S = 1.30\,\unit{Hz}$, $\tau_{\mathrm{coda}} = 14.0\,\unit{s}$\\
+Suelo blando lacustre (\texttt{soft\_lacustrine}) & $100$ & $0.913$ & $2.49\times$ & $f_S = 0.52\,\unit{Hz}$ ($T_0\approx 1.9\,\unit{s}$), $\tau_{\mathrm{coda}} = 28.0\,\unit{s}$\\\bottomrule
+\end{tabularx}
+\caption{Comparación de las clases de suelo por $V_{s30}$ implementadas en \src{web/src/utils/seismic.ts}
+(\texttt{SOIL\_VS30} y \texttt{siteWaveParams}). El usuario también puede introducir cualquier $V_{s30}\in[80,1500]\,\unit{m/s}$
+personalizado tanto para el escenario como para la estación receptora.}
+\label{tab:comparacion-vs30}
+\end{table}
+
+Para traducir la aceleración pico en $\unit{cm/s^2}$ a la escala macroscópica de daños de Intensidad Mercalli
+Modificada ($\mathrm{MMI}$, acotada a $[1.0, 10.5]$), \texttt{pgaToMmi} utiliza la relación bilineal continua
+de Wald et al.\ (1999):
+\begin{equation}
+  \mathrm{MMI}(\mathrm{PGA}_{\mathrm{cgs}}) =
+  \begin{cases}
+    2.20\log_{10}\bigl(\mathrm{PGA}_{\mathrm{cgs}}\bigr) + 1.00, &
+      \text{si } \mathrm{PGA}_{\mathrm{cgs}} \le \mathrm{PGA}_\times,\\[6pt]
+    3.66\log_{10}\bigl(\mathrm{PGA}_{\mathrm{cgs}}\bigr) - 1.66, &
+      \text{si } \mathrm{PGA}_{\mathrm{cgs}} > \mathrm{PGA}_\times,
+  \end{cases}
+  \qquad
+  \mathrm{PGA}_\times = 10^{2.66/1.46} \approx 66.43\,\unit{cm/s^2},
+  \label{eq:wald-mmi}
+\end{equation}
+donde $\mathrm{PGA}_\times \approx 0.0677\,g$ ($\mathrm{MMI}\approx\text{V}$) es exactamente la intersección
+analítica de ambas rectas, garantizando continuidad y monotonía estricta en toda la escala.
+
+Los cuatro anillos geodésicos de afectación sobre el mapa (zonas destructiva $\ge 0.34\,g$, daño severo
+$\ge 0.12\,g$, percepción fuerte $\ge 0.03\,g$ y percepción débil $\ge 0.005\,g$) se obtienen invirtiendo
+numéricamente la función monótona decreciente $\mathrm{PGA}(D) = \mathrm{PGA}_{\mathrm{umbral}}$ mediante
+$30$ iteraciones del método de bisección en $D\in[0,1500]\,\unit{km}$ (\texttt{solveDistanceForPga}) y
+proyectando polígonos esféricos de 64 vértices con \texttt{generateGeodesicCircle}.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_sismo_atenuacion_gmpe.png}
+  \caption{Panel y modal del simulador sísmico mostrando la curva 2D de atenuación $\mathrm{PGA}(D)$ frente a
+  la distancia epicentral, el intervalo de incertidumbre logarítmica ($16\text{--}84\,\text{\char37}$), el momento sísmico
+  $M_0$ y los avisos automáticos de dominio de validez del modelo GMPE seleccionado.}
+  \label{fig:sismo-atenuacion-gmpe}
+\end{figure}
+
+\section{Elastodinámica, tiempos de arribo y frentes de onda 2D}
+\label{sec:sismo-ondas}
+
+\subsection{Velocidades de ondas de cuerpo P y S y ventana de alerta temprana}
+\label{sec:sismo-tiempos}
+
+En un medio continuo, elástico, homogéneo e isótropo con densidad $\rho$ y constantes de Lamé $\lambda$ y $\mu$,
+la ecuación de movimiento de Navier--Cauchy admite dos soluciones desacopladas de ondas de cuerpo que viajan
+desde el hipocentro a velocidades constantes:
+\begin{equation}
+  V_p = \sqrt{\frac{\lambda + 2\mu}{\rho}} \approx 6.0\,\unit{km/s},
+  \qquad
+  V_s = \sqrt{\frac{\mu}{\rho}} \approx 3.5\,\unit{km/s}.
+  \label{eq:velocidades-ps}
+\end{equation}
+La onda primaria $P$ (compresional o longitudinal) viaja siempre más rápido que la onda secundaria $S$ (de
+cizalla o transversal, responsable junto con las ondas superficiales de las mayores aceleraciones horizontales).
+Para una estación situada a distancia hipocentral $R = \sqrt{D^2 + h^2}$, los tiempos de arribo desde el
+instante de origen del sismo ($t=0$) son:
+\begin{equation}
+  t_p = \frac{R}{V_p} = \frac{\sqrt{D^2 + h^2}}{V_p},
+  \qquad
+  t_s = \frac{R}{V_s} = \frac{\sqrt{D^2 + h^2}}{V_s}.
+  \label{eq:tiempos-arribo}
+\end{equation}
+El desfase entre ambas llegadas define la ventana temporal $P\text{--}S$:
+\begin{equation}
+  \Delta t_{ps}(D,h) = t_s - t_p = R\left(\frac{1}{V_s} - \frac{1}{V_p}\right)
+  \approx 0.1190\,\sqrt{D^2 + h^2}\quad[\unit{s}].
+  \label{eq:ventana-ps}
+\end{equation}
+Adicionalmente, el módulo reporta el tiempo de margen desde el origen con retardo fijo de procesamiento
+instrumental $t_{\mathrm{proc}} = 3.0\,\unit{s}$ (\texttt{sasmexAlertTimeSec}):
+\begin{equation}
+  T_{\mathrm{alerta}}(D,h) = \max\!\left(0,\ t_s - t_{\mathrm{proc}}\right)
+  = \max\!\left(0,\ \frac{\sqrt{D^2 + h^2}}{V_s} - 3.0\,\unit{s}\right).
+  \label{eq:tiempo-sasmex}
+\end{equation}
+
+\begin{intuicion}
+La ecuación~\eqref{eq:ventana-ps} es el reloj físico que hace posibles los sistemas de alerta sísmica: cada
+$8.4\,\unit{km}$ adicionales de distancia hipocentral ganan aproximadamente $1\,\unit{s}$ de separación entre la
+onda $P$ (que detectan primero los sensores cercanos a la costa) y la onda destructiva $S$. Como las ondas de
+radio y fibra óptica viajan a casi $300\,000\,\unit{km/s}$ frente a los $3.5\,\unit{km/s}$ de la onda $S$, una
+ciudad alejada del foco recibe el aviso decenas de segundos antes de que llegue el tren de cizalla.
+\end{intuicion}
+
+\subsection{Cinemática 2D de los frentes de onda en superficie}
+\label{sec:sismo-frentes-2d}
+
+Cuando el usuario activa \textbf{Animar ondas P y S}, el lienzo de MapLibre dibuja la intersección de los dos
+frentes esféricos tridimensionales con la superficie terrestre en función del tiempo transcurrido $t$ desde el
+inicio de la ruptura. Como el foco está enterrado a profundidad $h$, un frente esférico de radio $V\cdot t$
+no toca la superficie sino hasta el instante de emergencia epicentral $t_{\mathrm{em}} = h/V$. Para cualquier
+$t \ge 0$, el radio epicentral aparente $r_w(t)$ del frente sobre el mapa (\texttt{wavefrontSurfaceRadiusKm}) es:
+\begin{equation}
+  r_w(t;\ V, h) =
+  \begin{cases}
+    \sqrt{(V\,t)^2 - h^2}, & \text{si } V\,t > h,\\[4pt]
+    0, & \text{si } V\,t \le h,
+  \end{cases}
+  \qquad
+  V \in \{V_p,\ V_s\}.
+  \label{eq:radio-frente-superficie}
+\end{equation}
+Derivando respecto al tiempo para $V t > h$, la rapidez aparente de expansión horizontal del anillo en el mapa
+es $\dd r_w/\dd t = V^2 t / \sqrt{(Vt)^2 - h^2} > V$: cerca del epicentro el frente parece expandirse muy
+rápido al emerger verticalmente desde la profundidad $h$, y asintóticamente tiende a la velocidad verdadera $V$
+a grandes distancias ($D \gg h$).
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_sismo_propagacion_2d_mapa.png}
+  \caption{Simulación visual 2D sobre MapLibre GL mostrando los cuatro anillos geodésicos de isosisma
+  ($\mathrm{MMI}$), la propagación concéntrica en tiempo real de los frentes de onda $P$ (azul,
+  $V_p=6.0\,\unit{km/s}$) y $S$ (rojo, $V_s=3.5\,\unit{km/s}$) según la ecuación~\eqref{eq:radio-frente-superficie},
+  el epicentro interactivo y la estación receptora seleccionada en el mapa.}
+  \label{fig:sismo-propagacion-2d}
+\end{figure}
+
+\section{Síntesis y procesamiento digital de la señal sísmica}
+\label{sec:sismo-dsp}
+
+\subsection{Formulación del acelerograma sintético \texorpdfstring{$a(t)$}{a(t)} a 50\,Hz}
+\label{sec:sismo-acelerograma}
+
+Para una estación situada a distancia epicentral $D$ con parámetro geotécnico $V_{s30,\mathrm{est}}$, la función
+\texttt{synthesizeSeismogram} evalúa primero la aceleración pico local
+$A_{\max} = \mathrm{PGA}_g(D, M_w, h, V_{s30,\mathrm{est}})$ y muestrea la serie temporal en instantes discretos
+$t_n = n / f_m$ ($n=0,1,\ldots,N_{\mathrm{tot}}-1$) a una frecuencia de muestreo fija
+$f_m = 50\,\unit{Hz}$ ($\Delta t = 0.02\,\unit{s}$, frecuencia de Nyquist $f_{\mathrm{Nyq}} = 25\,\unit{Hz}$,
+muy superior a las componentes del paquete $P$). La señal total es la superposición de tres regímenes:
+\begin{equation}
+  a(t) = a_{\mathrm{fondo}}(t) + a_P(t) + a_S(t)\quad[g].
+  \label{eq:acelerograma-total}
+\end{equation}
+
+\begin{enumerate}
+  \item \textbf{Microtremor de fondo ($a_{\mathrm{fondo}}$):} vibración determinista de muy baja amplitud
+        presente en todo el registro:
+        \begin{equation}
+          a_{\mathrm{fondo}}(t) = A_{\max}\bigl[0.0012\sin(11.2\,t + 0.3) + 0.0006\cos(23.7\,t)\bigr].
+          \label{eq:sismo-fondo}
+        \end{equation}
+  \item \textbf{Paquete de onda primaria $P$ ($t_p \le t < t_s$):} con tiempo local $\tau_p = t - t_p$ y
+        frecuencia portadora $f_P = 4.5\,\unit{Hz}$, se modela como un paquete modulado con decaimiento
+        exponencial:
+        \begin{equation}
+          a_P(t) = 0.22\,A_{\max}\,\sin(2\pi f_P \tau_p)\,\cos(0.3\pi f_P \tau_p)\,
+                   \exp\!\left(-\frac{\tau_p}{3.2\,\unit{s}}\right)\,
+                   \bigl[\mathcal{H}(t - t_p) - \mathcal{H}(t - t_s)\bigr],
+          \label{eq:sismo-onda-p}
+        \end{equation}
+        donde $\mathcal{H}$ es el escalón de Heaviside. Por la identidad trigonométrica
+        $\sin\alpha\cos\beta = \tfrac12[\sin(\alpha+\beta)+\sin(\alpha-\beta)]$, el producto modulador desdobla
+        la energía espectral de la onda $P$ en dos bandas laterales situadas en
+        $0.85\,f_P = 3.825\,\unit{Hz}$ y $1.15\,f_P = 5.175\,\unit{Hz}$.
+  \item \textbf{Paquete de onda secundaria $S$ y coda superficial ($t \ge t_s$):} con tiempo local
+        $\tau_s = t - t_s$, frecuencia fundamental dependiente del suelo $f_S(V_{s30,\mathrm{est}})$ y primer
+        armónico desfasado:
+        \begin{equation}
+          a_S(t) = A_{\max}\,E_S(\tau_s)\,\Bigl[
+            0.82\sin(2\pi f_S \tau_s) + 0.18\sin(4\pi f_S \tau_s + 0.6)
+          \Bigr]\,\mathcal{H}(t - t_s),
+          \label{eq:sismo-onda-s}
+        \end{equation}
+        gobernado por la envolvente de ataque lineal y coda exponencial $E_S(\tau_s)$:
+        \begin{equation}
+          E_S(\tau_s) =
+          \begin{cases}
+            \dfrac{\tau_s}{1.8\,\unit{s}}, & \text{si } 0 \le \tau_s \le 1.8\,\unit{s},\\[8pt]
+            \exp\!\left(-\dfrac{\tau_s - 1.8\,\unit{s}}{\tau_{\mathrm{coda}}(V_{s30,\mathrm{est}})}\right), &
+              \text{si } \tau_s > 1.8\,\unit{s}.
+          \end{cases}
+          \label{eq:envolvente-s}
+        \end{equation}
+\end{enumerate}
+Como muestra la tabla~\ref{tab:comparacion-vs30}, en una cuenca lacustre blanda ($V_{s30} < 180\,\unit{m/s}$,
+como las arcillas del ex-lago de Texcoco en la Ciudad de México), la frecuencia fundamental baja a
+$f_S = 0.52\,\unit{Hz}$ (período $T_0 \approx 1.92\,\unit{s}$) y la constante de decaimiento se alarga a
+$\tau_{\mathrm{coda}} = 28\,\unit{s}$, reproduciendo el fenómeno de cuasi-resonancia armónica prolongada.
+
+\subsection{Intensidad de Arias (\texorpdfstring{$I_A$}{IA}) y duración significativa \texorpdfstring{$D_{5\text{--}95}$}{D5-95}}
+\label{sec:sismo-arias}
+
+La amplitud máxima $\mathrm{PGA}$ mide un solo instante del sismograma, pero el potencial destructivo acumulado
+depende también de cuánto tiempo permanece vibrando el suelo. La \textbf{intensidad de Arias} $I_A$ (Arias, 1970)
+se define como la energía total por unidad de peso disipada por un banco de osciladores lineales sin
+amortiguamiento a lo largo de toda la duración $T_{\mathrm{tot}}$ del movimiento:
+\begin{equation}
+  I_A = \frac{\pi}{2\,g_0}\int_0^{T_{\mathrm{tot}}} a^2(t)\,\dd t\quad[\unit{m/s}].
+  \label{eq:intensidad-arias}
+\end{equation}
+A partir de la evolución temporal de la energía acumulada, se define la función de Husid normalizada
+$H(t)\in[0,1]$:
+\begin{equation}
+  H(t) = \frac{\displaystyle\int_0^t a^2(\tau)\,\dd\tau}{\displaystyle\int_0^{T_{\mathrm{tot}}} a^2(\tau)\,\dd\tau}
+  \;\approx\;
+  \frac{\displaystyle\sum_{n=0}^{k} a_n^2}{\displaystyle\sum_{n=0}^{N_{\mathrm{tot}}-1} a_n^2},
+  \qquad t = \frac{k}{f_m}.
+  \label{eq:husid}
+\end{equation}
+Siguiendo el criterio de Trifunac y Brady (1975), la \textbf{duración significativa} $D_{5\text{--}95}$
+(\texttt{significantDurationSec} en \src{web/src/utils/signal.ts}) es el intervalo de tiempo en el que se
+libera el $90\,\text{\%}$ central de la energía de Arias, es decir, entre los instantes $t_{5\%}$ y $t_{95\%}$ donde
+$H(t)$ alcanza $0.05$ y $0.95$:
+\begin{equation}
+  D_{5\text{--}95} = t_{95\%} - t_{5\%},
+  \qquad
+  H(t_{5\%}) = 0.05,\quad H(t_{95\%}) = 0.95.
+  \label{eq:duracion-d5-95}
+\end{equation}
+Nótese que en~\eqref{eq:husid} la constante física $\pi/(2g_0)$ y el paso $\Delta t = 1/f_m$ se cancelan
+exactamente entre numerador y denominador, por lo que $D_{5\text{--}95}$ es invariante frente a la escala de
+unidades en que venga expresado el acelerograma ($g$, $\unit{m/s^2}$ o $\unit{gal}$).
+
+\subsection{Transformada Rápida de Fourier (FFT) y Espectrograma tiempo-frecuencia (STFT)}
+\label{sec:sismo-fft-stft}
+
+Para analizar la distribución de frecuencias de la señal sintética o de un registro instrumental cargado por el
+usuario (\src{web/src/utils/accelerogram.ts}), el módulo \src{web/src/utils/signal.ts} implementa un algoritmo
+propio de Transformada Rápida de Fourier (FFT) radix-2 de Cooley--Tukey \emph{in situ} con permutación por
+inversión de bits.
+
+\subsubsection*{1. Espectro global y frecuencia dominante}
+Dada una serie sin media $\tilde a_n = a_n - \bar a$ de longitud $N_s$, para estimar con alta precisión la
+frecuencia dominante (\texttt{dominantFrequencyHz}) se multiplica la señal por la ventana suave de Hann
+\begin{equation}
+  w(n) = \frac{1}{2} - \frac{1}{2}\cos\!\left(\frac{2\pi n}{N_s - 1}\right),
+  \qquad n = 0,1,\ldots,N_s - 1,
+  \label{eq:ventana-hann}
+\end{equation}
+y se rellena con ceros (\emph{zero-padding}) hasta una longitud potencia de dos
+$N_{\mathrm{FFT}} = 2^{\lceil\log_2\max(8N_s, 1024)\rceil}$, lo que interpola el espectro con resolución fina
+$\Delta f = f_m / N_{\mathrm{FFT}}$. La Transformada Discreta de Fourier (DFT) y la frecuencia dominante
+$f_{\mathrm{dom}}$ se calculan como:
+\begin{equation}
+  \widehat A(k) = \sum_{n=0}^{N_{\mathrm{FFT}}-1} \tilde a_n\,w(n)\,e^{-2\pi\mathrm{i}kn/N_{\mathrm{FFT}}},
+  \qquad
+  k^\ast = \arg\max_{1\le k \le N_{\mathrm{FFT}}/2} \bigl|\widehat A(k)\bigr|^2,
+  \qquad
+  f_{\mathrm{dom}} = \frac{k^\ast\,f_m}{N_{\mathrm{FFT}}}\quad[\unit{Hz}].
+  \label{eq:fft-dominante}
+\end{equation}
+
+\subsubsection*{2. Espectrograma de tiempo corto (STFT)}
+Como un sismograma es una señal fuertemente no estacionaria (primero llegan las altas frecuencias de la onda $P$
+en $3.8\text{--}5.2\,\unit{Hz}$ y segundos después irrumpe la onda $S$ en $0.52\text{--}2.20\,\unit{Hz}$), una
+ sola FFT global no muestra \emph{cuándo} actúa cada frecuencia. La función \texttt{computeSpectrogram} evalúa la
+Transformada de Fourier de Tiempo Corto (STFT) deslizando una ventana de Hann $w(n)$ de longitud
+$N_w = 2^{\lceil\log_2(4\,f_m)\rceil}$ muestras (a $50\,\unit{Hz}$, $N_w = 256$ muestras $= 5.12\,\unit{s}$, con
+resolución espectral $\Delta f = 50/256 \approx 0.195\,\unit{Hz}$) con un salto (\emph{hop}) de
+$H = N_w / 8 = 32$ muestras ($0.64\,\unit{s}$, traslape del $87.5\,\text{\%}$):
+\begin{equation}
+  X(m,k) = \sum_{n=0}^{N_w - 1} a(mH + n)\,w(n)\,e^{-2\pi\mathrm{i}kn/N_w},
+  \qquad
+  k \in \left\{0,1,\ldots,\frac{N_w}{2}\right\},
+  \label{eq:stft-definicion}
+\end{equation}
+donde el índice de cuadro $m$ está centrado en el instante físico
+$t_m = (mH + N_w/2)/f_m$ y el índice espectral $k$ corresponde a la frecuencia $f_k = k\,f_m/N_w$. La matriz de
+densidad espectral de potencia en decibeles es:
+\begin{equation}
+  P_{\mathrm{dB}}(m,k) = 10\log_{10}\!\Bigl(\bigl|X(m,k)\bigr|^2 + 10^{-20}\Bigr)\quad[\unit{dB}],
+  \label{eq:stft-db}
+\end{equation}
+que se representa en el lienzo de \src{web/src/components/SeismogramSpectrogram.tsx} con la paleta científica
+\emph{Inferno} sobre un rango dinámico de $60\,\unit{dB}$ debajo del máximo global $\max_{m,k} P_{\mathrm{dB}}(m,k)$,
+alineando verticalmente el eje temporal de $a(t)$ con el del espectrograma y marcando en ambos las líneas de
+arribo $t_p$, $t_s$ y la ventana $\Delta t_{ps}$.
+
+\begin{ejemplo}[Contraste cuantitativo en un escenario tipo Michoacán 1985 a $D=350\,\unit{km}$]
+Si se sitúa un sismo interplaca de $M_w = 8.1$ y profundidad $h = 15\,\unit{km}$ (distancia hipocentral
+$R = \sqrt{350^2 + 15^2} = 350.32\,\unit{km}$), los tiempos de arribo a la estación son
+$t_p = 350.32/6.0 = 58.39\,\unit{s}$ y $t_s = 350.32/3.5 = 100.09\,\unit{s}$, con una ventana
+$\Delta t_{ps} = 41.70\,\unit{s}$. Al variar únicamente el parámetro $V_{s30}$ de la estación receptora en el
+simulador:
+\begin{itemize}
+  \item \textbf{Estación sobre roca firme ($V_{s30} = 760\,\unit{m/s}$):} el espectrograma concentra la energía
+        de la onda $S$ en $f_{\mathrm{dom}} = 2.20\,\unit{Hz}$ y la sacudida decae rápidamente con una duración
+        significativa $D_{5\text{--}95} = 13.3\,\unit{s}$.
+  \item \textbf{Estación sobre arcilla lacustre ($V_{s30} = 100\,\unit{m/s}$):} el factor de sitio multiplica la
+        amplitud por $2.49\times$, la energía del espectrograma migra a la banda de baja frecuencia
+        $f_{\mathrm{dom}} = 0.52\,\unit{Hz}$ y la duración significativa de Arias se triplica hasta
+        $D_{5\text{--}95} = 33.4\,\unit{s}$.
+\end{itemize}
+\end{ejemplo}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_sismo_sismograma_espectrograma.png}
+  \caption{Vista acoplada de la serie temporal del acelerograma sintético $a(t)$ muestreado a $50\,\unit{Hz}$
+  (arriba) y su espectrograma tiempo-frecuencia STFT con ventana de Hann en escala \emph{Inferno} de $60\,\unit{dB}$
+  (abajo). Se distinguen las dos bandas laterales de la onda $P$ ($3.8$ y $5.2\,\unit{Hz}$ entre $t_p$ y $t_s$)
+  y la concentración energética de baja frecuencia tras el arribo de la onda $S$, junto con las métricas
+  $f_{\mathrm{dom}}$ y $D_{5\text{--}95}$.}
+  \label{fig:sismo-sismograma-stft}
+\end{figure}
+
+\clearpage
+\part{Arquitectura de Software, APIs y Despliegue}
+\label{part:arquitectura-apis-docker}
+
+Esta parte documenta la ingeniería de software, los contratos de comunicación entre subsistemas, la
+persistencia geoespacial y el esquema de contenedorización que sostienen la operación de extremo a extremo de
+TerraPulse AI. Su diseño obedece a una premisa arquitectónica central establecida en \src{AGENTS.md}: el núcleo
+científico de procesamiento radar y geofísico (\src{pipeline/}) es \textbf{Python puro e independiente del
+servidor web}, mientras que la capa de aplicación (\src{backend/} y \src{web/}) actúa como un orquestador,
+almacén espacial y visor interactivo que conserva intacta la trazabilidad desde el archivo HDF5 o HGT original
+hasta cada píxel y gráfica renderizados en el navegador.
+
+\section{Arquitectura general del sistema y desacoplamiento por contratos}
+\label{sec:arq-general}
+
+La plataforma se estructura en cuatro capas desacopladas que se comunican mediante contratos de datos
+estrictamente versionados (contratos C1 a C5, más los contratos de trabajos dinámicos de ROI y simulación
+solar):
+
+\begin{enumerate}
+  \item \textbf{Capa de procesamiento científico (\src{pipeline/}, Python 3.11):}
+        módulos independientes de cualquier framework HTTP (\src{catalog.py}, \src{compat.py}, \src{nisar\_h5.py},
+        \src{download.py}, \src{etapa1.py}, \src{web\_export.py}, \src{graficas\_datos.py}, \src{preprocess.py},
+        \src{change.py}, \src{roi\_explore.py}, \src{elevation/nasadem.py} y \src{solar/}). Lee archivos remotos
+        \texttt{.h5} de ASF por HTTPS mediante peticiones de rango (\emph{HTTP Range Requests} de $8\,\unit{MiB}$
+        con \texttt{fsspec} y \texttt{h5py}) y teselas \texttt{NASADEM\_HGT} versión \texttt{001}, generando
+        GeoTIFFs en punto flotante de 32 bits, Cloud-Optimized GeoTIFFs (COG), imágenes PNG reproyectadas y
+        manifiestos JSON con huella del commit (\texttt{version\_codigo}).
+  \item \textbf{Capa de servicios y API REST (\src{backend/}, Python / Django 5.2 + GeoDjango + DRF 3.18):}
+        aunque en la propuesta conceptual inicial del reto se contempló FastAPI como servidor Python ligero, en
+        la implementación definitiva se adoptó \textbf{Django + GeoDjango + Django REST Framework (DRF)} debido
+        a que proporciona un ORM espacial nativo sobre PostGIS (\texttt{PolygonField} con SRID 4326, consultas
+        geométricas \texttt{intersects}), sistema transaccional de migraciones (\src{scenes/migrations/}),
+        comandos de administración reproducibles (\texttt{manage.py load\_explore}) y panel de auditoría
+        (\texttt{/admin/}) sin código repetitivo, manteniendo exactamente la misma separación lógica de
+        servicios REST JSON que un esquema FastAPI.
+  \item \textbf{Capa de persistencia espacial y caché transaccional (PostgreSQL 16 + PostGIS 3.4 + sistema de archivos):}
+        las geometrías vectoriales (\texttt{ROI}, huellas \texttt{footprint} de escenas), los metadatos orbitales
+        verificados contra catálogo y las series numéricas de inspección (\texttt{jsonb}) residen en PostGIS
+        dentro de un contenedor Docker con volumen persistente (\texttt{pgdata}). Los productos ráster pesados
+        (GeoTIFF/COG de $32\,\text{bits}$ y PNG de visualización) se almacenan en jerarquías de disco inmutables
+        por hash (\path{data/explore/}, \path{data/roi-runs/}, \path{data/graficas-roi/}, \path{data/solar-runs/}
+        y \path{data/nasadem-cache/}).
+  \item \textbf{Capa de presentación e interacción (\src{web/}, React 19 + TypeScript + Vite + MapLibre GL + Chart.js):}
+        aplicación de página única (SPA) que consume las APIs REST a través de un proxy de mismo origen
+        (\texttt{/api} $\to$ \texttt{http://localhost:8000}), superpone capas ráster georreferenciadas sobre
+        MapLibre GL, renderiza distribuciones estadísticas con ventana intercomprensible $p_{0.2}\text{--}p_{99.8}$
+        en Chart.js y ejecuta en el cliente los módulos de inversión de LUT solar, visor topográfico 3D y
+        simulador sísmico.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=7mm and 9mm,
+  capa/.style={draw,rounded corners=3pt,thick,align=center,font=\small,minimum height=1.35cm,text width=3.5cm},
+  ext/.style={draw,dashed,rounded corners=3pt,fill=gray!10,align=center,font=\footnotesize,minimum height=1.1cm,text width=3.1cm},
+  fl/.style={-{Stealth[length=2.4mm]},thick},
+  flb/.style={{Stealth[length=2.4mm]}-{Stealth[length=2.4mm]},thick}
+]
+  \node[ext] (asf) {NASA Earthdata / ASF\\(\texttt{.h5} GCOV + \texttt{NASADEM\_HGT})};
+  \node[capa,fill=green!8,right=of asf] (pipe) {\textbf{Pipeline Científico}\\(\src{pipeline/}, Python 3.11)\\{\scriptsize \texttt{etapa1}, \texttt{change}, \texttt{nasadem}, \texttt{solar}}};
+  \node[capa,fill=blue!8,right=of pipe] (api) {\textbf{Backend API REST}\\(\src{backend/}, Django/DRF)\\{\scriptsize \texttt{/api/scenes}, \texttt{/api/roi-jobs}, \texttt{/api/solar}}};
+  \node[capa,fill=purple!8,below=of api] (db) {\textbf{PostGIS 16-3.4 (Docker)}\\{\scriptsize \texttt{scenes\_roi}, \texttt{scenes\_scene},}\\{\scriptsize \texttt{scenes\_sceneinspection}, \texttt{jsonb}}};
+  \node[capa,fill=orange!10,below=of pipe] (fs) {\textbf{Almacén Ráster / JSON}\\{\scriptsize \texttt{COG float32}, \texttt{PNG EPSG:3857},}\\{\scriptsize \texttt{capas.json}, \texttt{graficas.json}, \texttt{change.json}}};
+  \node[capa,fill=cyan!10,right=of api] (web) {\textbf{Frontend Web SPA}\\(\src{web/}, React + Vite)\\{\scriptsize MapLibre GL, Chart.js, Visor 3D}};
+
+  \draw[fl] (asf) -- node[above,font=\scriptsize]{HTTPS Range / CMR} (pipe);
+  \draw[fl] (pipe) -- node[right,font=\scriptsize]{escribe C1/C2} (fs);
+  \draw[flb] (api) -- node[above,font=\scriptsize]{subproceso / lectura} (pipe);
+  \draw[fl] (fs) -- node[above,sloped,font=\scriptsize]{\texttt{load\_explore} / assets} (api);
+  \draw[flb] (api) -- node[right,font=\scriptsize]{GeoDjango ORM} (db);
+  \draw[flb] (api) -- node[above,font=\scriptsize]{JSON / PNG / TIFF (\texttt{/api})} (web);
+\end{tikzpicture}
+\caption{Arquitectura desacoplada de cuatro capas de TerraPulse AI. El pipeline científico (\src{pipeline/}) no
+importa ningún módulo del servidor web; la comunicación ocurre a través de contratos en disco y tablas espaciales
+en PostGIS.}
+\label{fig:arquitectura-4-capas}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.86\textwidth]{fig/IMG_arquitectura_general_sistema.png}
+  \caption{Diagrama integral de la arquitectura de software de TerraPulse AI, mostrando el flujo de datos desde
+  los repositorios de NASA Earthdata (ASF Vertex y LP DAAC) hasta el backend en Python (Django/DRF), el contenedor
+  PostgreSQL 16 + PostGIS 3.4 en Docker y los módulos interactivos del frontend en React/Vite.}
+  \label{fig:img-arquitectura-general}
+\end{figure}
+
+\subsection{Resumen de contratos internos del repositorio}
+
+La tabla~\ref{tab:contratos-internos} sintetiza los contratos formales que aíslan cada etapa del flujo de datos.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lp{3.4cm}p{3.6cm}p{5.8cm}}
+\toprule
+\textbf{Contrato} & \textbf{Productor} & \textbf{Consumidor} & \textbf{Artefactos y garantías principales} \\
+\midrule
+\textbf{C1 (Recorte)} & \src{pipeline/download.py}, \src{sources/subset.py} & \src{pipeline/preprocess.py}, \src{pipeline/change.py} & \path{data/raw/<scene_id>/<capa>.tif} + \path{scene.json}. Identidad verificada contra catálogo y malla nativa UTM sin remuestreo. \\
+\textbf{Etapa 1 Web} & \src{pipeline/etapa1.py}, \src{web\_export.py}, \src{graficas\_datos.py} & \texttt{load\_explore}, \src{roi\_explore.py}, Frontend MapLibre/Chart.js & \path{web/capas.json} (\texttt{explore-web-1}), COG \texttt{float32} en UTM, PNG RGBA en \texttt{EPSG:3857} y \path{graficas.json} (\texttt{graficas-etapa1-1}). \\
+\textbf{C2 (Cambio $\Delta$)} & \src{pipeline/change.py}, \src{roi\_explore.py} & Servicio \texttt{/api/roi-jobs}, \src{ChangeControls.tsx} & \path{delta_<pol>_dB.tif}, \path{zscore_<pol>.tif}, \path{cambio_<pol>.tif}, \path{change.json} y \path{web/capas.json} con $\sigma_{\mathrm{MAD}}$ y alerta $\tau_{\mathrm{dB}} < 3\sigma_{\mathrm{MAD}}$. \\
+\textbf{C4 (API REST)} & \src{backend/scenes/}, \src{backend/solar/} & \src{web/src/api/client.ts}, hooks de React & Respuestas JSON en UTF-8, geometrías GeoJSON en \texttt{EPSG:4326} (\texttt{[lon, lat]}), fechas ISO~8601 UTC y campos de trazabilidad (\texttt{code\_version}, \texttt{warnings}). \\
+\textbf{C5 (Teselas)} & Servidor TiTiler / \src{roi\_views.py} & MapLibre GL (\texttt{ImageSource} / \texttt{RasterSource}) & Lectura de valores numéricos desde COG (\texttt{float32}) y superposición visual mediante PNG en \texttt{EPSG:3857} o \texttt{EPSG:4326}. \\
+\bottomrule
+\end{tabular}
+\caption{Contratos de datos entre los subsistemas de TerraPulse AI.}
+\label{tab:contratos-internos}
+\end{table}
+
+\section{Exportación web de la Etapa 1 y visualización estadística en Chart.js}
+\label{sec:arq-etapa1-chartjs}
+
+Antes de que una escena NISAR GCOV llegue a la base de datos o al navegador, el módulo \src{pipeline/etapa1.py}
+ejecuta la inspección radiométrica y geométrica sobre la ROI, ya sea a partir de un archivo \texttt{.h5} local
+o directamente en modo remoto por HTTPS mediante su \texttt{scene\_id}.
+
+\subsection{Lectura remota por bloques HTTPS y verificación de identidad}
+
+Cuando se invoca \texttt{python -m pipeline.etapa1 <scene\_id> --escala-web -22 0}, el pipeline evita descargar
+el archivo GCOV completo ($\sim 7\,\unit{GB}$) siguiendo seis pasos deterministas:
+\begin{enumerate}
+  \item Localiza el \texttt{scene\_id} en el catálogo más reciente (\path{data/catalog/catalog_*.json}) y extrae
+        su URL HTTPS firmada en ASF junto con su nivel de madurez (\texttt{dataMaturity}).
+  \item Inicializa una sesión autenticada en NASA Earthdata (\texttt{earthdata\_https\_fs()}, priorizando
+        variables de entorno \texttt{EARTHDATA\_USERNAME}/\texttt{EARTHDATA\_PASSWORD} sobre \path{~/.netrc}).
+  \item Abre el contenedor HDF5 remoto mediante \texttt{h5py} sobre un objeto de archivo HTTPS de \texttt{fsspec}
+        con caché de bloques de $8\,\unit{MiB}$, transfiriendo por red únicamente los \emph{chunks} internos que
+        intersectan la ventana de la ROI y el cubo de ángulos de incidencia.
+  \item Ejecuta \texttt{check\_identity}: comprueba que los atributos internos del HDF5 (\texttt{granuleId},
+        \texttt{CRID}, trayectoria, marco y dirección orbital) coincidan exactamente con el registro del
+        catálogo; cualquier discrepancia aborta la ejecución.
+  \item Calcula en memoria las matrices $\gz$ y $\sz = \gz \cdot F$, aplica la máscara de subfranja y el
+        Multilook $2\times 2$ de inspección ($20\,\unit{m}$), y exporta tanto los GeoTIFF científicos como la
+        carpeta \path{web/} (\src{pipeline/web\_export.py}) y las series de gráficas (\path{graficas.json},
+        \src{pipeline/graficas\_datos.py}).
+  \item En modo remoto omite por defecto la figura~A (vista general submuestreada $1:50$ de toda la escena)
+        porque leer 1 de cada 50 píxeles obligaría a tocar casi todos los bloques HDF5 del archivo de $7\,\unit{GB}$.
+\end{enumerate}
+
+\subsection{Dualidad COG (\texttt{EPSG:32615}) vs.\ PNG (\texttt{EPSG:3857}) y manifiesto \texttt{capas.json}}
+
+Un principio técnico fundamental de la capa web es la separación estricta entre \textbf{archivos de medición}
+y \textbf{archivos de representación visual}:
+\begin{itemize}
+  \item \textbf{Cloud-Optimized GeoTIFF (\path{web/<magnitud>_<capa>_ml2_dB.tif}):} almacena los valores
+        exactos en decibeles en formato \texttt{float32} ($\mathrm{NaN}$ para píxeles sin dato), en la proyección
+        UTM nativa del producto (por ejemplo, \texttt{EPSG:32615}), comprimido con \texttt{DEFLATE} en bloques
+        internos de $512\times 512$ píxeles y con pirámides (\emph{overviews}) calculadas por \textbf{vecino más
+        cercano} (nunca promediando decibeles). Es la fuente exclusiva para consultas puntuales de valor e
+        interoperabilidad con TiTiler.
+  \item \textbf{Imagen de superposición (\path{web/<magnitud>_<capa>_ml2_dB.png}):} imagen RGBA de 8 bits por
+        canal reproyectada previamente a \textbf{Web Mercator (\texttt{EPSG:3857})}, con rampa lineal en escala
+        de grises entre \texttt{vmin\_dB} y \texttt{vmax\_dB} y canal alfa $\alpha = 0$ donde no hay dato.
+\end{itemize}
+
+\begin{intuicion}
+\textbf{¿Por qué el PNG para MapLibre debe reproyectarse a \texttt{EPSG:3857} mientras el COG permanece en UTM?}
+Cuando MapLibre GL dibuja una capa de tipo \texttt{image} a partir de sus cuatro vértices geográficos
+(\texttt{esquinas\_lonlat}), estira el rectángulo de píxeles de la imagen directamente sobre el lienzo plano
+de Web Mercator (\texttt{EPSG:3857}). Una cuadrícula UTM (\texttt{EPSG:32615}) presenta una ligera convergencia
+de meridianos respecto al norte geográfico; si se pasara un PNG en UTM directamente a MapLibre, los píxeles
+quedarían ligeramente rotados y desplazados respecto a los ríos y carreteras del mapa base. Al reproyectar el
+PNG a \texttt{EPSG:3857} en \src{pipeline/web\_export.py} y calcular sus cuatro esquinas exactas en
+\texttt{EPSG:4326} (en el orden requerido por MapLibre: superior-izquierda, superior-derecha, inferior-derecha,
+inferior-izquierda), cada píxel cae en su posición cartográfica exacta sin necesitar un servidor de teselas
+para la inspección inmediata.
+\end{intuicion}
+
+A continuación se muestra la estructura real del manifiesto \path{web/capas.json} (versión \texttt{explore-web-1})
+generado para la escena $t_1$ del par de Chiapas:
+
+\begin{verbatim}
+{
+  "version": "explore-web-1",
+  "tipo": "inspeccion_una_fecha",
+  "creado_utc": "2026-11-15T07:46:16Z",
+  "version_codigo": "863fa3f",
+  "escena": {
+    "granuleId": "NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001",
+    "producto": "GCOV",
+    "fecha_inicio": "2026-06-18T11:40:10Z",
+    "trayectoria": 62,
+    "marco": 10,
+    "direccion": "ASCENDING",
+    "crid": "P05023",
+    "madurez_catalogo": "PROVISIONAL",
+    "frecuencia": "A",
+    "polarizaciones": ["HH", "HV"]
+  },
+  "roi_wkt_4326": "POLYGON((-93.3919 16.6539,-92.8757 16.6539,-92.8757 16.8964,-93.3919 16.8964,-93.3919 16.6539))",
+  "procedencia": {
+    "modo": "remoto",
+    "catalogo": "data/catalog/catalog_20261112T041822Z.json",
+    "identidad_verificada_contra_catalogo": true
+  },
+  "capas": [
+    {
+      "id": "gamma0_HHHH_ml2_dB",
+      "capa": "HHHH",
+      "magnitud": "gamma0",
+      "simbolo": "gamma0",
+      "multilook": 2,
+      "pixel_m": 20,
+      "unidades": "dB",
+      "cog": "data/explore/NISAR_L2_PR_GCOV_.../web/gamma0_HHHH_ml2_dB.tif",
+      "png": "data/explore/NISAR_L2_PR_GCOV_.../web/gamma0_HHHH_ml2_dB.png",
+      "crs_cog": "EPSG:32615",
+      "crs_png": "EPSG:3857",
+      "forma_cog": [1343, 2752],
+      "forma_png": [1352, 2750],
+      "esquinas_lonlat": [
+        [-93.3924, 16.8968],
+        [-92.8757, 16.8968],
+        [-92.8757, 16.6536],
+        [-93.3924, 16.6536]
+      ],
+      "escala": {
+        "vmin_dB": -22.0,
+        "vmax_dB": 0.0,
+        "colormap": "gray",
+        "metodo": "fija (--escala-web)"
+      },
+      "rango_datos_dB": [-34.58, 14.82],
+      "pct_pixeles_validos": 99.574
+    }
+  ],
+  "graficas": "data/explore/NISAR_L2_PR_GCOV_.../graficas.json",
+  "metadatos": "data/explore/NISAR_L2_PR_GCOV_.../metadatos.json",
+  "advertencias": [
+    "Una sola fecha: sirve para inspeccion, no para un mapa de cambio.",
+    "Los PNG son solo para ver; no calcular diferencias sobre ellos.",
+    "Para comparar dos fechas en el deslizador, usar la misma --escala-web en ambas."
+  ]
+}
+\end{verbatim}
+
+\subsection{Contrato \texttt{graficas.json} y renderizado científico en Chart.js (\src{Etapa1ChartsPanel.tsx})}
+
+Para que el frontend no dependa de imágenes estáticas al mostrar distribuciones radiométricas, \src{pipeline/graficas\_datos.py}
+serializa en \path{graficas.json} (formato \texttt{graficas-etapa1-1}) exactamente los mismos vectores numéricos
+con los que se construyen las figuras científicas C, D y E:
+\begin{enumerate}
+  \item \texttt{histograma\_gamma0\_dB}: conteo entero exacto de píxeles por bin de ancho $\Delta b = 0.1\,\unit{dB}$
+        sobre el intervalo $[-60, +30]\,\unit{dB}$ a resolución nativa ($10\,\unit{m}$), por polarización
+        (\texttt{HHHH}, \texttt{HVHV}). Se recortan los bins extremos vacíos garantizando la invariante de
+        conservación:
+        \begin{equation}
+          \sum_{k=0}^{K-1} c_k = N_{\text{en rango}}, \qquad
+          N_{\text{en rango}} + N_{\text{fuera de rango}} = N_{\text{v\'alidos}}.
+          \label{eq:invariante-histograma-etapa1}
+        \end{equation}
+        En la escena real $t_1$ de Chiapas (2026-06-18), la serie \texttt{HHHH} contiene $646$ bins activos
+        desde $-34.6\,\unit{dB}$ más $936$ píxeles con $\gz > 30\,\unit{dB}$, sumando exactamente los
+        $14\,694\,370$ píxeles válidos del recorte C1 ($8.3\,\unit{KB}$ en JSON). Incluye además los estadísticos
+        precalculados: media de los dB (\texttt{media\_dB}), mediana (\texttt{mediana\_dB}), conversión a dB de
+        la media lineal ($\texttt{dB\_de\_la\_media} = 10\log_{10}\bar{\gz}$), desviación estándar y percentiles
+        $p_5$ y $p_{95}$.
+  \item \texttt{mascara\_roi}: distribución porcentual de las cuatro categorías de la capa \texttt{mask} dentro
+        de la ventana de la ROI (válido en subfranja, inválido~$0$, fuera de subfranja~$255$ y relleno) junto con
+        el porcentaje exacto de píxeles válidos dentro del polígono (\texttt{pct\_validos\_en\_poligono}).
+  \item \texttt{incidencia\_por\_altura}: curva del ángulo de incidencia medio sobre la ROI evaluado en las $21$
+        capas de altitud del cubo de geolocalización radar ($h \in [-1000, +9000]\,\unit{m}$ sobre el elipsoide
+        WGS84), destacando el nivel de referencia de $500\,\unit{m}$.
+\end{enumerate}
+
+\begin{cuidado}
+\warn{Por qué una gráfica de barras por categoría en Chart.js distorsiona el histograma SAR y cómo lo resuelve
+\src{Etapa1ChartsPanel.tsx}.}
+Si se pasa cada bin de $0.1\,\unit{dB}$ como una etiqueta categórica en un lienzo lateral de $360\,\unit{px}$ de
+ancho, el eje horizontal abarca casi $68\,\unit{dB}$ (desde $-38$ hasta $+30\,\unit{dB}$) simplemente porque hay
+unos pocos reflectores intensos en la cola derecha. Como el $90\,\text{\%}$ de los píxeles ($p_5\text{--}p_{95}$) se
+concentra en apenas $\sim 11\,\unit{dB}$ ($16\,\text{\%}$ del ancho total) y cada bin dispone de $\sim 0.48\,\unit{px}$,
+el motor gráfico redondea posiciones y colapsa la forma de la campana.
+
+Para evitarlo sin alterar un solo número de \path{graficas.json}, el componente \src{web/src/components/Etapa1ChartsPanel.tsx}
+aplica cuatro reglas de representación científica idénticas a las de \src{pipeline/etapa1\_figuras.py}:
+\begin{enumerate}
+  \item \textbf{Recorte de ventana por función de distribución acumulada (CDF $p_{0.2}\text{--}p_{99.8}$):} fija
+        los límites del eje $X$ entre los cuantiles $0.002$ y $0.998$ de la distribución (por ejemplo, en $t_2$
+        de Chiapas: $[-18.7, +7.5]\,\unit{dB}$ para HH y $[-24.0, -1.7]\,\unit{dB}$ para HV) y declara en el pie
+        de figura el porcentaje exacto de píxeles que queda fuera de la ventana ($\approx 0.46\,\text{\%}$).
+  \item \textbf{Eje $X$ lineal continuo con trazo en escalón (\texttt{stepped: 'middle'}):} cada bin $k$ se
+        posiciona en su centro físico exacto $x_k = b_0 + (k + 0.5)\,\Delta b$ y altura porcentual
+        $y_k = 100 \cdot c_k / N_{\text{en rango}}$, emulando \texttt{ax.step(..., where='mid')} de Matplotlib.
+  \item \textbf{Superposición de referencias mediante plugin propio de Canvas:} dibuja la banda sombreada azul
+        del intervalo intercuantílico $p_5\text{--}p_{95}$ y las tres líneas verticales rojas de referencia:
+        media de los dB (continua), mediana (discontinua) y $\text{dB}(\text{media lineal})$ (punteada).
+  \item \textbf{Escala vertical adaptada en incidencia y etiquetas explícitas en máscara:} en la curva de
+        incidencia fija el eje $Y$ al intervalo real de variación ($\Delta\theta_i \approx 0.4002^\circ$ a lo
+        largo de $10\,000\,\unit{m}$) para no aplanar visualmente la pendiente, y en la gráfica de máscara
+        escribe el porcentaje numérico sobre cada barra para que las categorías minoritarias ($0.39\,\text{\%}$,
+        $0.22\,\text{\%}$) sean legibles junto al $99.39\,\text{\%}$ válido.
+\end{enumerate}
+\end{cuidado}
+
+\section{Contratos exhaustivos de las APIs REST}
+\label{sec:arq-apis-rest}
+
+El backend expone tres familias de endpoints bajo el prefijo \texttt{/api/}:
+\begin{enumerate}
+  \item \textbf{API de Catálogo, Escenas y Gráficas de Inspección (Contrato C4, solo lectura \texttt{GET}):}
+        implementada en \src{backend/scenes/views.py} y \src{backend/scenes/urls.py}. Cualquier verbo de
+        escritura (\texttt{POST}, \texttt{PUT}, \texttt{DELETE}) sobre estas rutas devuelve \texttt{405 Method Not Allowed}.
+  \item \textbf{API de Exploración y Recálculo de Cambio para ROIs Dibujadas (\texttt{/api/roi-jobs}):}
+        implementada en \src{backend/scenes/roi\_views.py} y \src{backend/scenes/roi\_urls.py}. Orquesta el
+        procesamiento bajo demanda de polígonos definidos por el usuario y el recálculo instantáneo del mapa de
+        cambio $\Delta\gz_{\mathrm{dB}}$.
+  \item \textbf{API del Simulador de Irradiancia Solar Incidente (\texttt{/api/solar/simulations}):}
+        implementada en \src{backend/solar/views.py} y \src{backend/solar/services.py}. Calcula, publica y
+        muestrea mapas de irradiancia directa sobre relieve NASADEM.
+\end{enumerate}
+
+La tabla~\ref{tab:endpoints-rest-catalogo} resume todos los endpoints REST disponibles en el servidor, sus
+parámetros, códigos de estado HTTP y contratos de respuesta.
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{tabular}{lp{4.3cm}p{2.3cm}p{6.6cm}}
+\toprule
+\textbf{Método} & \textbf{Ruta del Endpoint} & \textbf{Códigos HTTP} & \textbf{Propósito y Contrato de Respuesta} \\
+\midrule
+\texttt{GET} & \texttt{/api/rois} & \texttt{200}, \texttt{405} & Lista las regiones de interés registradas en PostGIS con \texttt{id}, \texttt{name}, \texttt{wkt}, \texttt{srid: 4326} y \texttt{geometry} GeoJSON. \\
+\texttt{GET} & \texttt{/api/scenes} & \texttt{200}, \texttt{400}, \texttt{405} & Lista escenas NISAR filtradas por intersección espacial (\texttt{?roi=}), \texttt{track}, \texttt{frame}, \texttt{direction}, \texttt{maturity} y \texttt{crid}. \\
+\texttt{GET} & \texttt{/api/scenes/\{scene\_id\}} & \texttt{200}, \texttt{404}, \texttt{405} & Detalle de una escena: agrega el polígono \texttt{footprint} completo del \texttt{.h5} y la lista histórica de \texttt{inspections}. \\
+\texttt{GET} & \texttt{/api/scenes/\{scene\_id\}/charts} & \texttt{200}, \texttt{404}, \texttt{405} & Devuelve las 3 gráficas (\texttt{graficas.json}) de la inspección más reciente; filtrable por \texttt{?code\_version=} y \texttt{?roi=}. \\
+\texttt{GET} & \texttt{/api/scenes/\{scene\_id\}/charts/\{chart\_id\}} & \texttt{200}, \texttt{404}, \texttt{405} & Devuelve una gráfica individual (\texttt{histograma\_gamma0\_dB}, \texttt{mascara\_roi} o \texttt{incidencia\_por\_altura}) con su trazabilidad. \\
+\midrule
+\texttt{POST} & \texttt{/api/roi-jobs} & \texttt{202}, \texttt{400}, \texttt{429} & Valida un \texttt{Polygon} GeoJSON ($\le 0.6^\circ$/lado) y lanza en segundo plano \texttt{python -m pipeline.roi\_explore}. Devuelve \texttt{\{"id": "<sha256>"\}}. \\
+\texttt{GET} & \texttt{/api/roi-jobs/\{id\}} & \texttt{200}, \texttt{404} & Estado del trabajo (\texttt{queued}, \texttt{running}, \texttt{ready}, \texttt{error}). En \texttt{ready} entrega \texttt{manifests}, \texttt{comparable}, \texttt{charts}, \texttt{change} y \texttt{copia}. \\
+\texttt{POST} & \texttt{/api/roi-jobs/\{id\}/change} & \texttt{200}, \texttt{400}, \texttt{404}, \texttt{409} & Recalcula $\Delta\gz_{\mathrm{dB}}$, $z_{\mathrm{rob}}$ y clases desde potencia lineal local para \texttt{multilook} $\in \{2,5,10\}$ y \texttt{umbral\_dB} $\in [1.5, 6]$. \\
+\texttt{GET} & \texttt{/api/roi-jobs/\{id\}/assets/\{ruta\}} & \texttt{200}, \texttt{404} & Sirve de forma confinada los binarios \texttt{.png} y \texttt{.tif} dentro de la carpeta \path{layers/} del trabajo. \\
+\midrule
+\texttt{POST} & \texttt{/api/solar/simulations} & \texttt{201}, \texttt{400}, \texttt{413}, \texttt{415}, \texttt{429}, \texttt{503} & Ejecuta síncronamente una simulación de irradiancia solar directa incidente ($G_i$ en $\unit{W/m^2}$) sobre NASADEM y devuelve el manifiesto. \\
+\texttt{GET} & \texttt{/api/solar/simulations/\{id\}} & \texttt{200}, \texttt{404} & Recupera el manifiesto completo, parámetros efectivos, posición solar SPA, DNI Linke y URLs de capas de la simulación. \\
+\texttt{GET} & \texttt{/api/solar/simulations/\{id\}/preview/incident} & \texttt{200}, \texttt{404} & Devuelve la imagen \texttt{image/png} RGBA coloreada con la paleta \emph{Inferno} en \texttt{EPSG:4326}. \\
+\texttt{GET} & \texttt{/api/solar/simulations/\{id\}/export/incident} & \texttt{200}, \texttt{404} & Devuelve el GeoTIFF científico \texttt{image/tiff} en \texttt{float32} ($\unit{W/m^2}$) en el CRS UTM nativo. \\
+\texttt{GET} & \texttt{/api/solar/simulations/\{id\}/sample} & \texttt{200}, \texttt{400}, \texttt{404} & Muestrea el valor exacto en $\unit{W/m^2}$ del píxel del GeoTIFF numérico en las coordenadas \texttt{?lon=\&lat=} (\texttt{EPSG:4326}). \\
+\bottomrule
+\end{tabular}
+\caption{Catálogo completo de endpoints REST de TerraPulse AI.}
+\label{tab:endpoints-rest-catalogo}
+\end{table}
+
+\subsection{Especificación de peticiones y respuestas JSON del Contrato C4 (\texttt{/api/rois} y \texttt{/api/scenes})}
+
+Todas las respuestas de C4 utilizan codificación \texttt{application/json}, fechas en formato ISO~8601 UTC
+(\texttt{YYYY-MM-DDTHH:MM:SSZ}) y coordenadas GeoJSON en el orden estándar \texttt{[longitud, latitud]} de
+\texttt{EPSG:4326}. Cuando el cliente del frontend (\src{web/src/api/client.ts}) realiza peticiones en entorno
+de desarrollo y el servidor no responde dentro de la ventana de tiempo límite ($1.6\,\unit{s}$), el cliente
+activa un modo de respaldo transparente pero marca explícitamente cada objeto con la bandera
+\texttt{isSyntheticMock: true} para no mezclar jamás datos simulados con observaciones reales sin advertirlo.
+
+\paragraph{1. Consulta de regiones de interés (\texttt{GET /api/rois}).}
+Devuelve cada polígono registrado tanto en representación WKT como en objeto GeoJSON listo para ser inyectado
+en una fuente vectorial de MapLibre GL:
+
+\begin{verbatim}
+GET /api/rois HTTP/1.1
+Host: localhost:8000
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+[
+  {
+    "id": "1",
+    "name": "chiapas",
+    "wkt": "POLYGON ((-93.3919 16.6539, -92.8757 16.6539, -92.8757 16.8964, -93.3919 16.8964, -93.3919 16.6539))",
+    "srid": 4326,
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [-93.3919, 16.6539],
+          [-92.8757, 16.6539],
+          [-92.8757, 16.8964],
+          [-93.3919, 16.8964],
+          [-93.3919, 16.6539]
+        ]
+      ]
+    }
+  }
+]
+\end{verbatim}
+
+\paragraph{2. Listado filtrado de escenas (\texttt{GET /api/scenes?roi=1\&track=62}).}
+El filtro espacial \texttt{roi} ejecuta en PostGIS una consulta de intersección geométrica entre la huella
+\texttt{footprint} de cada escena y el polígono de la ROI solicitada. El campo \texttt{maturity} proviene
+exclusivamente del catálogo de ASF (o es \texttt{null} si se cargó de un archivo local sin catálogo) y nunca se
+infiere de la primera letra del \texttt{CRID}:
+
+\begin{verbatim}
+GET /api/scenes?roi=1&track=62&direction=ASCENDING&maturity=PROVISIONAL HTTP/1.1
+Host: localhost:8000
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+[
+  {
+    "scene_id": "NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001",
+    "product": "GCOV",
+    "track": 62,
+    "frame": 10,
+    "stackId": "T62/F10",
+    "direction": "ASCENDING",
+    "polarizations": ["HH", "HV"],
+    "frequency": "A",
+    "band": "L",
+    "epsg": 32615,
+    "crid": "P05023",
+    "maturity": "PROVISIONAL",
+    "start_time": "2026-06-18T11:40:10Z",
+    "date": "2026-06-18",
+    "has_inspection": true
+  }
+]
+\end{verbatim}
+
+\paragraph{3. Detalle de escena e historial de inspecciones (\texttt{GET /api/scenes/\{scene\_id\}}).}
+Agrega la geometría \texttt{footprint} completa leída del dataset \texttt{boundingPolygon} del HDF5 y la lista
+de ejecuciones de la Etapa~1 ordenadas de la más reciente a la más antigua:
+
+\begin{verbatim}
+GET /api/scenes/NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001 HTTP/1.1
+Host: localhost:8000
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "scene_id": "NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001",
+  "product": "GCOV",
+  "track": 62,
+  "frame": 10,
+  "stackId": "T62/F10",
+  "direction": "ASCENDING",
+  "polarizations": ["HH", "HV"],
+  "frequency": "A",
+  "band": "L",
+  "epsg": 32615,
+  "crid": "P05023",
+  "maturity": "PROVISIONAL",
+  "start_time": "2026-06-18T11:40:10Z",
+  "date": "2026-06-18",
+  "has_inspection": true,
+  "footprint": {
+    "type": "Polygon",
+    "coordinates": [[[-93.7104, 16.1208], [-92.4112, 16.1208], [-92.4112, 17.3891], [-93.7104, 17.3891], [-93.7104, 16.1208]]]
+  },
+  "inspections": [
+    {
+      "code_version": "863fa3f",
+      "created_utc": "2026-11-15T07:46:16Z",
+      "roi_id": "1",
+      "pct_valid_in_roi": 99.574,
+      "source_dir": "data/explore/NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001",
+      "warnings": [
+        "Una sola fecha: sirve para inspeccion, no para un mapa de cambio.",
+        "Productos L-band PROVISIONAL estan calibrados y parcialmente validados."
+      ],
+      "charts": ["histograma_gamma0_dB", "incidencia_por_altura", "mascara_roi"]
+    }
+  ]
+}
+\end{verbatim}
+
+\paragraph{4. Recuperación de gráficas con trazabilidad (\texttt{GET /api/scenes/\{scene\_id\}/charts/\{chart\_id\}}).}
+Permite recuperar las tres gráficas juntas (\texttt{/charts?roi=1}) o una gráfica individual inyectando en la
+raíz del JSON la versión del código, la fecha de creación, el archivo fuente y las advertencias obligatorias:
+
+\begin{verbatim}
+GET /api/scenes/NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001/charts/histograma_gamma0_dB?roi=1 HTTP/1.1
+Host: localhost:8000
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "scene_id": "NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001",
+  "code_version": "863fa3f",
+  "created_utc": "2026-11-15T07:46:16Z",
+  "warnings": [
+    "Una sola fecha: describe la escena, no un cambio."
+  ],
+  "chart_id": "histograma_gamma0_dB",
+  "format_version": "graficas-etapa1-1",
+  "source_file": "data/explore/NISAR_L2_PR_GCOV_023_062_A_010_4005_DHDH_A_20260618T114010_20260618T114044_P05023_N_F_J_001/graficas.json",
+  "data": {
+    "id": "histograma_gamma0_dB",
+    "tipo_sugerido": "bar",
+    "eje_x": { "etiqueta": "gamma0", "unidad": "dB", "ancho_bin": 0.1, "rango_bins": [-60, 30] },
+    "eje_y": { "etiqueta": "pixeles", "unidad": "conteo" },
+    "series": [
+      {
+        "nombre": "HHHH",
+        "bin_inicio_dB": -34.6,
+        "conteos": [1, 0, 2, 5, 14, "... (646 bins) ..."],
+        "total_en_rango": 14693434,
+        "fuera_de_rango": 936,
+        "estadisticas": {
+          "n_validos": 14694370,
+          "media_dB": -6.84,
+          "mediana_dB": -6.71,
+          "dB_de_la_media": -5.42,
+          "desv_std_dB": 3.58,
+          "p5_dB": -12.90,
+          "p95_dB": -1.40
+        }
+      }
+    ]
+  }
+}
+\end{verbatim}
+
+\subsection{Especificación de la API de trabajos de ROI bajo demanda (\texttt{/api/roi-jobs})}
+
+Cuando el usuario dibuja un rectángulo de análisis en cualquier región cubierta por NISAR, el frontend envía
+el polígono a \texttt{POST /api/roi-jobs}. El backend valida que el polígono tenga entre 4 y 100 vértices, sea
+cerrado y simple (sin auto-intersecciones ni agujeros), esté dentro de $[-180,180]\times[-85,85]$ y su caja
+envolvente no supere $0.6^\circ$ por lado ($\sim 65\,\unit{km}$). El identificador del trabajo se calcula como
+un hash determinista SHA-256 de la geometría normalizada, el día UTC y el prefijo de formato \texttt{roi-web-3},
+reutilizando resultados existentes sin duplicar cómputo. Con un máximo de 3 trabajos concurrentes (controlados
+mediante directorios \path{reservation/}), el coordinador lanza un subproceso aislado
+(\texttt{python -m pipeline.roi\_explore <carpeta>}) con presupuesto temporal de 25 minutos (y límite duro de
+30 minutos en el padre, que recoge el árbol de procesos con \texttt{SIGKILL} al grupo de sesión en POSIX o
+\texttt{taskkill /T /F} en Windows).
+
+\begin{verbatim}
+POST /api/roi-jobs HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+
+{
+  "roi": {
+    "type": "Polygon",
+    "coordinates": [[
+      [-93.1500, 16.7400],
+      [-93.1000, 16.7400],
+      [-93.1000, 16.7800],
+      [-93.1500, 16.7800],
+      [-93.1500, 16.7400]
+    ]]
+  }
+}
+
+HTTP/1.1 202 Accepted
+Content-Type: application/json
+
+{
+  "id": "574924a8c91e30d4b821f0e719c2a4d58b01e9f3a7c6d2e1b4a8f0c3d5e7a9b1",
+  "status": "queued"
+}
+\end{verbatim}
+
+Cuando el par comparable termina de procesarse en paralelo (un proceso Python por fecha para la Etapa~1, seguido
+de la verificación de igualdad de malla, la generación del mapa de cambio a $5\times 5$ desde potencia lineal y
+la copia de respaldo en \path{data/graficas-roi/<id>/} y PostGIS), \texttt{GET /api/roi-jobs/\{id\}} y
+\texttt{POST /api/roi-jobs/\{id\}/change} responden con el manifiesto completo de cambio:
+
+\begin{verbatim}
+POST /api/roi-jobs/574924a8c91e30d4b821f0e719c2a4d58b01e9f3a7c6d2e1b4a8f0c3d5e7a9b1/change HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+
+{
+  "multilook": 5,
+  "umbral_dB": 3.0
+}
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "version": "change-web-1",
+  "tipo": "cambio_dos_fechas",
+  "comparable": true,
+  "magnitud": "gamma0",
+  "multilook": 5,
+  "pixel_m": 50.0,
+  "umbral_dB": 3.0,
+  "opciones": {
+    "multilook": [
+      { "multilook": 2, "pixel_m": 20.0 },
+      { "multilook": 5, "pixel_m": 50.0 },
+      { "multilook": 10, "pixel_m": 100.0 }
+    ],
+    "umbral_dB": [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0]
+  },
+  "escenas": {
+    "t1": { "granuleId": "NISAR_L2_PR_GCOV_..._20261028T114005_..._P05036_N_F_J_001", "fecha": "2026-10-28" },
+    "t2": { "granuleId": "NISAR_L2_PR_GCOV_..._20261109T114004_..._P05036_N_F_J_001", "fecha": "2026-11-09" }
+  },
+  "metricas": {
+    "HHHH": {
+      "n_validos": 3716,
+      "area_valida_km2": 9.29,
+      "mediana_dB": 0.04,
+      "media_dB": 0.05,
+      "desv_std_dB": 0.72,
+      "mad_robusto_dB": 0.70,
+      "ruido_dB": 0.70,
+      "umbral_sobre_ruido": 4.29,
+      "umbral_cerca_del_ruido": false,
+      "pct_abs_z_mayor_3": 0.35,
+      "baja_km2": 0.00,
+      "baja_pct": 0.00,
+      "sube_km2": 0.0025,
+      "sube_pct": 0.03,
+      "estable_pct": 99.97
+    }
+  },
+  "capas": [
+    {
+      "id": "delta_gamma0_HHHH_ml5_dB",
+      "polarizacion": "HH",
+      "capa": "HHHH",
+      "png": "/api/roi-jobs/574924.../assets/cambio/ml5_u3/web/delta_gamma0_HHHH_ml5_dB.png",
+      "cog": "/api/roi-jobs/574924.../assets/cambio/ml5_u3/web/delta_gamma0_HHHH_ml5_dB.tif",
+      "escala": { "vmin_dB": -6.0, "vmax_dB": 6.0, "colormap": "blue-white-red" }
+    }
+  ],
+  "advertencias": [
+    "Exploratorio: sin validacion independiente; no identifica la causa fisica del cambio."
+  ]
+}
+\end{verbatim}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_api_rest_contratos_json.png}
+  \caption{Inspección de los contratos JSON de la API REST de TerraPulse AI (\texttt{/api/scenes},
+  \texttt{/api/roi-jobs} y \texttt{/api/solar/simulations}), mostrando las cabeceras HTTP, los campos de
+  trazabilidad (\texttt{code\_version}, \texttt{warnings}) y las respuestas GeoJSON/métricas estructuradas.}
+  \label{fig:img-api-rest-json}
+\end{figure}
+
+\section{Persistencia espacial en PostgreSQL/PostGIS y contenedorización con Docker}
+\label{sec:arq-postgis-docker}
+
+La persistencia relacional y geoespacial se despliega mediante Docker Compose (\src{docker-compose.yml}) sobre
+la imagen oficial \texttt{postgis/postgis:16-3.4} (PostgreSQL~16 con la extensión espacial PostGIS~3.4).
+
+\subsection{Esquema de datos relacional-espacial en PostGIS (\src{backend/scenes/models.py})}
+
+La base de datos almacena cuatro entidades normalizadas que combinan geometrías indexadas en \texttt{EPSG:4326}
+con columnas semiestructuradas \texttt{jsonb} para series estadísticas de longitud variable:
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llp{4.1cm}p{6.5cm}}
+\toprule
+\textbf{Tabla SQL} & \textbf{Modelo Django} & \textbf{Restricción de Unicidad / Clave} & \textbf{Columnas Espaciales, JSONB y Reglas de Integridad} \\
+\midrule
+\texttt{scenes\_roi} & \texttt{ROI} & \texttt{id} (PK); reutiliza fila si \texttt{geom} es espacialmente idéntica & \texttt{name} (\texttt{varchar}), \texttt{geom} (\texttt{PolygonField}, \texttt{SRID 4326}). Soporta la ROI fija \texttt{chiapas} y las ROIs dinámicas \texttt{roi-<12-hex>}. \\
+\texttt{scenes\_scene} & \texttt{Scene} & \texttt{name} (\texttt{granuleId}) único & \texttt{product}, \texttt{track}, \texttt{frame}, \texttt{direction}, \texttt{polarizations} (\texttt{jsonb}), \texttt{frequency}, \texttt{band}, \texttt{epsg}, \texttt{crid}, \texttt{maturity} (nullable), \texttt{start\_time}, \texttt{footprint} (\texttt{PolygonField}, \texttt{SRID 4326} en 2D). \\
+\texttt{scenes\_sceneinspection} & \texttt{SceneInspection} & Única por \texttt{(scene, roi, code\_version)} (migración \texttt{0002}) & \texttt{code\_version} (commit), \texttt{created\_utc}, \texttt{pct\_valid\_in\_roi}, \texttt{roi\_stats} (\texttt{jsonb}), \texttt{provenance} (\texttt{jsonb}), \texttt{warnings} (\texttt{jsonb}), \texttt{source\_dir}. \\
+\texttt{scenes\_scenechart} & \texttt{SceneChart} & Única por \texttt{(inspection, chart\_id)} & \texttt{chart\_id} (\texttt{varchar}), \texttt{format\_version} (\texttt{graficas-etapa1-1}), \texttt{source\_file}, \texttt{data} (\texttt{jsonb} con la entrada íntegra de \path{graficas.json}). \\
+\bottomrule
+\end{tabular}
+\caption{Modelo relacional y espacial implementado en PostgreSQL 16 + PostGIS 3.4.}
+\label{tab:esquema-postgis}
+\end{table}
+
+\subsection{Ingesta transaccional (\texttt{manage.py load\_explore}) y respaldo resiliente}
+
+La base de datos \textbf{nunca abre archivos \texttt{.h5} ni ejecuta cálculos radiométricos}: consume únicamente
+los artefactos validados que dejó el pipeline (\path{metadatos.json} y \path{graficas.json}) a través del
+comando \texttt{python manage.py load\_explore --todas} (o automáticamente al finalizar un trabajo en
+\src{roi\_views.py} mediante \texttt{copy\_to\_database}). El cargador opera dentro de una transacción atómica
+(\texttt{transaction.atomic()}) con cuatro reglas de integridad científica:
+\begin{enumerate}
+  \item \textbf{Idempotencia por versión de código:} si se vuelve a cargar una inspección para la misma tupla
+        $(\text{escena}, \text{ROI}, \texttt{code\_version})$, se actualiza esa inspección y se reemplazan sus
+        tres gráficas; si el commit de código cambió, se inserta una nueva fila en \texttt{scenes\_sceneinspection}
+        conservando el historial de versiones previas para auditoría.
+  \item \textbf{Aborto transaccional ante inconsistencias:} si falta \path{graficas.json}, si el
+        \texttt{granuleId} de las gráficas no coincide con el de \path{metadatos.json}, si ambos archivos
+        provienen de commits distintos o si \texttt{version} difiere de \texttt{graficas-etapa1-1}, la
+        transacción hace \emph{rollback} sin escribir registros parciales.
+  \item \textbf{Protección del nivel de madurez:} una carga generada en modo local (donde el archivo \texttt{.h5}
+        carece del atributo \texttt{dataMaturity} del catálogo y reporta \texttt{null}) nunca sobrescribe un
+        valor de madurez (\texttt{PROVISIONAL} o \texttt{VALIDATED}) previamente registrado en \texttt{scenes\_scene}.
+  \item \textbf{Tolerancia a fallos del contenedor en ROIs web:} cuando termina un trabajo \texttt{/api/roi-jobs},
+        \src{pipeline/roi\_explore.py} escribe primero una copia duradera en disco en \path{data/graficas-roi/<id>/}
+        y luego intenta sincronizarla con PostGIS, registrando el resultado en \path{copia.json}
+        (\texttt{"base\_datos": "ok" | "parcial" | "no disponible"}). Si Docker está apagado, el usuario sigue
+        recibiendo su mapa y gráficas en la web desde disco, y las corridas pueden incorporarse posteriormente a
+        PostGIS ejecutando \texttt{python manage.py load\_explore --todas --dir data/graficas-roi/<id>}.
+\end{enumerate}
+
+\subsection{Orquestación con Docker Compose, volúmenes y coexistencia de puertos}
+
+El archivo \src{docker-compose.yml} define el servicio \texttt{db} desacoplando las credenciales mediante el
+archivo \path{.env} (que nunca se versiona en Git) y montando el volumen nombrado \texttt{pgdata} sobre
+\path{/var/lib/postgresql/data}:
+
+\begin{verbatim}
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-terrapulse}
+      POSTGRES_USER: ${POSTGRES_USER:-terrapulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definir POSTGRES_PASSWORD en .env}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+\end{verbatim}
+
+\begin{cuidado}
+\warn{Resolución del conflicto de puerto \texttt{5432} con instalaciones locales de PostgreSQL y persistencia de
+contraseña en el volumen \texttt{pgdata}.}
+En estaciones de trabajo Windows o Linux donde ya corre un servicio nativo de PostgreSQL (por ejemplo,
+\texttt{postgresql-x64-18} escuchando en \texttt{127.0.0.1:5432}), Django puede conectarse accidentalmente al
+motor local del sistema operativo en lugar de al contenedor PostGIS, provocando el error
+\texttt{FATAL: password authentication failed for user "terrapulse"}. La arquitectura de configuración lo
+resuelve mapeando en \path{.env} la variable \texttt{POSTGRES\_PORT=5433}: Docker publica entonces
+\texttt{5433:5432} sin detener la base local del desarrollador y sin perder los datos del volumen \texttt{pgdata}.
+Asimismo, dado que la imagen oficial de PostgreSQL solo evalúa \texttt{POSTGRES\_PASSWORD} durante el
+\texttt{initdb} inicial del volumen vacío, cualquier cambio posterior de contraseña en \path{.env} requiere
+actualizar el rol con \texttt{ALTER USER} vía \texttt{psql} o recrear el volumen con
+\texttt{docker compose down -v}.
+\end{cuidado}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_docker_postgis_esquema.png}
+  \caption{Contenedor PostgreSQL 16 + PostGIS 3.4 en ejecución mediante Docker Compose y consulta de verificación
+  sobre las tablas espaciales \texttt{scenes\_roi}, \texttt{scenes\_scene}, \texttt{scenes\_sceneinspection} y
+  \texttt{scenes\_scenechart}.}
+  \label{fig:img-docker-postgis}
+\end{figure}
+
+\section{Proveedor científico de elevación NASADEM y Simulador Solar API}
+\label{sec:arq-nasadem-solar}
+
+Además del pipeline de radar NISAR, TerraPulse AI integra un subsistema físico de topografía e irradiancia solar
+directa incidente compuesto por el proveedor \src{pipeline/elevation/nasadem.py}, el motor de cálculo solar
+\src{pipeline/solar/} y los servicios HTTP \src{backend/solar/} acoplados al panel interactivo
+\textbf{Simulador Solar \& Radiación} (\src{web/src/components/RightPanel.tsx} y \src{web/src/utils/solarHeatmap.ts}).
+
+\subsection{Proveedor \texttt{NASADEMProvider} (\src{pipeline/elevation/nasadem.py})}
+
+A diferencia del visor 3D del navegador (que consume teselas visuales Terrarium para renderizado rápido), todos
+los cálculos científicos del backend utilizan los archivos originales \textbf{\texttt{NASADEM\_HGT} versión
+\texttt{001}} distribuidos por NASA Earthdata / LP DAAC. El proveedor \texttt{NASADEMProvider} implementa un
+protocolo de adquisición con garantías estrictas de integridad y caché:
+
+\begin{enumerate}
+  \item \textbf{Enumeración geométrica exacta por intersección de área positiva:} al recibir una caja
+        \texttt{(west, south, east, north)} o un \texttt{Polygon}/\texttt{MultiPolygon} GeoJSON en
+        \texttt{EPSG:4326} dentro de la cobertura global de NASADEM ($\text{lat} \in [-56^\circ, +60^\circ]$,
+        $\text{lon} \in [-180^\circ, +180^\circ]$), el método \texttt{acquire\_roi} enumera únicamente las
+        teselas de $1^\circ \times 1^\circ$ (nombradas según su esquina suroeste, p.\,ej.\ \texttt{n16w094}) cuya
+        intersección con el polígono de la ROI tiene \textbf{área estrictamente positiva}. Si una ROI toca un
+        borde de grado exacto sin ocupar área en la tesela vecina, la tesela contigua no se descarga.
+  \item \textbf{Búsqueda unívoca en NASA CMR y autenticación no interactiva:} para cada tesela faltante consulta
+        el catálogo Common Metadata Repository (CMR) exigiendo una coincidencia única para la colección
+        \texttt{NASADEM\_HGT} versión \texttt{001} y \texttt{GranuleUR = NASADEM\_HGT\_<tile\_id>}. La sesión se
+        autentica sin intervención humana mediante \texttt{earthaccess.login(strategy="environment", persist=False)}
+        y respaldo \texttt{strategy="netrc"}, sin persistir secretos en disco ni exponer textos de excepción crudos.
+  \item \textbf{Validación estructural del binario HGT y publicación por \emph{staging}:} cada archivo ZIP se
+        descarga en un área temporal (\emph{staging}) dentro de la caché, rechazando enlaces simbólicos
+        (\emph{symlinks}) o rutas fuera de la raíz. Antes de publicarlo, el proveedor verifica que el ZIP
+        contenga exactamente un archivo \texttt{<tile\_id>.hgt} con CRC válido y tamaño exacto correspondiente
+        a una malla de $1\,\text{arc-second}$ ($3601 \times 3601$ muestras enteras de 16 bits con signo,
+        $25\,934\,402\,\text{bytes}$):
+        \begin{equation}
+          N_{\text{muestras}} = 3601 \times 3601 = 12\,967\,201, \qquad
+          \text{Tamaño}_{\mathrm{HGT}} = 2 \times 3601^2 = 25\,934\,402\,\unit{bytes}.
+          \label{eq:nasadem-hgt-size}
+        \end{equation}
+  \item \textbf{Recibos locales SHA-256 sin red:} al confirmar la identidad contra CMR, genera un recibo JSON
+        local con el \texttt{GranuleUR}, la versión y el hash criptográfico SHA-256 del binario HGT extraído. En
+        ejecuciones posteriores, si el ZIP y el hash SHA-256 del recibo coinciden, la tesela se entrega como una
+        tupla inmutable \texttt{NASADEMGranule(tile\_id, granule\_ur, short\_name, version, path)} directamente
+        desde disco sin requerir conexión a Internet ni credenciales Earthdata.
+\end{enumerate}
+
+\subsection{Física y formulación matemática del Simulador Solar API (\texttt{/api/solar/simulations})}
+
+El endpoint \texttt{POST /api/solar/simulations} calcula sobre la malla topográfica NASADEM la
+\textbf{irradiancia solar directa incidente} $G_i(x,y)$ en $\unit{W/m^2}$ para una fecha/hora local
+(\texttt{datetime\_local}), zona horaria IANA (\texttt{timezone}, p.\,ej.\ \texttt{America/Mexico\_City}),
+porcentaje de intensidad (\texttt{intensity\_percent} $\in [0, 100]$) y temperatura ambiente
+(\texttt{temperature\_c}, por defecto $12\,^\circ\unit{C}$):
+
+\begin{enumerate}
+  \item \textbf{Presión barométrica por atmósfera estándar y posición solar SPA:} a partir de la altitud
+        representativa $h_{\mathrm{rep}}$ (en metros sobre el geoide EGM96) extraída del recorte NASADEM de la
+        ROI, si el usuario no especifica \texttt{pressure\_hpa}, el motor calcula la presión atmosférica local
+        $P(h_{\mathrm{rep}})$ y evalúa el \emph{Solar Position Algorithm} (SPA, Reda \& Andreas) con corrección
+        por refracción atmosférica para obtener la elevación solar aparente $\alpha_s$, el ángulo cenital
+        $\theta_z = 90^\circ - \alpha_s$ y el acimut solar $\gamma_s$.
+  \item \textbf{Irradiancia Normal Directa (DNI) de cielo despejado con turbidez de Linke:} utilizando la
+        climatología mensual de turbidez atmosférica de Linke $T_L$ sobre la ROI (por ejemplo, $T_L = 3.85$ en
+        Chiapas en noviembre), calcula la irradiancia normal directa de cielo despejado $\mathrm{DNI}_{\mathrm{cs}}$
+        (modelo de Ineichen \& Perez) y aplica el factor de atenuación o nubosidad definida por el usuario
+        ($p_{\mathrm{int}} = \texttt{intensity\_percent}/100$):
+        \begin{equation}
+          \mathrm{DNI}_{\mathrm{adj}} = \frac{\texttt{intensity\_percent}}{100} \cdot \mathrm{DNI}_{\mathrm{cs}}
+          \quad [\unit{W/m^2}].
+          \label{eq:solar-dni-adj}
+        \end{equation}
+  \item \textbf{Proyección sobre la normal topográfica local e irradiancia incidente $G_i(x,y)$:} el DEM se
+        reproyecta al CRS UTM métrico de la zona (p.\,ej.\ \texttt{EPSG:32615}, resolución $\approx 30.92\,\unit{m}$)
+        y en cada celda $(x,y)$ se calculan la pendiente topográfica $\beta(x,y)$ y la orientación o aspecto de
+        la ladera $\gamma_t(x,y)$. El coseno del ángulo de incidencia $\theta_i(x,y)$ entre el vector unitario
+        apuntando hacia el Sol $\hat{\mathbf{s}}(\theta_z, \gamma_s)$ y la normal exterior de la ladera
+        $\hat{\mathbf{n}}(\beta, \gamma_t)$ viene dado por:
+        \begin{equation}
+          \cos\theta_i(x,y) = \cos\theta_z\,\cos\beta(x,y)
+          + \sin\theta_z\,\sin\beta(x,y)\,\cos\!\bigl(\gamma_s - \gamma_t(x,y)\bigr).
+          \label{eq:solar-cos-incidencia}
+        \end{equation}
+        Cuando el Sol se encuentra por debajo del horizonte astronómico ($\alpha_s \le 0^\circ$,
+        \texttt{night: true}) o cuando la propia inclinación de la ladera oculta al Sol ($\cos\theta_i(x,y) \le 0$,
+        auto-sombreado topográfico), la irradiancia directa incidente se anula:
+        \begin{equation}
+          G_i(x,y) =
+          \begin{cases}
+            0, & \text{si } \alpha_s \le 0^\circ \quad (\text{noche astronómica}), \\[4pt]
+            \mathrm{DNI}_{\mathrm{adj}} \cdot \max\!\bigl(0,\; \cos\theta_i(x,y)\bigr), & \text{si } \alpha_s > 0^\circ
+            \quad [\unit{W/m^2}].
+          \end{cases}
+          \label{eq:solar-gi-incidente}
+        \end{equation}
+\end{enumerate}
+
+\subsection{Contrato JSON de simulación solar, muestreo puntual e inversión de LUT \emph{Inferno}}
+
+La ejecución está protegida por un cerrojo de archivo inter-proceso multiplataforma (\texttt{fcntl.flock} en
+Linux/POSIX y \texttt{msvcrt.locking} en Windows en \src{backend/solar/services.py}; una petición concurrente
+recibe \texttt{429 Too Many Requests}) y por presupuestos operativos estrictos para evitar agotamiento de memoria
+(caja envolvente $\le 0.25^\circ$ por eje, diagonal geodésica $\le 30\,\unit{km}$, máximo 2 teselas NASADEM y
+$\le 500\,000$ píxeles; excesos devuelven \texttt{413 Payload Too Large}). La publicación es atómica: el servidor
+escribe el GeoTIFF numérico \texttt{float32} en UTM, la vista previa PNG RGBA con paleta \emph{Inferno} en
+\texttt{EPSG:4326} y el manifiesto JSON antes de responder \texttt{201 Created}:
+
+\begin{verbatim}
+POST /api/solar/simulations HTTP/1.1
+Host: 127.0.0.1:8000
+Content-Type: application/json
+
+{
+  "roi": {
+    "type": "Polygon",
+    "coordinates": [[
+      [-93.56, 16.74], [-93.54, 16.74],
+      [-93.54, 16.76], [-93.56, 16.76],
+      [-93.56, 16.74]
+    ]]
+  },
+  "datetime_local": "2026-11-15T12:00:00",
+  "timezone": "America/Mexico_City",
+  "intensity_percent": 50,
+  "temperature_c": 12
+}
+
+HTTP/1.1 201 Created
+Location: /api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0
+Content-Type: application/json
+
+{
+  "id": "8e1a075f7712435bab9a0292d8eb36c0",
+  "status": "ready",
+  "units": "W/m2",
+  "night": false,
+  "position": {
+    "datetime_utc": "2026-11-15T18:00:00+00:00",
+    "apparent_elevation_deg": 54.63962031088027,
+    "altitude_m": 782.1372680664062,
+    "altitude_datum": "EGM96",
+    "pressure_hpa": 922.7514462351598,
+    "temperature_c": 12.0
+  },
+  "clear_sky": {
+    "dni_clear_sky_w_m2": 885.3905049756529,
+    "dni_adjusted_w_m2": 442.69525248782645,
+    "intensity_percent": 50.0,
+    "linke_turbidity": 3.85
+  },
+  "raster": {
+    "crs": "EPSG:32615",
+    "width": 72,
+    "height": 74,
+    "resolution_m": [30.92222222222222, 30.92222222222222],
+    "units": "W/m2",
+    "valid_pixels": 4968
+  },
+  "preview": {
+    "crs": "EPSG:4326",
+    "width": 74,
+    "height": 73,
+    "bounds_lonlat": [-93.56034941688789, 16.739547709324466, -93.53927810823552, 16.760334270562613],
+    "palette": "inferno",
+    "range_w_m2": [0.0, 442.69525248782645],
+    "zero_range": false
+  },
+  "layers": {
+    "incident": {
+      "preview_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/preview/incident",
+      "export_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/export/incident"
+    }
+  },
+  "sample_url": "/api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/sample"
+}
+\end{verbatim}
+
+Para consultar el valor numérico real de cualquier coordenada geográfica sin interpolar ni leer del PNG, el
+endpoint \texttt{GET /api/solar/simulations/\{id\}/sample?lon=-93.55\&lat=16.75} proyecta $(\text{lon}, \text{lat})$
+de WGS84 al CRS UTM del GeoTIFF (\texttt{EPSG:32615}) y devuelve la celda exacta:
+
+\begin{verbatim}
+GET /api/solar/simulations/8e1a075f7712435bab9a0292d8eb36c0/sample?lon=-93.55&lat=16.75 HTTP/1.1
+Host: 127.0.0.1:8000
+Accept: application/json
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "value_w_m2": 400.95941162109375,
+  "status": "valid"
+}
+\end{verbatim}
+
+\begin{ejemplo}[Inversión de la LUT \emph{Inferno} en el cliente y verificación contra \texttt{incident.tif}]
+El PNG que entrega \texttt{preview/incident} está normalizado linealmente en el intervalo absoluto
+$[0, \mathrm{DNI}_{\mathrm{adj}}]$ mediante la tabla de 256 colores \emph{Inferno} de Matplotlib:
+\begin{equation}
+  u(x,y) = \operatorname{clip}\!\left(\frac{G_i(x,y)}{\mathrm{DNI}_{\mathrm{adj}}},\; 0,\; 1\right),
+  \qquad
+  k = \operatorname{round}(255 \cdot u(x,y)) \in \{0, 1, \ldots, 255\}.
+  \label{eq:solar-lut-forward}
+\end{equation}
+Cuando la ROI abarca un relieve moderado (por ejemplo, un radio de $2$ a $5\,\unit{km}$ donde casi todas las
+laderas reciben entre $398$ y $450\,\unit{W/m^2}$ sobre un $\mathrm{DNI}_{\mathrm{adj}} = 500\,\unit{W/m^2}$),
+todos los píxeles caen en una franja estrecha de tonos amarillos-naranjas y las diferencias geomorfológicas entre
+laderas norte y sur apenas se distinguen a simple vista.
+
+Para ofrecer realce de contraste instantáneo en el navegador sin volver a pedir el TIFF al servidor, el módulo
+\src{web/src/utils/solarHeatmap.ts} construye la tabla inversa de los 256 tripletes RGB de \emph{Inferno} y
+recupera la irradiancia física estimada $\hat{G}_i(x,y)$ de cada píxel opaco ($\alpha > 0$) buscando el índice
+$k^\star$ de mínima distancia euclidiana en el espacio de color:
+\begin{equation}
+  k^\star(x,y) = \arg\min_{k\in\{0,\ldots,255\}} \bigl\|\mathbf{c}_{\mathrm{PNG}}(x,y) - \mathbf{c}_{\mathrm{Inferno}}(k)\bigr\|_2^2,
+  \qquad
+  \hat{G}_i(x,y) = \frac{k^\star(x,y)}{255}\,\mathrm{DNI}_{\mathrm{adj}},
+  \label{eq:solar-lut-inverse}
+\end{equation}
+cuya resolución de cuantización es $\pm \mathrm{DNI}_{\mathrm{adj}} / 512 \approx \pm 1\,\unit{W/m^2}$. A partir
+de la matriz recuperada $\hat{G}_i(x,y)$, el navegador calcula los estadísticos del tablero (mínimo, máximo,
+mediana, media y cuantiles $p_2, p_{98}$) y permite conmutar entre dos modos de visualización:
+\begin{itemize}
+  \item \textbf{Modo Absoluto ($[0, \mathrm{DNI}_{\mathrm{adj}}]$):} conserva la escala física absoluta para
+        comparar directamente simulaciones a distintas horas del día.
+  \item \textbf{Modo Contraste ($[p_2, p_{98}]$):} reescala dinámicamente la rampa \emph{Inferno} entre los
+        percentiles 2 y 98 de la ROI activa, revelando con nitidez la estructura de cañadas y crestas.
+\end{itemize}
+En una prueba real con radio de $5\,\unit{km}$ en Chiapas ($324\times 326\,\text{px}$, NASADEM $30\,\unit{m}$),
+los cuantiles recuperados desde el PNG en el navegador ($p_2 = 294\,\unit{W/m^2}$, $\text{mediana} = 423\,\unit{W/m^2}$,
+$p_{98} = 479\,\unit{W/m^2}$) coincidieron dentro de $\le 1\,\unit{W/m^2}$ con los valores exactos en punto
+flotante de 32 bits medidos sobre \path{incident.tif} ($293$, $423$ y $480\,\unit{W/m^2}$, verificados en
+\src{web/tests/solarHeatmap.test.mjs}).
+\end{ejemplo}
+
+\begin{atencion}
+El simulador solar calcula exclusivamente la \textbf{irradiancia solar directa incidente de cielo despejado
+modulada por relieve y por el factor de intensidad del usuario}. No es una medición piranométrica de campo, no
+incluye radiación difusa anisotrópica del cielo ni radiación reflejada por el terreno circundante (albedo), y no
+modela balance térmico, absorción ni temperatura superficial. Esta delimitación explícita del alcance físico se
+muestra tanto en la documentación de la API como en las advertencias de la interfaz de usuario.
+\end{atencion}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.84\textwidth]{fig/IMG_simulador_solar_heatmap_ui.png}
+  \caption{Panel interactivo del \textbf{Simulador Solar \& Radiación} en la interfaz web de TerraPulse AI,
+  mostrando el mapa de calor de irradiancia directa incidente ($G_i$ en $\unit{W/m^2}$) sobre el relieve NASADEM
+  con paleta \emph{Inferno}, el conmutador de escala \textbf{Contraste ($p_2\text{--}p_{98}$)} / \textbf{Absoluta
+  ($0\text{--}\mathrm{DNI}$)} y el tablero de telemetría solar (elevación aparente SPA, DNI de cielo despejado y
+  ajustado, mediana y rango de irradiancia sobre la ROI).}
+  \label{fig:img-simulador-solar-ui}
+\end{figure}
 
 \end{document}
