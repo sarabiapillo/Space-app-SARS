@@ -226,3 +226,92 @@ test('DG2 chart data is null where older runs lack the inputs', async () => {
   assert.equal(data.distribution, null)
   assert.equal(data.evolution, null)
 })
+
+test('request builder keeps the exact body for a coastal form with every hydraulic option set', () => {
+  const form = filledForm({boundaryNorth:'closed',boundaryEast:'free',boundarySouth:'fixed_level',boundaryWest:'closed',seaLevel:'0',stillWater:true,infiltration:'runoff_coefficient',lakes:'hydrolakes',pressure:'990',amount:'50',rainDuration:'120',intervals:'2',duration:'180',save:'60',manning:'0.04',thinDepth:'0.02',thinDepthOff:false})
+  assert.deepEqual(buildRoiFloodRequest(form, square, tr), {roi:square,domain:square,
+    rainfall:{amount:50,unit:'mm',duration:120,duration_unit:'s'},
+    rainfall_profile:{interval_count:2,seed:7,distribution:'uniform_balanced'},
+    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
+    hydraulics:{manning:.04,initial_condition:'still_water_at_fixed_level',boundary:{north:{type:'closed'},east:{type:'free'},south:{type:'fixed_level',level_m:0},west:{type:'closed'}},infiltration:'runoff_coefficient',domain_nonurban:true,lakes:'hydrolakes',atmospheric_pressure_hpa:990},
+    simulation:{duration_s:180,save_interval_s:60,initial_tstep_s:1,dg2_depth_thresh_m:.02}})
+})
+
+const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,confirm:false})
+
+test('example values fill only the illustrative numbers and never the user declarations or choices', async () => {
+  const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
+  const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
+  assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
+    boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, confirm:false})
+  // Infiltration, lakes, domain and the nonurban declaration stay the user's explicit choice.
+  assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
+  assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr), /infiltración/)
+  const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, infiltration:'unsupported', lakes:'none'}, square, tr)
+  assert.deepEqual([body.rainfall.amount, body.rainfall.duration, body.simulation.duration_s, body.simulation.save_interval_s, body.simulation.dg2_depth_thresh_m], [30, 600, 900, 60, .02])
+})
+
+test('example CRS is the UTM zone of the ROI centre, EPSG:32615 without a ROI', async () => {
+  const { exampleFormValues, utmEpsgFor } = await import('../src/utils/floodDg2.ts')
+  assert.equal(utmEpsgFor(-93.1, 16.8), 'EPSG:32615')
+  assert.equal(utmEpsgFor(-115.3, 32.5), 'EPSG:32611')
+  assert.equal(utmEpsgFor(-70, -33), 'EPSG:32719')
+  assert.equal(exampleFormValues(emptyForm(), null).crs, 'EPSG:32615')
+  const baja = {type:'Polygon',coordinates:[[[-115.4,32.4],[-115.3,32.4],[-115.3,32.5],[-115.4,32.4]]]}
+  assert.equal(exampleFormValues(emptyForm(), baja).crs, 'EPSG:32611')
+})
+
+test('scenario presets: coast sets one fixed sea side at 0 m with still water; inland frees every side', async () => {
+  const { coastPreset, inlandPreset } = await import('../src/utils/floodDg2.ts')
+  const coast = coastPreset(filledForm({pressure:'', confirm:true}), 'south')
+  assert.deepEqual([coast.boundaryNorth, coast.boundaryEast, coast.boundarySouth, coast.boundaryWest, coast.seaLevel, coast.stillWater, coast.confirm], ['free', 'free', 'fixed_level', 'free', '0', true, false])
+  const hydraulics = buildRoiFloodRequest({...coast, confirm:true}, square, tr).hydraulics
+  assert.deepEqual(hydraulics.boundary, {north:{type:'free'},east:{type:'free'},south:{type:'fixed_level',level_m:0},west:{type:'free'}})
+  assert.equal(hydraulics.initial_condition, 'still_water_at_fixed_level')
+  const inland = inlandPreset({...coast, pressure:'990'})
+  assert.deepEqual([inland.boundaryNorth, inland.boundaryEast, inland.boundarySouth, inland.boundaryWest, inland.seaLevel, inland.stillWater, inland.pressure, inland.confirm], ['free', 'free', 'free', 'free', '', false, '', false])
+  assert.equal(buildRoiFloodRequest({...inland, confirm:true}, square, tr).hydraulics.initial_condition, 'dry_zero_velocity')
+})
+
+test('cell estimate follows the domain bounding box and resolution; the study ROI exceeds the 3000-cell default', async () => {
+  const { estimateDomainCells, DG2_DEFAULT_MAX_CELLS } = await import('../src/utils/floodDg2.ts')
+  assert.equal(DG2_DEFAULT_MAX_CELLS, 3000)
+  const cells = estimateDomainCells(filledForm(), square)
+  assert.ok(cells >= 1200 && cells <= 1500, `about 36 x 37 cells at 30 m, got ${cells}`)
+  assert.ok(estimateDomainCells(filledForm({resolution:'10'}), square) > cells * 8)
+  const studyRoi = {type:'Polygon',coordinates:[[[-93.3919,16.6539],[-92.8757,16.6539],[-92.8757,16.8964],[-93.3919,16.8964],[-93.3919,16.6539]]]}
+  assert.ok(estimateDomainCells(filledForm(), studyRoi) > 1_000_000)
+  // Explicit domain instead of the ROI.
+  assert.equal(estimateDomainCells(filledForm({useRoi:false, domain:JSON.stringify(square)}), studyRoi), cells)
+  for (const form of [filledForm({resolution:''}), filledForm({resolution:'-5'}), filledForm({useRoi:false, domain:'not json'})]) assert.equal(estimateDomainCells(form, square), null)
+  assert.equal(estimateDomainCells(filledForm(), null), null)
+})
+
+test('step status marks which panel steps are complete', async () => {
+  const { formStepStatus, exampleFormValues } = await import('../src/utils/floodDg2.ts')
+  assert.deepEqual(formStepStatus(emptyForm(), square), {zone:false, rain:false, terrain:false, solver:false, confirm:false})
+  const ready = {...exampleFormValues(emptyForm(), square), useRoi:true, infiltration:'unsupported', lakes:'none', nonurban:true, confirm:true}
+  assert.deepEqual(formStepStatus(ready, square), {zone:true, rain:true, terrain:true, solver:true, confirm:true})
+  assert.equal(formStepStatus(ready, null).zone, false)
+  assert.equal(formStepStatus({...ready, boundarySouth:'fixed_level', seaLevel:''}, square).terrain, false)
+  assert.equal(formStepStatus({...ready, thinDepth:'', thinDepthOff:true}, square).solver, true)
+})
+
+test('result summary: flooded area, maximum depth, volumes, Froude, time of concentration and road cuts', async () => {
+  const { dg2Summary } = await import('../src/utils/floodDg2.ts')
+  const result = {
+    grid:{cellsize_m:30},
+    frames:[{frame_index:1, scheduled_time_s:60, stats:{max_m:2.2, valid_cells:50, depth_class_cells:[10,6,3,2,1]}}],
+    maximum:{stats:{max_m:3.1, valid_cells:50, depth_class_cells:[12,9,5,3,2]}},
+    mass_balance:{series:[[20,500,600],[120,1500,2400]]},
+    froude:{min_depth_m:.15, frames:[{frame_index:1, cells:20, max:1.4, mean:.6, supercritical_cells:3}]},
+    time_of_concentration:{minutes:12.34, flow_length_m:900, slope_m_m:.02, upslope_area_km2:.5, outlet:[0,0]},
+    roads:{available:true, total_km:4, thresholds_m:{caution:.15, cut:.3}, maximum:{caution_km:.5, cut_km:1.25}, frames:[{frame_index:1, caution_km:.2, cut_km:.75}]},
+  }
+  assert.deepEqual(dg2Summary(result, null), {floodedHa:31*900/1e4, floodedPct:62, maxDepthM:3.1, domainM3:1500, rainM3:2400, froude:null, tcMin:12.34, roads:{cutKm:1.25, cautionKm:.5, totalKm:4}})
+  assert.deepEqual(dg2Summary(result, 1), {floodedHa:22*900/1e4, floodedPct:44, maxDepthM:2.2, domainM3:1500, rainM3:2400, froude:{max:1.4, supercritical:3, cells:20}, tcMin:12.34, roads:{cutKm:.75, cautionKm:.2, totalKm:4}})
+  const old = dg2Summary({grid:{cellsize_m:30}, frames:[], maximum:{stats:{max_m:1}}}, null)
+  assert.deepEqual(old, {floodedHa:null, floodedPct:null, maxDepthM:1, domainM3:null, rainM3:null, froude:null, tcMin:null, roads:null})
+  assert.equal(dg2Summary({...result, roads:{available:false}}, null).roads, 'unavailable')
+})

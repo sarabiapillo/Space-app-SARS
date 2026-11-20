@@ -48,6 +48,111 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth}}
 }
 
+/** Default `FLOOD_ROI_DG2_MAX_CELLS` of the server (configurable there); about 1 km² at 30 m. */
+export const DG2_DEFAULT_MAX_CELLS = 3000
+
+type Side = 'north' | 'east' | 'south' | 'west'
+const SIDE_KEYS: Record<Side, 'boundaryNorth' | 'boundaryEast' | 'boundarySouth' | 'boundaryWest'> = {north:'boundaryNorth',east:'boundaryEast',south:'boundarySouth',west:'boundaryWest'}
+
+function outerRing(polygon: Polygon | null): [number, number][] | null {
+  const ring = Array.isArray(polygon?.coordinates) ? (polygon!.coordinates as unknown[])[0] : null
+  if(!Array.isArray(ring)||ring.length<3) return null
+  const points = ring.filter((p): p is [number, number] => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+  return points.length===ring.length ? points : null
+}
+
+function parsePolygon(raw: string): Polygon | null {
+  try { const parsed=JSON.parse(raw); return parsed?.type==='Polygon'&&Array.isArray(parsed.coordinates)&&Object.keys(parsed).every(k=>['type','coordinates'].includes(k)) ? parsed : null }
+  catch { return null }
+}
+
+/** WGS 84 / UTM zone EPSG code (326xx north, 327xx south) for a longitude and latitude. */
+export function utmEpsgFor(lon: number, lat: number) {
+  const zone = Math.min(60, Math.max(1, Math.floor((lon + 180) / 6) + 1))
+  return `EPSG:${lat >= 0 ? 326 : 327}${String(zone).padStart(2, '0')}`
+}
+
+/** Fills the form with illustrative example values (not recommendations) so the user can review and run a
+ * small test. Declarations and modelling choices (domain, infiltration, lakes, nonurban, confirmation) stay
+ * the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a ROI). */
+export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): FloodDg2Form {
+  const ring = outerRing(roi)
+  const lons = ring?.map(p => p[0]) ?? [], lats = ring?.map(p => p[1]) ?? []
+  const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
+  return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
+    boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, confirm:false}
+}
+
+/** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM96) and starts full; the other sides are free. */
+export function coastPreset(form: FloodDg2Form, seaSide: Side): FloodDg2Form {
+  const sides = Object.fromEntries((Object.keys(SIDE_KEYS) as Side[]).map(side => [SIDE_KEYS[side], side === seaSide ? 'fixed_level' : 'free']))
+  return {...form, ...sides, seaLevel:'0', stillWater:true, confirm:false}
+}
+
+/** Inland scenario: water may leave through every side (FREE); no sea level, still water or pressure. */
+export function inlandPreset(form: FloodDg2Form): FloodDg2Form {
+  return {...form, boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'', confirm:false}
+}
+
+/** Approximate DEM cells (bounding box of the domain / resolution², local metres per degree), as the server
+ * counts them on the projected bounding box; null when the domain or the resolution is not valid yet. */
+export function estimateDomainCells(form: FloodDg2Form, roi: Polygon | null): number | null {
+  if(!roi) return null
+  const ring = outerRing(form.useRoi ? roi : parsePolygon(form.domain))
+  const resolution = Number(form.resolution)
+  if(!ring || !form.resolution.trim() || !Number.isFinite(resolution) || resolution <= 0) return null
+  const lons = ring.map(p => p[0]), lats = ring.map(p => p[1])
+  const midLat = (Math.min(...lats) + Math.max(...lats)) / 2 * Math.PI / 180
+  const width = (Math.max(...lons) - Math.min(...lons)) * 111320 * Math.cos(midLat)
+  const height = (Math.max(...lats) - Math.min(...lats)) * 110574
+  return Math.ceil(width / resolution) * Math.ceil(height / resolution)
+}
+
+/** Which steps of the panel look complete (display only; buildRoiFloodRequest still validates everything). */
+export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
+  const num = (raw: string) => raw.trim() ? Number(raw) : NaN
+  const positive = (raw: string, max = Infinity) => num(raw) > 0 && num(raw) <= max
+  const integer = (raw: string, min: number) => Number.isSafeInteger(num(raw)) && num(raw) >= min
+  const sides = [form.boundaryNorth, form.boundaryEast, form.boundarySouth, form.boundaryWest]
+  const anyFixed = sides.includes('fixed_level')
+  const pressure = num(form.pressure)
+  return {
+    zone: Boolean(roi) && (form.useRoi || parsePolygon(form.domain) !== null),
+    rain: positive(form.amount) && positive(form.rainDuration) && integer(form.intervals, 1) && integer(form.seed, 0),
+    terrain: /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling) && positive(form.manning)
+      && sides.every(v => ['closed','free','fixed_level'].includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
+      && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
+      && (!form.pressure.trim() || (anyFixed && pressure >= 950 && pressure <= 1040)),
+    solver: positive(form.duration, 86400) && positive(form.save) && positive(form.tstep) && (form.thinDepthOff || positive(form.thinDepth, 1)),
+    confirm: form.nonurban && form.confirm,
+  }
+}
+
+/** Headline numbers of the selected frame (or the maximum when `frameIndex` is null) for the result cards.
+ * Flooded area counts the depth classes (≥ 0.03 m), as the area chart does; null where older runs lack inputs. */
+export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'mass_balance' | 'froude' | 'time_of_concentration' | 'roads'>, frameIndex: number | null | undefined) {
+  const stats = frameIndex == null ? result.maximum.stats : result.frames.find(f => f.frame_index === frameIndex)?.stats
+  const classes = Array.isArray(stats?.depth_class_cells) ? (stats.depth_class_cells as number[]).reduce((a, b) => a + b, 0) : null
+  const cellsize = result.grid?.cellsize_m
+  const valid = Number(stats?.valid_cells)
+  const max = Number(stats?.max_m)
+  const last = result.mass_balance?.series?.at(-1)
+  const fr = frameIndex == null ? undefined : result.froude?.frames.find(f => f.frame_index === frameIndex)
+  const roads = result.roads
+  const exposure = roads?.available ? (frameIndex == null ? roads.maximum : roads.frames?.find(f => f.frame_index === frameIndex)) : null
+  return {
+    floodedHa: classes != null && cellsize ? classes * cellsize ** 2 / 1e4 : null,
+    floodedPct: classes != null && valid > 0 ? classes * 100 / valid : null,
+    maxDepthM: stats?.max_m != null && Number.isFinite(max) ? max : null,
+    domainM3: last ? last[1] : null,
+    rainM3: last ? last[2] : null,
+    froude: fr ? {max: fr.max, supercritical: fr.supercritical_cells, cells: fr.cells} : null,
+    tcMin: result.time_of_concentration?.minutes ?? null,
+    roads: !roads ? null : !roads.available ? 'unavailable' as const : {cutKm: exposure?.cut_km ?? 0, cautionKm: exposure?.caution_km ?? 0, totalKm: roads.total_km ?? 0},
+  }
+}
+
 /** Solver-velocity arrows of one frame as GeoJSON; null for the maximum or runs without velocities. */
 export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameIndex: number | null | undefined): FlowArrowCollection | null {
   if(frameIndex==null) return null

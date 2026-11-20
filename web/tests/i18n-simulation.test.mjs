@@ -41,7 +41,8 @@ test('simulation panels switch display language but retain numeric input and sci
   const enRain = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
   const enSolar = render(RightPanel, { solar, onSolarChange() {}, onClose() {}, croppedRegion: roi })
   assert.match(enRain, /Hypothetical rainfall \(mm\)/)
-  assert.match(enRain, /Infiltration <select>/)
+  // The label text is a span next to the select inside the same <label> (redesigned panel, T1 of flood-ui-friendly).
+  assert.match(enRain, /Infiltration<\/span><select/)
   assert.match(enRain, /not modeled \(all rain runs off\)/)
   assert.match(enRain, /Atmospheric pressure \(hPa, 950–1040; optional\)/)
   assert.match(enRain, /Synthetic profile seed/)
@@ -49,6 +50,17 @@ test('simulation panels switch display language but retain numeric input and sci
   assert.match(enSolar, /aria-valuenow="90"/)
   assert.match(enSolar, /value="90"/)
   assert.doesNotMatch(enRain, /Lluvia hipotética|escorrentía/)
+  setLanguage('es')
+})
+
+test('redesigned DG2 panel shows its steps, example action and explanation in the selected language only', () => {
+  setLanguage('es')
+  const es = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  for (const text of [/Cargar valores de ejemplo/, /Opciones avanzadas/, /Cómo funciona la simulación/, /Mar al sur/, /celdas de|resolución/]) assert.match(es, text)
+  setLanguage('en')
+  const en = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  for (const text of [/Load example values/, /Advanced options/, /How the simulation works/, /Sea to the south/]) assert.match(en, text)
+  assert.doesNotMatch(en, /Cargar valores|Opciones avanzadas|Cómo funciona|Mar al sur|Tierra adentro|Faltan valores/)
   setLanguage('es')
 })
 
