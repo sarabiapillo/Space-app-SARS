@@ -56,10 +56,20 @@ def _public(run):
     # Infiltration coefficient and barometric surge (null in runs created before they existed).
     result['losses'] = run.get('losses')
     result['lakes'] = run.get('lakes')  # 'none' or 'hydrolakes'; null in older runs
+    result.update(_terrain(run))
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'
     return result
+
+
+def _terrain(run):
+    """Terrain source, vertical datum of every height and the licence notice the source requires.
+
+    Runs created before the terrain choice used NASADEM heights in EGM96, without a required notice."""
+    return {'terrain_source': run.get('terrain_source', 'nasadem'),
+            'vertical_datum': run.get('vertical_datum', 'EGM96'),
+            'terrain_attribution': run.get('terrain_attribution')}
 
 
 def _owned(request, run_id):
@@ -137,6 +147,8 @@ class RoiRunResultsView(APIView):
             result['requested_solver'] = run['result'].get('requested_solver', 'dg2')
             result['solver'] = run['result'].get('solver', 'dg2')
             result['solver_fallback'] = run['result'].get('solver_fallback')
+            # Terrain source and datum come from the run state (the summary does not repeat them).
+            result.update(_terrain(run))
             result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)

@@ -20,10 +20,13 @@ class ServiceSetupTests(SimpleTestCase):
         self.assertEqual(root, str(PROJECT / 'data/roi-dg2-jobs'))
         self.assertEqual(config['max_tiles'], 2)
         self.assertTrue(config['lakes_path'].endswith('data/reference/hydrolakes/HydroLAKES_polys_v10.gpkg'))
+        # EGM96/EGM2008 geoid grids (python -m pipeline.elevation.vertical_datum prepare); every run needs them.
+        self.assertEqual(config['geoid_dir'], str(PROJECT / 'data/reference/geoid'))
         self.assertEqual(config['binary_sha256'], '777d50f8d6a926260baa31b4c8ca3ecc0b3ae710494bebb2d4699ccf8c39775c')
         self.assertEqual(build_flood_service_settings(PROJECT, {'FLOOD_ROI_DG2_ENABLED': 'false'})[2], None)
         for name, value in [('FLOOD_ROI_DG2_MAX_CELLS', '-1'), ('FLOOD_ROI_DG2_MAX_TILES', '999999999'),
-                            ('FLOOD_ROI_DG2_ENABLED', 'secret-value'), ('FLOOD_ROI_DG2_EXECUTABLE', '/tmp/executable')]:
+                            ('FLOOD_ROI_DG2_ENABLED', 'secret-value'), ('FLOOD_ROI_DG2_EXECUTABLE', '/tmp/executable'),
+                            ('FLOOD_ROI_DG2_GEOID_DIR', '/tmp/geoid')]:
             with self.subTest(name=name), self.assertRaises(ValueError) as error:
                 build_flood_service_settings(PROJECT, {name: value})
             self.assertNotIn(value, str(error.exception))

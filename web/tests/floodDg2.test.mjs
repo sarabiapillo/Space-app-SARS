@@ -101,13 +101,13 @@ test('controller invalidation aborts stale ROI and revokes object URLs; no resul
 const { buildRoiFloodRequest } = await import('../src/utils/floodDg2.ts')
 const tr = es => es
 const square = {type:'Polygon',coordinates:[[[-93.3,16.67],[-93.29,16.67],[-93.29,16.68],[-93.3,16.68],[-93.3,16.67]]]}
-const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,infiltration:'unsupported',pressure:'',lakes:'none',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,solver:'dg2',confirm:true,...overrides})
+const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,infiltration:'unsupported',pressure:'',lakes:'none',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,solver:'dg2',terrainSource:'nasadem',confirm:true,...overrides})
 
 test('request builder keeps every previous field and sends an explicitly disabled thin-depth threshold as null', () => {
   assert.deepEqual(buildRoiFloodRequest(filledForm(), square, tr), {roi:square,domain:square,
     rainfall:{amount:20,unit:'mm',duration:600,duration_unit:'s'},
     rainfall_profile:{interval_count:4,seed:7,distribution:'uniform_balanced'},
-    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
+    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest',source:'nasadem'},
     hydraulics:{manning:.05,initial_condition:'dry_zero_velocity',boundary:{north:{type:'free'},east:{type:'free'},south:{type:'free'},west:{type:'free'}},infiltration:'unsupported',domain_nonurban:true,lakes:'none'},
     simulation:{duration_s:900,save_interval_s:300,initial_tstep_s:1,dg2_depth_thresh_m:null,solver:'dg2'}})
 })
@@ -232,24 +232,42 @@ test('request builder keeps the exact body for a coastal form with every hydraul
   assert.deepEqual(buildRoiFloodRequest(form, square, tr), {roi:square,domain:square,
     rainfall:{amount:50,unit:'mm',duration:120,duration_unit:'s'},
     rainfall_profile:{interval_count:2,seed:7,distribution:'uniform_balanced'},
-    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest'},
+    terrain:{target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest',source:'nasadem'},
     hydraulics:{manning:.04,initial_condition:'still_water_at_fixed_level',boundary:{north:{type:'closed'},east:{type:'free'},south:{type:'fixed_level',level_m:0},west:{type:'closed'}},infiltration:'runoff_coefficient',domain_nonurban:true,lakes:'hydrolakes',atmospheric_pressure_hpa:990},
     simulation:{duration_s:180,save_interval_s:60,initial_tstep_s:1,dg2_depth_thresh_m:.02,solver:'dg2'}})
 })
 
-const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,solver:'dg2',confirm:false})
+const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,solver:'dg2',terrainSource:'',confirm:false})
 
 test('example values fill only the illustrative numbers and never the user declarations or choices', async () => {
   const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
   assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', confirm:false})
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus', confirm:false})
   // Infiltration, lakes, domain and the nonurban declaration stay the user's explicit choice.
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr), /infiltración/)
   const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, infiltration:'unsupported', lakes:'none'}, square, tr)
   assert.deepEqual([body.rainfall.amount, body.rainfall.duration, body.simulation.duration_s, body.simulation.save_interval_s, body.simulation.dg2_depth_thresh_m], [30, 600, 900, 60, .02])
+  assert.equal(body.terrain.source, 'copernicus')  // the example picks the recommended Copernicus GLO-30
+})
+
+test('terrain source: Copernicus or NASADEM is sent as terrain.source and must be chosen', () => {
+  assert.deepEqual(buildRoiFloodRequest(filledForm({terrainSource:'copernicus'}), square, tr).terrain,
+    {target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest',source:'copernicus'})
+  // Only terrain.source differs between the two choices.
+  const nasadem = buildRoiFloodRequest(filledForm(), square, tr), copernicus = buildRoiFloodRequest(filledForm({terrainSource:'copernicus'}), square, tr)
+  assert.deepEqual({...copernicus, terrain:{...copernicus.terrain, source:'nasadem'}}, nasadem)
+  for (const terrainSource of ['', 'srtm', 'Copernicus']) assert.throws(() => buildRoiFloodRequest(filledForm({terrainSource}), square, tr), /fuente del terreno/)
+})
+
+test('terrain labels name the source and the EGM2008 datum of every height', async () => {
+  const { terrainLabel } = await import('../src/utils/floodDg2.ts')
+  assert.equal(terrainLabel('copernicus'), 'Copernicus GLO-30')
+  assert.equal(terrainLabel('nasadem'), 'NASADEM')
+  assert.equal(terrainLabel(undefined), 'NASADEM')  // runs created before the choice used NASADEM
+  assert.throws(() => buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel:'x'}), square, tr), /EGM2008/)
 })
 
 test('example CRS is the UTM zone of the ROI centre, EPSG:32615 without a ROI', async () => {
@@ -296,6 +314,7 @@ test('step status marks which panel steps are complete', async () => {
   assert.equal(formStepStatus(ready, null).zone, false)
   assert.equal(formStepStatus({...ready, boundarySouth:'fixed_level', seaLevel:''}, square).terrain, false)
   assert.equal(formStepStatus({...ready, thinDepth:'', thinDepthOff:true}, square).solver, true)
+  assert.equal(formStepStatus({...ready, terrainSource:''}, square).terrain, false)
 })
 
 test('result summary: flooded area, maximum depth, volumes, Froude, time of concentration and road cuts', async () => {

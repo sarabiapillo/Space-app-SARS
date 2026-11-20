@@ -52,6 +52,9 @@ def build_flood_service_settings(project_root, environ):
         # HydroLAKES GeoPackage (python -m pipeline.hydrology.lakes prepare ...); the lakes option is
         # refused per request while this file does not exist.
         'lakes_path': path('LAKES_PATH', 'reference/hydrolakes/HydroLAKES_polys_v10.gpkg'),
+        # NGA EGM96/EGM2008 geoid grids (python -m pipeline.elevation.vertical_datum prepare): every height
+        # is converted to EGM2008, so the service is unavailable while they are missing.
+        'geoid_dir': path('GEOID_DIR', 'reference/geoid'),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):
         supplied = environ.get(prefix + key, pinned)

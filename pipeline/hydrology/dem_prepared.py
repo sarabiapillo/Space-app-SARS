@@ -1,9 +1,14 @@
-"""Offline structural preparation of NASADEM HGT into a clipped terrain raster.
+"""Offline structural preparation of NASADEM HGT or NISAR_DEM (Copernicus GLO-30) into a clipped terrain raster.
 
-This module prepares elevations only; its output is not certified for hydraulic use.
+Heights end in the simulator's single vertical datum, EGM2008 (``target_vertical_datum="EGM2008"``):
+NASADEM (EGM96) gets ``+ N_EGM96 - N_EGM2008`` and NISAR_DEM (WGS84 ellipsoid) gets ``- N_EGM2008`` at each
+target cell centre (``pipeline.elevation.vertical_datum``). ``"EGM96"`` keeps NASADEM unchanged for
+callers that still declare it (solar). This module prepares elevations only; its output is not certified
+for hydraulic use.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,7 +23,10 @@ from rasterio.transform import from_origin
 from rasterio.warp import transform_geom
 from pyproj import CRS
 
+from pipeline.elevation import copernicus
+from pipeline.elevation.copernicus import CopernicusTile
 from pipeline.elevation.nasadem import NASADEMGranule, validate_hgt_zip
+from pipeline.elevation.vertical_datum import DATUM, load_grids, to_egm2008
 from pipeline.hydrology.inputs import validate_roi
 
 _SOURCE_PRODUCT = "NASADEM_HGT"
@@ -56,8 +64,17 @@ def _validate_parameters(geometry, records, output_dir, target_crs, resolution_m
         raise ValueError("max_cells must be a positive integer")
     if not isinstance(resampling, str) or resampling not in {"nearest", "bilinear"}:
         raise ValueError("resampling must be explicitly nearest or bilinear")
-    if target_vertical_datum != _SOURCE_DATUM:
-        raise ValueError("target vertical datum must equal source vertical datum EGM96")
+    if not isinstance(records, (tuple, list)) or not records:
+        raise ValueError("records must be a non-empty collection of NASADEMGranule or CopernicusTile")
+    kinds = {type(record) for record in records}
+    if kinds == {NASADEMGranule}:
+        if target_vertical_datum not in (_SOURCE_DATUM, DATUM):
+            raise ValueError("NASADEM target vertical datum must be EGM96 (unchanged) or EGM2008 (converted)")
+    elif kinds == {CopernicusTile}:
+        if target_vertical_datum != DATUM:
+            raise ValueError("NISAR_DEM ellipsoidal heights are only prepared in EGM2008")
+    else:
+        raise ValueError("records must all be NASADEMGranule or all CopernicusTile")
     if not isinstance(code_version, str) or not code_version.strip():
         raise ValueError("code_version must be a non-empty declared string")
     if not isinstance(output_dir, (str, Path)) or not str(output_dir):
@@ -66,8 +83,6 @@ def _validate_parameters(geometry, records, output_dir, target_crs, resolution_m
     if destination.exists():
         raise FileExistsError("output directory already exists; refusing overwrite")
     crs = _validate_crs(target_crs)
-    if not isinstance(records, (tuple, list)) or not records:
-        raise ValueError("records must be a non-empty collection of NASADEMGranule")
     return validated, destination, crs, resolution
 
 
@@ -89,7 +104,30 @@ def _tile_identity(record):
     return tile, lon, lat
 
 
+def _inspect_copernicus(records):
+    validated, seen = [], set()
+    for record in records:
+        if record.short_name != copernicus.SHORT_NAME or record.version != copernicus.VERSION:
+            raise ValueError("record collection identity must be NISAR_DEM version 1.2")
+        lon, lat = copernicus._corner(record.tile_id)
+        if record.tile_id in seen:
+            raise ValueError(f"duplicate NISAR_DEM tile {record.tile_id}")
+        seen.add(record.tile_id)
+        if not re.fullmatch(rf"v1-2-EPSG4326-.+-DEM_{record.tile_id}_C\d{{2}}-tif", str(record.granule_ur)):
+            raise ValueError("record tile and granule identity mismatch")
+        path = Path(record.path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("NISAR_DEM clip is not a regular file")
+        with path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != record.sha256:
+                raise ValueError(f"NISAR_DEM clip for {record.tile_id} changed after acquisition")
+        validated.append({"record": record, "tile": record.tile_id, "lon": lon, "lat": lat, "sha256": record.sha256})
+    return sorted(validated, key=lambda item: (item["lat"], item["lon"], item["tile"]))
+
+
 def _inspect_records(records):
+    if isinstance(records[0], CopernicusTile):
+        return _inspect_copernicus(records)
     validated = []
     seen = set()
     for record in records:
@@ -137,10 +175,23 @@ def _open_hgt(info):
     return dataset
 
 
+def _open_source(info):
+    if "member" in info:
+        return _open_hgt(info)
+    dataset = rasterio.open(Path(info["record"].path).resolve(strict=True))
+    if dataset.count != 1 or dataset.crs is None or dataset.crs.to_epsg() != 4326:
+        dataset.close()
+        raise ValueError("NISAR_DEM clip has unexpected structure")
+    return dataset
+
+
 def _warp_tile(dataset, transform, crs, width, height, method):
     from rasterio.warp import reproject
     source = dataset.read(1, masked=False)
-    validity = (source >= _VALID_MIN) & (source <= _VALID_MAX)
+    if source.dtype.kind == "f":
+        validity = np.isfinite(source)
+    else:
+        validity = (source >= _VALID_MIN) & (source <= _VALID_MAX)
     # Reproject values and an independent nearest-neighbour validity mask. The
     # latter prevents bilinear interpolation over voids becoming valid ground.
     source_float = source.astype(np.float32)
@@ -156,13 +207,43 @@ def _warp_tile(dataset, transform, crs, width, height, method):
     return destination, valid_target.astype(bool) & np.isfinite(destination)
 
 
+def _to_egm2008(output, selected, transform, target_crs, source_datum, grids):
+    """Convert the selected cells to EGM2008 at their centres; returns conversion details."""
+    from pyproj import Transformer
+    rows, cols = np.nonzero(selected)
+    xs, ys = rasterio.transform.xy(transform, rows, cols, offset="center")
+    lon, lat = Transformer.from_crs(target_crs, "EPSG:4326", always_xy=True).transform(np.asarray(xs), np.asarray(ys))
+    converted, details = to_egm2008(output[selected].astype("float64"), np.asarray(lon), np.asarray(lat),
+                                    source_datum, grids if grids is not None else load_grids())
+    output[selected] = converted.astype(np.float32)
+    details["applied_at"] = "target cell centres after horizontal reprojection"
+    return details
+
+
+def _source_manifest(inspected):
+    if isinstance(inspected[0]["record"], CopernicusTile):
+        return {"product": copernicus.SHORT_NAME, "version": copernicus.VERSION,
+                "collection_concept_id": copernicus.CONCEPT_ID, "doi": copernicus.DOI,
+                "vertical_datum": copernicus.SOURCE_VERTICAL_DATUM, "citation": copernicus.CITATION,
+                "attribution": copernicus.ATTRIBUTION, "disclaimer": copernicus.DISCLAIMER,
+                "licence": copernicus.LICENCE_URL,
+                "records": [{"tile_id": item["tile"], "granule_ur": item["record"].granule_ur,
+                             "url": item["record"].url, "window": list(item["record"].window),
+                             "clip_sha256": item["sha256"]} for item in inspected]}
+    return {"product": _SOURCE_PRODUCT, "version": _SOURCE_VERSION, "vertical_datum": _SOURCE_DATUM,
+            "records": [{"tile_id": item["tile"], "granule_ur": item["record"].granule_ur,
+                         "member": item["member"], "hgt_sha256": item["sha256"]} for item in inspected]}
+
+
 def prepare_dem(geometry, records, output_dir, *, target_crs, resolution_m,
-                resampling, max_cells, target_vertical_datum, code_version):
-    """Prepare caller geometry from already-acquired NASADEM granules, offline.
+                resampling, max_cells, target_vertical_datum, code_version, geoid_grids=None):
+    """Prepare caller geometry from already-acquired NASADEM granules or NISAR_DEM clips, offline.
 
     Selected pixel centers define coverage and geometry masking. Missing any
     selected center is an error. Overlaps use first-valid in stable tile order.
-    No filling, sink treatment, channel carving, or vertical conversion occurs.
+    No filling, sink treatment or channel carving occurs. With ``target_vertical_datum="EGM2008"``
+    heights are converted with the geoid grids (``geoid_grids`` maps EGM96/EGM2008 to grid paths;
+    default: the pinned grids in data/reference/geoid).
     """
     geometry, destination, target_crs_obj, resolution = _validate_parameters(
         geometry, records, output_dir, target_crs, resolution_m, resampling,
@@ -178,7 +259,7 @@ def prepare_dem(geometry, records, output_dir, *, target_crs, resolution_m,
     output = np.full((height, width), np.nan, dtype=np.float32)
     assigned = np.zeros((height, width), dtype=bool)
     for info in inspected:
-        dataset = _open_hgt(info)
+        dataset = _open_source(info)
         try:
             warped, valid = _warp_tile(dataset, transform, target_crs_obj, width, height, resampling)
         finally:
@@ -189,7 +270,11 @@ def prepare_dem(geometry, records, output_dir, *, target_crs, resolution_m,
     missing = selected & ~assigned
     missing_count = int(np.count_nonzero(missing))
     if missing_count:
-        raise ValueError(f"NASADEM coverage missing for {missing_count} selected cell centers")
+        raise ValueError(f"terrain coverage missing for {missing_count} selected cell centers")
+    source = _source_manifest(inspected)
+    conversion = None
+    if source["vertical_datum"] != target_vertical_datum:
+        conversion = _to_egm2008(output, selected, transform, target_crs_obj, source["vertical_datum"], geoid_grids)
 
     # All source/config/coverage checks precede the first destination write.
     destination.mkdir(parents=False, exist_ok=False)
@@ -201,14 +286,12 @@ def prepare_dem(geometry, records, output_dir, *, target_crs, resolution_m,
         raster.write(output, 1)
     manifest = {
         "geometry": {"crs": "EPSG:4326", "geojson": geometry},
-        "source": {"product": _SOURCE_PRODUCT, "version": _SOURCE_VERSION,
-                   "vertical_datum": _SOURCE_DATUM,
-                   "records": [{"tile_id": item["tile"], "granule_ur": item["record"].granule_ur,
-                                "member": item["member"], "hgt_sha256": item["sha256"]}
-                               for item in inspected]},
+        "source": source,
         "source_horizontal_crs": "EPSG:4326 geographic tile grid",
         "destination_horizontal_crs": target_crs_obj.to_string(),
         "target_vertical_datum": target_vertical_datum,
+        "vertical_datum": target_vertical_datum,
+        "vertical_conversion": conversion,
         "grid": {"width": width, "height": height, "resolution_m": resolution,
                  "transform": list(transform)[:6], "nodata": "NaN",
                  "geometry_mask": "selected pixel centers only; outside geometry is nodata"},
@@ -218,8 +301,12 @@ def prepare_dem(geometry, records, output_dir, *, target_crs, resolution_m,
                      "covered_selected_cells": selected_count,
                      "missing_selected_cells": 0,
                      "interpretation": "discrete structural coverage only; not proof of continuous-area or hydrologic coverage"},
-        "height_policy": "HGT valid range -32767..32767 metres; -32768 excluded (not labeled official nodata); no fill or terrain surgery",
-        "vertical_operation": "horizontal reprojection only; EGM96 elevations unchanged except explicit resampling",
+        "height_policy": ("HGT valid range -32767..32767 metres; -32768 excluded (not labeled official nodata); no fill or terrain surgery"
+                          if source["product"] == _SOURCE_PRODUCT else
+                          "finite float32 heights only; non-finite excluded; no fill or terrain surgery"),
+        "vertical_operation": ("horizontal reprojection only; EGM96 elevations unchanged except explicit resampling"
+                               if conversion is None else
+                               f"horizontal reprojection, then {conversion['formula']} at each target cell centre"),
         "code_version": code_version,
         "hydraulic_ready": False,
         "blockers": ["scientific domain and boundary conditions pending", "topographic suitability and DG2 preparation pending"],

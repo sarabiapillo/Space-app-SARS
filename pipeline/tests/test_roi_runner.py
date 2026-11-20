@@ -11,9 +11,12 @@ import pytest
 import rasterio
 from scipy.io import netcdf_file
 
-from pipeline.elevation.nasadem import NASADEMGranule, _required_tiles, _validated_geometry
+from pipeline.elevation import copernicus as cop, vertical_datum as vd
+from pipeline.elevation.copernicus import CopernicusDEMProvider, CopernicusTile
+from pipeline.elevation.nasadem import NASADEMGranule, NASADEMProvider, _required_tiles, _validated_geometry
 from pipeline.hydrology.results import NegativeDepthArtifacts, summarize_results
-from pipeline.hydrology.roi_runner import validate_roi_run, start_roi_run, run_roi_worker, get_roi_run, solver_parameter_file
+from pipeline.hydrology.roi_runner import (validate_roi_run, validate_config, start_roi_run, run_roi_worker, get_roi_run,
+                                           solver_parameter_file, terrain_provider)
 
 BASE = Path(__file__).resolve().parents[2] / 'data/test-runs'
 BIN = Path(__file__).resolve().parents[2] / 'data/tools/lisflood-fp-8.0/runtime/build'
@@ -49,6 +52,18 @@ def root():
     return BASE / f'roi-dg2-{uuid.uuid4()}'
 
 
+def geoid_shift(source, lon=-92.9996, lat=16.80015):
+    """EGM2008 shift the runner applies at the test domain: N96 - N08 (NASADEM) or -N08 (ellipsoidal NISAR_DEM)."""
+    grids = vd.load_grids()
+    n08 = vd.undulation([lon], [lat], grids['EGM2008'])[0]
+    return float(vd.undulation([lon], [lat], grids['EGM96'])[0] - n08) if source == 'nasadem' else float(-n08)
+
+
+def terrain_m():
+    """Flat 100 m EGM96 NASADEM fixture after the runner converts it to EGM2008."""
+    return 100 + geoid_shift('nasadem')
+
+
 @pytest.mark.parametrize('change', [
     lambda p: p.pop('domain'),
     lambda p: p['terrain'].update(resolution_m=True),
@@ -69,6 +84,10 @@ def root():
     lambda p: p['simulation'].update(solver='FV1'),
     lambda p: p['simulation'].update(solver=True),
     lambda p: p['simulation'].update(solver='fv1', dg2_depth_thresh_m=.02),
+    lambda p: p['terrain'].update(source='Copernicus'),
+    lambda p: p['terrain'].update(source='srtm'),
+    lambda p: p['terrain'].update(source=None),
+    lambda p: p['terrain'].update(source=True),
 ])
 def test_bad_input_never_creates_jobs(root, change):
     p = payload(); change(p)
@@ -188,10 +207,12 @@ def test_native_fixed_level_starts_and_keeps_still_water(root):
     bci = (work / 'boundary.bci').read_text().splitlines()
     assert [line.split()[0] for line in bci] == ['E', 'W'] and bci[1].endswith('HFIX 100.5')
     assert {'initial.wd', 'initial.wd1x', 'initial.wd1y'} <= set(state['input_hashes'])
+    # The 100 m EGM96 terrain becomes 100 + N96 - N08 in EGM2008; the sea level 100.5 m is EGM2008.
+    depth = 100.5 - terrain_m()
     first = state['result']['frames'][0]['stats']
-    assert first['min_m'] == pytest.approx(.5, abs=1e-3) and first['max_m'] == pytest.approx(.5, abs=1e-3)
+    assert first['min_m'] == pytest.approx(depth, abs=5e-3) and first['max_m'] == pytest.approx(depth, abs=5e-3)
     last = state['result']['frames'][-1]['stats']
-    assert last['max_m'] == pytest.approx(.502, abs=.01)  # 0.5 m sea plus the 2 mm of rain inside the ROI
+    assert last['max_m'] == pytest.approx(depth + .002, abs=.01)  # sea depth plus the 2 mm of rain inside the ROI
     assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05
 
 
@@ -203,9 +224,10 @@ def test_native_fv1_fixed_level_starts_and_keeps_still_water(root):
     work = root / job['id'] / 'work'
     assert (work / 'roi.par').read_text().splitlines()[0] == 'fv1'
     assert 'initial.wd' in state['input_hashes'] and not {'initial.wd1x', 'initial.wd1y', 'terrain.dem1x'} & set(state['input_hashes'])
+    depth = 100.5 - terrain_m()
     first = state['result']['frames'][0]['stats']
-    assert first['min_m'] == pytest.approx(.5, abs=1e-3) and first['max_m'] == pytest.approx(.5, abs=1e-3)
-    assert state['result']['frames'][-1]['stats']['max_m'] == pytest.approx(.502, abs=.01)
+    assert first['min_m'] == pytest.approx(depth, abs=5e-3) and first['max_m'] == pytest.approx(depth, abs=5e-3)
+    assert state['result']['frames'][-1]['stats']['max_m'] == pytest.approx(depth + .002, abs=.01)
     assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05  # FV1 also writes Vx/Vy with voutput
     assert state['solver'] == state['result']['solver'] == state['provenance']['solver'] == 'fv1'
     assert state['solver_fallback'] is None and state['result']['solver_fallback'] is None
@@ -297,7 +319,7 @@ def test_native_pressure_raises_the_sea_and_infiltration_reduces_the_rain(root):
     surge, coefficient = 1000 / 9810, job['losses']['runoff_coefficient']
     bci = (root / job['id'] / 'work' / 'boundary.bci').read_text().splitlines()
     assert float(bci[1].split()[-1]) == pytest.approx(100.5 + surge)
-    assert state['result']['frames'][0]['stats']['min_m'] == pytest.approx(.5 + surge, abs=1e-3)
+    assert state['result']['frames'][0]['stats']['min_m'] == pytest.approx(100.5 - terrain_m() + surge, abs=5e-3)
     rain = state['provenance']['rain']['profile']['rainfall']['amount_m']
     assert rain == pytest.approx(.002 * coefficient)
 
@@ -351,7 +373,8 @@ def test_native_hydrolakes_lake_starts_full_over_a_burned_bed(root, tmp_path):
     state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
     assert state['state'] == 'succeeded', state
     [lake] = state['result']['lakes']
-    assert lake['hylak_id'] == 42 and lake['depth_avg_m'] == 2.0 and lake['cells'] > 0 and lake['surface_m'] == 100
+    assert lake['hylak_id'] == 42 and lake['depth_avg_m'] == 2.0 and lake['cells'] > 0
+    assert lake['surface_m'] == pytest.approx(terrain_m(), abs=1e-3)  # median of the EGM2008 terrain
     assert 'startfile initial.wd' in (root / job['id'] / 'work' / 'roi.par').read_text().splitlines()
     # Lake full from the first frame; a 2 x 2-cell lake with dug vertical walls loses ~1 % at the shore
     # in the first step (DG2 wet/dry adjustment, as with the sea).
@@ -413,6 +436,13 @@ def test_native_roi_dem_rain_and_depth_cogs(root):
     assert state['solver_attempts'] == [{'solver': 'dg2', 'outcome': 'succeeded', 'reason': None}]
     assert state['result']['solver'] == 'dg2' and not (root / run_id / 'work-fallback').exists()
     assert len(state['provenance']['terrain']['source']['records']) == 2
+    # One vertical datum: the EGM96 NASADEM fixture reaches the solver converted to EGM2008.
+    terrain = state['provenance']['terrain']
+    assert terrain['vertical_datum'] == 'EGM2008' and terrain['vertical_conversion']['from'] == 'EGM96'
+    assert state['provenance']['dg2']['vertical_datum'] == 'EGM2008'
+    assert (state['terrain_source'], state['provenance']['terrain_source'], state['vertical_datum']) == ('nasadem', 'nasadem', 'EGM2008')
+    with rasterio.open(root / run_id / 'prepared/solver-terrain.tif') as aligned:
+        assert aligned.read(1) == pytest.approx(np.full((aligned.height, aligned.width), terrain_m()), abs=5e-3)
     assert state['provenance']['aligned_terrain_sha256'] == sha(root / run_id / 'prepared/solver-terrain.tif')
     assert state['result']['time_axis']['status'] == 'actual_times_unavailable'
     assert all(f['time_s'] is None for f in state['result']['frames'])
@@ -478,3 +508,89 @@ def test_native_observed_rain_reaches_the_solver_interval_by_interval(root):
     rain_source = state['provenance']['rain']
     assert rain_source['observed'] is True and rain_source['synthetic'] is False
     assert rain_source['profile']['source']['product'] == 'GPM_3IMERGHHL'
+
+
+def copernicus_payload(p=None):
+    p = p or payload()
+    p['terrain']['source'] = 'copernicus'
+    return p
+
+
+def test_terrain_source_defaults_to_nasadem_and_is_recorded(root):
+    legacy = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    assert (legacy['terrain_source'], legacy['vertical_datum'], legacy['terrain_attribution']) == ('nasadem', 'EGM2008', None)
+    job = json.loads((root / legacy['id'] / 'job.json').read_text())
+    assert job['payload']['terrain']['source'] == 'nasadem'
+    chosen = start_roi_run('alice', copernicus_payload(), root=root, config=config(), launch=False)
+    assert (chosen['terrain_source'], chosen['vertical_datum']) == ('copernicus', 'EGM2008')
+    assert 'Copernicus WorldDEM-30' in chosen['terrain_attribution']
+    assert get_roi_run(root, chosen['id'])['terrain_source'] == 'copernicus'
+
+
+def test_a_payload_without_terrain_source_uses_nasadem_as_before(tmp_path):
+    assert isinstance(terrain_provider('nasadem', tmp_path), NASADEMProvider)
+    assert isinstance(terrain_provider('copernicus', tmp_path), CopernicusDEMProvider)
+    with pytest.raises(ValueError):
+        terrain_provider('srtm', tmp_path)
+    # Without the key the validated request names NASADEM; nothing else changes.
+    request = validate_roi_run(payload(), config())
+    assert request['terrain']['source'] == 'nasadem'
+    explicit = validate_roi_run({**payload(), 'terrain': {**payload()['terrain'], 'source': 'nasadem'}}, config())
+    assert solver_parameter_file(explicit) == solver_parameter_file(request) and explicit == request
+
+
+def test_copernicus_covers_latitudes_outside_nasadem(root):
+    north = payload()
+    north['roi'] = polygon(10.7001, 61.0001, 10.7004, 61.0004)
+    north['domain'] = polygon(10.7, 61.0, 10.7006, 61.0006)
+    north['terrain']['target_crs'] = 'EPSG:32632'
+    with pytest.raises(ValueError):
+        start_roi_run('alice', north, root=root, config=config(), launch=False)
+    assert start_roi_run('alice', copernicus_payload(north), root=root, config=config(), launch=False)['state'] == 'created'
+
+
+def test_missing_geoid_grids_make_the_service_unavailable():
+    empty = BASE / f'geoid-{uuid.uuid4()}'
+    empty.mkdir(parents=True)
+    try:
+        with pytest.raises(ValueError, match='geoide'):
+            validate_config({**config(), 'geoid_dir': str(empty)})
+    finally:
+        empty.rmdir()
+
+
+def copernicus_provider(root, run_id, height=100.0):
+    """Flat ellipsoidal NISAR_DEM clips covering the requested geometry, one per tile."""
+    class Provider:
+        def acquire_roi(self, geometry):
+            cache = root / run_id / 'cache'
+            cache.mkdir(exist_ok=True)
+            west, south, east, north = cop._geometry(geometry).bounds
+            records = []
+            for tile in cop.required_tiles(geometry):
+                w, s = max(west, tile.lon) - .001, max(south, tile.lat) - .001
+                e, n = min(east, tile.lon + 1) + .001, min(north, tile.lat + 1) + .001
+                width, height_px = math.ceil((e - w) * 3600), math.ceil((n - s) * 3600)
+                path = cache / f'DEM_{tile.tile_id}.tif'
+                with rasterio.open(path, 'w', driver='GTiff', width=width, height=height_px, count=1, dtype='float32',
+                                   crs='EPSG:4326', transform=rasterio.transform.from_origin(w, n, 1 / 3600, 1 / 3600)) as dst:
+                    dst.write(np.full((height_px, width), height, dtype='float32'), 1)
+                records.append(CopernicusTile(tile.tile_id, f'v1-2-EPSG4326-x-DEM_{tile.tile_id}_C01-tif', 'NISAR_DEM', '1.2',
+                                              cop.BASE_URL + cop.tile_relative_path(tile.tile_id), (0, 0, width, height_px),
+                                              path, sha(path)))
+            return records
+    return Provider()
+
+
+def test_native_copernicus_terrain_is_converted_from_the_ellipsoid_to_egm2008(root):
+    job = start_roi_run('alice', copernicus_payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=copernicus_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    terrain = state['provenance']['terrain']
+    assert terrain['source']['product'] == 'NISAR_DEM' and terrain['source']['vertical_datum'] == 'WGS84_ellipsoid'
+    assert terrain['vertical_datum'] == 'EGM2008' and terrain['vertical_conversion']['formula'] == 'H_EGM2008 = h_WGS84 - N_EGM2008'
+    assert 'Copernicus WorldDEM-30' in terrain['source']['attribution']
+    assert state['provenance']['terrain_source'] == 'copernicus'
+    with rasterio.open(root / job['id'] / 'prepared/solver-terrain.tif') as aligned:
+        expected = 100 + geoid_shift('copernicus')
+        assert aligned.read(1) == pytest.approx(np.full((aligned.height, aligned.width), expected), abs=5e-3)

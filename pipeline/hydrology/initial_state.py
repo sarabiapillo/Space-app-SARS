@@ -5,7 +5,9 @@ transient. Cells start wet when their mean elevation is below the level and they
 to an edge cell of a fixed-level side that is also below it; enclosed depressions stay dry.
 DG2 reads three grids: the cell-average depth ``H = eta - z`` and its slope coefficients. Setting
 ``H1x = -Z1x`` and ``H1y = -Z1y`` keeps the free surface flat (lake at rest) over a sloping bed.
-NASADEM carries no bathymetry, so a flat sea at the level gets zero depth, not a real sea floor.
+The level is a height over EGM2008, the datum of the prepared terrain (NASADEM converted from EGM96,
+Copernicus GLO-30 from the WGS84 ellipsoid). Neither DEM carries bathymetry, so a flat sea at the level
+gets zero depth, not a real sea floor.
 """
 from __future__ import annotations
 
@@ -69,6 +71,6 @@ def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, 
     manifest = {'sides': sides, 'summary': summary,
                 'method': 'cells below the fixed level 4-connected to a fixed-level edge; H = level - z, '
                           'H1x = -Z1x, H1y = -Z1y (flat free surface)',
-                'datum': 'same vertical datum as the DEM (NASADEM: EGM96)', 'bathymetry': 'none (NASADEM)'}
+                'datum': 'EGM2008, the vertical datum of the prepared DEM', 'bathymetry': 'none (terrain DEM only)'}
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return summary

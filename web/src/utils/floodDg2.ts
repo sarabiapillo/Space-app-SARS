@@ -13,6 +13,8 @@ export interface FloodDg2Form {
   duration: string; save: string; tstep: string; thinDepth: string; thinDepthOff: boolean
   /** 'dg2' (more accurate, default) or 'fv1' (stable on steep terrain); the thin-depth threshold only applies to DG2. */
   solver: string
+  /** 'copernicus' (Copernicus GLO-30, NISAR_DEM from ASF/Earthdata, recommended) or 'nasadem'; empty until chosen. */
+  terrainSource: string
   confirm: boolean
 }
 type Polygon = { type: 'Polygon'; coordinates: unknown }
@@ -31,12 +33,13 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   const integer=(raw:string,label:string,allowZero=false)=>{const n=Number(raw);if(!raw.trim()||!Number.isSafeInteger(n)||n<0||(!allowZero&&n===0))throw Error(`${label}: ${t('se requiere un entero válido.','valid integer required.')}`);return n}
   if(!/^EPSG:\d+$/.test(form.crs))throw Error(t('Indica un CRS métrico EPSG para el terreno.','Enter a metric EPSG terrain CRS.'))
   if(!['nearest','bilinear'].includes(form.resampling))throw Error(t('Selecciona remuestreo.','Select resampling.'))
+  if(!TERRAIN_SOURCES.includes(form.terrainSource))throw Error(t('Selecciona la fuente del terreno (Copernicus GLO-30 o NASADEM).','Select the terrain source (Copernicus GLO-30 or NASADEM).'))
   const sides={north:form.boundaryNorth,east:form.boundaryEast,south:form.boundarySouth,west:form.boundaryWest}
   if(Object.values(sides).some(v=>!['closed','free','fixed_level'].includes(v)))throw Error(t('Selecciona la frontera de cada lado (N, E, S, O).','Select the boundary of each side (N, E, S, W).'))
   const anyFixed=Object.values(sides).includes('fixed_level')
-  // One sea level for every fixed side (metres on the DEM datum, EGM96); 0 and negative values are valid.
+  // One sea level for every fixed side (metres over EGM2008, the datum of every height); 0 and negative values are valid.
   const level=Number(form.seaLevel)
-  if(anyFixed&&(!form.seaLevel.trim()||!Number.isFinite(level)||Math.abs(level)>10000))throw Error(t('Nivel del mar fijo: indica un número en metros (EGM96).','Fixed sea level: enter a number in metres (EGM96).'))
+  if(anyFixed&&(!form.seaLevel.trim()||!Number.isFinite(level)||Math.abs(level)>10000))throw Error(t('Nivel del mar fijo: indica un número en metros (EGM2008).','Fixed sea level: enter a number in metres (EGM2008).'))
   if(form.stillWater&&!anyFixed)throw Error(t('El mar lleno al inicio requiere al menos un lado de nivel fijo.','A still-water start needs at least one fixed-level side.'))
   if(!['none','hydrolakes'].includes(form.lakes))throw Error(t('Elige si incluir lagos (HydroLAKES).','Choose whether to include lakes (HydroLAKES).'))
   if(!['unsupported','runoff_coefficient'].includes(form.infiltration))throw Error(t('Selecciona cómo tratar la infiltración.','Select how to treat infiltration.'))
@@ -49,7 +52,15 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   if(!['dg2','fv1'].includes(form.solver))throw Error(t('Selecciona el método de cálculo (DG2 o FV1).','Select the computation method (DG2 or FV1).'))
   // LISFLOOD-FP `dg2depththresh`: DG2 only; null when the user explicitly disables it or chooses FV1. The API caps it at 1 m.
   const thinDepth=form.solver==='fv1'||form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
-  return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}}
+  return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}}
+}
+
+/** Terrain sources of the API (`terrain.source`); heights of both end in EGM2008. */
+export const TERRAIN_SOURCES = ['copernicus', 'nasadem']
+
+/** Display name of a terrain source; runs created before the choice used NASADEM. */
+export function terrainLabel(source: string | null | undefined) {
+  return source === 'copernicus' ? 'Copernicus GLO-30' : 'NASADEM'
 }
 
 /** Default `FLOOD_ROI_DG2_MAX_CELLS` of the server (configurable there); about 1 km² at 30 m. */
@@ -78,7 +89,8 @@ export function utmEpsgFor(lon: number, lat: number) {
 
 /** Fills the form with illustrative example values (not recommendations) so the user can review and run a
  * small test. Declarations and modelling choices (domain, infiltration, lakes, nonurban, confirmation) stay
- * the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a ROI). */
+ * the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a ROI) and the
+ * terrain is the recommended Copernicus GLO-30. */
 /**
  * Applies one form change. Any value change withdraws the confirmation, so the user confirms the values
  * actually sent; the non-urban declaration sits beside the confirmation and leaves it as it is.
@@ -94,10 +106,10 @@ export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): Floo
   const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
   return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', confirm:false}
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus', confirm:false}
 }
 
-/** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM96) and starts full; the other sides are free. */
+/** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM2008) and starts full; the other sides are free. */
 export function coastPreset(form: FloodDg2Form, seaSide: Side): FloodDg2Form {
   const sides = Object.fromEntries((Object.keys(SIDE_KEYS) as Side[]).map(side => [SIDE_KEYS[side], side === seaSide ? 'fixed_level' : 'free']))
   return {...form, ...sides, seaLevel:'0', stillWater:true, confirm:false}
@@ -133,7 +145,7 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   return {
     zone: Boolean(roi) && (form.useRoi || parsePolygon(form.domain) !== null),
     rain: positive(form.amount) && positive(form.rainDuration) && integer(form.intervals, 1) && integer(form.seed, 0),
-    terrain: /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling) && positive(form.manning)
+    terrain: TERRAIN_SOURCES.includes(form.terrainSource) && /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling) && positive(form.manning)
       && sides.every(v => ['closed','free','fixed_level'].includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
       && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
       && (!form.pressure.trim() || (anyFixed && pressure >= 950 && pressure <= 1040)),

@@ -1,8 +1,10 @@
-"""Trabajos privados ROI→NASADEM→DG2/FV1. Hipótesis sintéticas, no precisión hidráulica certificada.
+"""Trabajos privados ROI→terreno (NASADEM o Copernicus GLO-30)→DG2/FV1. Hipótesis sintéticas, no precisión hidráulica certificada.
 
 Payload exacto: roi, domain (GeoJSON Polygon EPSG:4326); rainfall (contrato
 normalize_request); rainfall_profile {interval_count,seed,distribution}; terrain
-{target_crs,resolution_m,resampling}; hydraulics {manning,initial_condition,
+{target_crs,resolution_m,resampling,source?} con source 'nasadem' (por defecto) o 'copernicus'
+(NISAR_DEM v1.2 de ASF, elipsoidal); todas las alturas (terreno, level_m, agua en reposo) en EGM2008;
+hydraulics {manning,initial_condition,
 boundary,infiltration,domain_nonurban}; simulation {duration_s,save_interval_s,
 initial_tstep_s,dg2_depth_thresh_m,solver?}; solver 'dg2' (default) o 'fv1', con fallback
 automático al otro si el intento falla tras la preparación. boundary: 'closed', 'free' u objeto por lado
@@ -36,7 +38,10 @@ from rasterio.transform import from_origin
 from shapely.geometry import shape, box, mapping
 from shapely.ops import transform as project
 
+from pipeline.elevation import copernicus
+from pipeline.elevation.copernicus import CopernicusDEMProvider
 from pipeline.elevation.nasadem import NASADEMProvider, _required_tiles
+from pipeline.elevation.vertical_datum import DATUM, DEFAULT_GRID_DIR, GRIDS, load_grids
 from .inputs import normalize_request, validate_roi
 from .dem_prepared import prepare_dem, _validate_crs
 from .dem_dg2 import prepare_dg2_dem
@@ -52,6 +57,9 @@ from .results import NegativeDepthArtifacts, summarize_results, export_depth_cog
 PROJECT = Path(__file__).resolve().parents[2]
 _KEYS = {'roi', 'domain', 'rainfall', 'rainfall_profile', 'terrain', 'hydraulics', 'simulation'}
 SOLVERS = ('dg2', 'fv1')
+# Terrain sources: NASADEM (EGM96, 56 S-60 N) or NISAR_DEM / Copernicus GLO-30 (ellipsoidal, global).
+TERRAIN_SOURCES = ('nasadem', 'copernicus')
+_COVERAGE = {'nasadem': (-56, 60), 'copernicus': (-90, 90)}
 _CONFIG = {'executable', 'binary_sha256', 'dem_executable', 'dem_sha256', 'timeout_s',
            'preparation_timeout_s', 'max_cells', 'max_rain_values', 'max_frames', 'max_tiles', 'code_version'}
 
@@ -91,11 +99,16 @@ def _sha(path):
 def validate_config(config):
     """Configuración exclusivamente del servidor; hashes y límites obligatorios."""
     # lakes_path (HydroLAKES GeoPackage) is optional: without it the lakes option is refused.
-    if not isinstance(config, dict) or set(config) not in (_CONFIG, _CONFIG | {'lakes_path'}):
+    # geoid_dir (EGM96/EGM2008 grids) defaults to data/reference/geoid; every run needs both grids.
+    if not isinstance(config, dict) or not _CONFIG <= set(config) <= _CONFIG | {'lakes_path', 'geoid_dir'}:
         raise ValueError('configuración: claves inválidas')
     result = dict(config)
     if 'lakes_path' in config:
         result['lakes_path'] = str(_path(config['lakes_path']))
+    geoid = _path(config.get('geoid_dir', str(DEFAULT_GRID_DIR)))
+    if not all((geoid / spec['file']).is_file() for spec in GRIDS.values()):
+        raise ValueError('rejillas del geoide no instaladas (python -m pipeline.elevation.vertical_datum prepare)')
+    result['geoid_dir'] = str(geoid)
     for name, digest in (('executable', 'binary_sha256'), ('dem_executable', 'dem_sha256')):
         p = _path(config[name])
         if not p.is_file() or not os.access(p, os.X_OK) or _sha(p) != config[digest]:
@@ -110,7 +123,22 @@ def validate_config(config):
     return result
 
 
-def _geometry(payload, crs, resolution, budget, tiles):
+def _tiles(source, geographic):
+    if source == 'copernicus':
+        return copernicus.required_tiles(mapping(geographic))
+    return _required_tiles(geographic)
+
+
+def terrain_provider(source, cache_dir):
+    """Terrain provider for ``terrain.source``; NASADEM when the payload does not name one."""
+    if source == 'nasadem':
+        return NASADEMProvider(cache_dir)
+    if source == 'copernicus':
+        return CopernicusDEMProvider(cache_dir)
+    raise ValueError('fuente de terreno desconocida')
+
+
+def _geometry(payload, crs, resolution, budget, tiles, source='nasadem'):
     roi, domain = shape(payload['roi']), shape(payload['domain'])
     if not domain.covers(roi):
         raise ValueError('el dominio debe cubrir completamente la ROI')
@@ -141,10 +169,11 @@ def _geometry(payload, crs, resolution, budget, tiles):
               for i in range(4) for t in (j/64 for j in range(65))]
     geo = [reverse(x,y) for x,y in points]
     west, south, east, north = min(x for x,y in geo), min(y for x,y in geo), max(x for x,y in geo), max(y for x,y in geo)
-    if not all(math.isfinite(v) for v in (west,south,east,north)) or west < -180 or east > 180 or south < -56 or north > 60 or east-west >= 180:
-        raise ValueError('rectángulo computacional fuera de cobertura NASADEM')
+    low, high = _COVERAGE[source]
+    if not all(math.isfinite(v) for v in (west,south,east,north)) or west < -180 or east > 180 or south < low or north > high or east-west >= 180:
+        raise ValueError('rectángulo computacional fuera de cobertura del terreno elegido')
     geographic = box(west-1e-9,south-1e-9,east+1e-9,north+1e-9)
-    if len(_required_tiles(geographic)) > tiles:
+    if len(_tiles(source, geographic)) > tiles:
         raise ValueError('dominio excede max_tiles')
     return mapping(geographic), [left,bottom,right,top], width, height
 
@@ -158,7 +187,14 @@ def validate_roi_run(payload, limits):
     except (TypeError, OverflowError):
         raise ValueError('JSON inválido') from None
     validate_roi(payload['roi']); validate_roi(payload['domain'])
-    _keys(payload['terrain'], {'target_crs','resolution_m','resampling'})
+    terrain_keys = {'target_crs','resolution_m','resampling'}
+    if (not isinstance(payload['terrain'], dict) or not terrain_keys <= set(payload['terrain'])
+            or not set(payload['terrain']) <= terrain_keys | {'source'}):
+        raise ValueError('terrain: claves inválidas')
+    # Terrain source: 'nasadem' when absent, so earlier payloads keep their provider; heights end in EGM2008.
+    source = payload['terrain'].get('source', 'nasadem')
+    if not isinstance(source, str) or source not in TERRAIN_SOURCES:
+        raise ValueError("terrain.source debe ser 'nasadem' o 'copernicus'")
     observed = isinstance(payload['rainfall_profile'], dict) and payload['rainfall_profile'].get('source') == 'observed'
     _keys(payload['rainfall_profile'], {'source','segments','provenance'} if observed else {'interval_count','seed','distribution'})
     if observed and not isinstance(payload['rainfall_profile']['provenance'], dict):
@@ -229,12 +265,12 @@ def validate_roi_run(payload, limits):
         count = _number(rp['interval_count'], 10000, integer=True)
         if count < 2 or count % 2 or rp['distribution'] != 'uniform_balanced':
             raise ValueError('perfil no admitido')
-    geography, extent, width, height = _geometry(payload, crs, resolution, limits['max_cells'], limits['max_tiles'])
+    geography, extent, width, height = _geometry(payload, crs, resolution, limits['max_cells'], limits['max_tiles'], source)
     if (count + 2)*width*height > limits['max_rain_values'] or frames*width*height > limits['max_rain_values']:
         raise ValueError('presupuesto acumulado de datos excedido')
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
     _rain_profile(payload, losses)
-    return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string()},
+    return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string(), 'source': source},
                                   'simulation': {**s, 'solver': solver},
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
                                                'width': width, 'height': height, 'frame_budget': frames,
@@ -312,6 +348,10 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'initial_condition':request['hydraulics']['initial_condition'],
              'losses':request['computed']['losses'],
              'lakes':request['computed']['lakes'],
+             # Terrain provider and the single vertical datum of every height (terrain, level_m, still water).
+             'terrain_source':request['terrain']['source'],'vertical_datum':DATUM,
+             'terrain_attribution':(copernicus.ATTRIBUTION + '. ' + copernicus.DISCLAIMER
+                                    if request['terrain']['source'] == 'copernicus' else None),
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
              # Two solver attempts at most (requested solver, then the automatic fallback).
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+2*cfg['timeout_s']+30}
@@ -332,10 +372,12 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
     records = provider.acquire_roi(geography)
     stage.write_text('preparation')
     if not records or len(records) > cfg['max_tiles']:
-        raise ValueError('NASADEM tiles invalid')
+        raise ValueError('terrain tiles invalid')
+    # Every height in EGM2008: NASADEM (EGM96) and NISAR_DEM (ellipsoidal) are converted with the pinned geoid grids.
     prepare_dem(geography, records, directory / 'prepared', target_crs=request['terrain']['target_crs'],
                 resolution_m=request['terrain']['resolution_m'],resampling=request['terrain']['resampling'],
-                max_cells=cfg['max_cells'],target_vertical_datum='EGM96',code_version=cfg['code_version'])
+                max_cells=cfg['max_cells'],target_vertical_datum=DATUM,code_version=cfg['code_version'],
+                geoid_grids=load_grids(cfg.get('geoid_dir', DEFAULT_GRID_DIR)))
     # prepare_dem masks the inverse geographic envelope, not an exact projected
     # rectangle. Sample its validated tiles onto the declared aligned solver grid;
     # reject ANY unknown centre rather than fill it with invented ground.
@@ -352,7 +394,7 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
                   src_nodata=np.nan,dst_transform=transform,dst_crs=src.crs,dst_nodata=np.nan,
                   resampling=Resampling.nearest)
         if not np.isfinite(values).all():
-            raise ValueError('NASADEM coverage missing on computational grid')
+            raise ValueError('terrain coverage missing on computational grid')
         profile = src.profile.copy()
     lake_depth = None
     if request['computed']['lakes'] == 'hydrolakes':
@@ -369,7 +411,7 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
     with rasterio.open(dem,'w',**profile) as dst:
         dst.write(values,1)
     actual = [left,bottom,right,top]
-    prepare_dg2_dem(dem, directory / 'dg2', executable=cfg['dem_executable'],vertical_datum='EGM96',
+    prepare_dg2_dem(dem, directory / 'dg2', executable=cfg['dem_executable'],vertical_datum=DATUM,
                     code_version=cfg['code_version'],timeout_s=min(cfg['preparation_timeout_s'],120),max_cells=cfg['max_cells'])
     if _has_boundary_file(request):
         format_boundary(dem,directory/'boundary',request['computed']['solver_boundary'])
@@ -557,7 +599,8 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, su
     job = json.loads((directory/'job.json').read_text())
     request,cfg = job['payload'],validate_config(job['config'])
     if provider is None:
-        provider = NASADEMProvider(directory/'cache')
+        # Jobs created before the terrain choice used NASADEM.
+        provider = terrain_provider(request['terrain'].get('source','nasadem'), directory/'cache')
     state.update(state='acquiring',stage='acquiring'); _save(directory,state)
     stage = directory/'preparation.stage'
     try:
@@ -582,6 +625,7 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, su
                                'dg2':json.loads((directory/'dg2/manifest.json').read_text()),
                                'rain':json.loads((directory/'rain.json').read_text()),
                                'helper_sha256':cfg['dem_sha256'], 'code_version':cfg['code_version'],
+                               'terrain_source':request['terrain'].get('source','nasadem'),
                                'requested_solver':requested,'solver':requested,'solver_fallback':None}
         # Requested solver first; if its attempt fails after preparation, the other solver runs once on the same
         # prepared inputs in its own directory. Preparation failures never reach here (both would fail alike).

@@ -48,7 +48,7 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, payload(), format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual(start.call_args.args, ('1', payload()))
-        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(response.json()['dg2_depth_thresh_m'])
         # A payload without `solver` runs DG2; no fallback and no attempt yet.
         self.assertEqual([response.json()[k] for k in ('requested_solver', 'solver', 'solver_fallback', 'solver_attempts')], ['dg2', 'dg2', None, []])
@@ -56,6 +56,8 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(response.json()['initial_condition'], 'dry_zero_velocity')
         self.assertEqual(response.json()['lakes'], 'none')
         self.assertEqual(response.json()['losses'], {'infiltration': 'unsupported', 'runoff_coefficient': None, 'atmospheric_pressure_hpa': None, 'barometric_surge_m': 0.0})
+        # A payload without terrain.source keeps NASADEM; every height is EGM2008.
+        self.assertEqual([response.json()[k] for k in ('terrain_source', 'vertical_datum', 'terrain_attribution')], ['nasadem', 'EGM2008', None])
         self.assertEqual(response.json()['state'], 'created')
         self.assertEqual(self.alice.get(response.json()['results_url']).status_code, 409)
         self.assertEqual(self.bob.get(response.json()['status_url']).status_code, 404)
@@ -95,7 +97,7 @@ class RoiHttpTests(SimpleTestCase):
             self.assertNotEqual(client.get(results).status_code, 200)
             self.assertNotEqual(client.get(download).status_code, 200)
         # Runs recorded before the threshold existed ran with the solver default (off): reported as null.
-        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
         self.assertIsNone(self.alice.get(status).json()['dg2_depth_thresh_m'])
         self.assertIsNone(self.alice.get(status).json()['boundary'])  # seeded run predates per-side boundaries
         # Runs recorded before the solver choice ran DG2 without fallback.
@@ -116,6 +118,9 @@ class RoiHttpTests(SimpleTestCase):
         self.assertIsNone(body['time_of_concentration'])
         self.assertIsNone(body['negative_depth'])
         self.assertEqual([body['requested_solver'], body['solver'], body['solver_fallback']], ['dg2', 'dg2', None])
+        # Runs recorded before the terrain choice used NASADEM heights in EGM96.
+        self.assertEqual([body['terrain_source'], body['vertical_datum'], body['terrain_attribution']], ['nasadem', 'EGM96', None])
+        self.assertEqual([self.alice.get(status).json()[k] for k in ('terrain_source', 'vertical_datum')], ['nasadem', 'EGM96'])
         self.assertIsNone(body['roads'])
         self.assertIsNone(body['lakes'])
         self.assertEqual(len(body['artifacts']), 4)
@@ -180,6 +185,24 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, body, format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual([response.json()['requested_solver'], response.json()['solver']], ['fv1', 'fv1'])
+
+    def test_start_and_results_echo_the_copernicus_terrain_and_its_attribution(self):
+        body = payload(); body['terrain']['source'] = 'copernicus'
+        with patch('analyses.roi_flood_runs.start_roi_run') as start:
+            from pipeline.hydrology.roi_runner import start_roi_run
+            start.side_effect = lambda *args, **kwargs: start_roi_run(*args, **{**kwargs, 'launch': False})
+            response = self.alice.post(self.start, body, format='json')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual([response.json()['terrain_source'], response.json()['vertical_datum']], ['copernicus', 'EGM2008'])
+        self.assertIn('Copernicus WorldDEM-30', response.json()['terrain_attribution'])
+        bad = payload(); bad['terrain']['source'] = 'srtm'
+        self.assertEqual(self.alice.post(self.start, bad, format='json').status_code, 400)
+        run_id, state, directory = self.seed()
+        state.update(terrain_source='copernicus', vertical_datum='EGM2008', terrain_attribution='produced using Copernicus WorldDEM-30')
+        (directory / 'state.json').write_text(json.dumps(state))
+        result = self.alice.get(f'/api/flood-roi-runs/{run_id}/results/').json()
+        self.assertEqual([result['terrain_source'], result['vertical_datum'], result['terrain_attribution']],
+                         ['copernicus', 'EGM2008', 'produced using Copernicus WorldDEM-30'])
 
     def test_preview_palette_uses_the_pipeline_depth_classes(self):
         from analyses.roi_flood_runs import _DEPTH_CLASSES

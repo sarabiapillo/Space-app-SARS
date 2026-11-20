@@ -408,6 +408,10 @@ export interface FloodRoiRun {
   requested_solver?: string; solver?: string
   solver_fallback?: FloodSolverFallback | null
   solver_attempts?: FloodSolverAttempt[] | null
+  /** Terrain source and vertical datum of every height; older runs report NASADEM and EGM96. */
+  terrain_source?: string; vertical_datum?: string
+  /** Licence notice the terrain source requires (Copernicus GLO-30); null for NASADEM. */
+  terrain_attribution?: string | null
 }
 export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
 export interface FloodRoiResult {
@@ -416,6 +420,7 @@ export interface FloodRoiResult {
   artifacts: Array<{name: string; url: string; frame_index?: number | null; scheduled_time_s?: number | null}>
   warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
   requested_solver?: string; solver?: string; solver_fallback?: FloodSolverFallback | null
+  terrain_source?: string; vertical_datum?: string; terrain_attribution?: string | null
   /** Negative depths set to 0 and the volume they add relative to the water of each frame (null in older runs). */
   negative_depth?: {status?: 'none' | 'minor' | 'artifacts'; clipped_cell_frames?: number; frames?: Array<number | 'maximum'>; min_m?: number | null; max_added_volume_ratio?: number | null; thresholds?: {warning: number; fail: number}} | null
   /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
