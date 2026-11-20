@@ -40,6 +40,9 @@ NEGATIVE_VOLUME_WARNING_RATIO = .01
 NEGATIVE_VOLUME_FAIL_RATIO = .10
 NEGATIVE_DEPTH_WARNING = ('artefactos numéricos en terreno muy empinado; profundidades poco confiables, '
                           'la dirección del flujo sí vale')
+# Visible warning when the domain contains built-up land (ESA WorldCover class 50) or the user declares it urban:
+# a 30 m terrain model and LISFLOOD-FP neither represent individual buildings nor storm drains.
+URBAN_WARNING = 'zona urbana: edificios y drenaje no representados; profundidades indicativas'
 _D8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 

@@ -18,7 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from pipeline.hydrology.roi_runner import get_roi_run, start_roi_run, validate_config
+from pipeline.hydrology.roi_runner import DatasetUnavailable, get_roi_run, start_roi_run, validate_config
 from .views import UniqueFieldsJSONParser
 
 
@@ -26,7 +26,11 @@ _FIELDS = ('id', 'state', 'stage', 'simulation_duration_s', 'save_interval_s',
            'synthetic', 'hydraulic_accuracy_validated')
 _ERRORS = frozenset(('acquisition_failed', 'preparation_failed', 'preparation_or_output_invalid', 'negative_depth_artifacts',
                      'worker_stopped', 'worker_deadline', 'worker_launch_failed',
-                     'preparation_timeout', 'solver_timeout'))
+                     'preparation_timeout', 'solver_timeout',
+                     # An open dataset the run needs could not be read (no uniform substitute is used).
+                     'landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable'))
+# Start-time data errors: answered 503 with this code, the request itself was valid.
+_DATASET_MESSAGES = {'design_storm_unavailable': 'Datos de tormenta de diseño (PXR-4) no disponibles en el servidor.'}
 
 
 def _root():
@@ -56,6 +60,7 @@ def _public(run):
     # Infiltration coefficient and barometric surge (null in runs created before they existed).
     result['losses'] = run.get('losses')
     result['lakes'] = run.get('lakes')  # 'none' or 'hydrolakes'; null in older runs
+    result.update(_land_and_rain(run))
     result.update(_terrain(run))
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
@@ -70,6 +75,15 @@ def _terrain(run):
     return {'terrain_source': run.get('terrain_source', 'nasadem'),
             'vertical_datum': run.get('vertical_datum', 'EGM96'),
             'terrain_attribution': run.get('terrain_attribution')}
+
+
+def _land_and_rain(run):
+    """Land surface (Manning, Curve Number, antecedent moisture, urban), rain source and design storm.
+
+    Runs created before these options had no land data (null) and synthetic or observed rain."""
+    return {'land_surface': run.get('land_surface'),
+            'rainfall_source': run.get('rainfall_source', 'synthetic' if run.get('synthetic', True) else 'observed'),
+            'design_storm': run.get('design_storm')}
 
 
 def _owned(request, run_id):
@@ -96,6 +110,9 @@ class RoiRunStartView(APIView):
             return Response({'errors': {'service': ['Ejecución ROI DG2 no disponible.']}}, status=503)
         try:
             run = start_roi_run(str(request.user.pk), request.data, root=root, config=config)
+        except DatasetUnavailable as exc:
+            message = _DATASET_MESSAGES.get(exc.code, 'Datos requeridos no disponibles.')
+            return Response({'errors': {'service': [message]}, 'error': exc.code if exc.code in _DATASET_MESSAGES else 'dataset_unavailable'}, status=503)
         except (ValueError, TypeError, KeyError, OverflowError):
             # Configuración inválida no debe diagnosticarse como entrada mala.
             try:
@@ -149,6 +166,7 @@ class RoiRunResultsView(APIView):
             result['solver_fallback'] = run['result'].get('solver_fallback')
             # Terrain source and datum come from the run state (the summary does not repeat them).
             result.update(_terrain(run))
+            result.update(_land_and_rain(run))
             result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
@@ -157,12 +175,20 @@ class RoiRunResultsView(APIView):
 
 
 def _rainfall_segments(run):
-    """Synthetic hyetograph from the run provenance, in mm/h; null when it was not recorded."""
+    """Hyetograph of the rain the solver received, in mm/h; null when it was not recorded.
+
+    Uniform profiles (synthetic, observed, design storm; already x runoff coefficient when on) give their segments;
+    Curve Number runs give the ROI-mean net rain per interval (rain.json ``method``)."""
     try:
+        method = run['provenance']['rain'].get('method')
+        if method is not None:
+            edges = method['curve_number']['interval_edges_s']
+            return [{'start_s': float(a), 'end_s': float(b), 'intensity_mm_h': float(mm) * 3600 / (float(b) - float(a))}
+                    for a, b, mm in zip(edges[:-1], edges[1:], method['roi_mean_net_mm'], strict=True)]
         segments = run['provenance']['rain']['profile']['segments']
         return [{'start_s': float(item['start_s']), 'end_s': float(item['end_s']),
                  'intensity_mm_h': float(item['intensity_m_s']) * 3.6e6} for item in segments]
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
         return None
 
 

@@ -239,15 +239,16 @@ test('request builder keeps the exact body for a coastal form with every hydraul
 
 const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling:'',manning:'',boundaryNorth:'',boundaryEast:'',boundarySouth:'',boundaryWest:'',seaLevel:'',stillWater:false,infiltration:'',pressure:'',lakes:'',nonurban:false,amount:'',rainDuration:'',seed:'',intervals:'',duration:'',save:'',tstep:'',thinDepth:'',thinDepthOff:false,solver:'dg2',terrainSource:'',confirm:false})
 
-test('example values fill only the illustrative numbers and never the user declarations or choices', async () => {
+test('example values fill the illustrative numbers and land-surface choices, never the user declarations', async () => {
   const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
   assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus', confirm:false})
-  // Infiltration, lakes, domain and the nonurban declaration stay the user's explicit choice.
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus',
+    rainKind:'synthetic', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false})
+  // Lakes, the domain, the urban declaration and the confirmation stay the user's explicit choice.
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
-  assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr), /infiltración/)
+  assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, lakes:'none'}, square, tr), /Confirma/)
   const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, infiltration:'unsupported', lakes:'none'}, square, tr)
   assert.deepEqual([body.rainfall.amount, body.rainfall.duration, body.simulation.duration_s, body.simulation.save_interval_s, body.simulation.dg2_depth_thresh_m], [30, 600, 900, 60, .02])
   assert.equal(body.terrain.source, 'copernicus')  // the example picks the recommended Copernicus GLO-30
@@ -393,4 +394,76 @@ test('negative-depth artifacts warning only when the volume rule marks the resul
   assert.equal(negativeDepthWarning({negative_depth:artifacts}, tr), `${NEGATIVE_DEPTH_WARNING} (las profundidades negativas puestas en 0 añadieron hasta 5.5 % del agua de un cuadro).`)
   assert.match(negativeDepthWarning({negative_depth:artifacts}, en), /^numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid/)
   for (const negative_depth of [{...artifacts, status:'minor'}, {...artifacts, status:'none'}, null, undefined]) assert.equal(negativeDepthWarning({negative_depth}, tr), null)
+})
+
+// --- Land surface (WorldCover Manning, Curve Number), design storms and urban domains ---------------------------
+
+test('request builder keeps the exact body when the new choices are at their previous behaviour', () => {
+  const legacy = buildRoiFloodRequest(filledForm(), square, tr)
+  assert.deepEqual(buildRoiFloodRequest(filledForm({rainKind:'synthetic', manningMode:'uniform', moisture:'', returnPeriod:'', stormHours:''}), square, tr), legacy)
+})
+
+test('request builder sends WorldCover Manning and Curve Number with antecedent moisture', () => {
+  const body = buildRoiFloodRequest(filledForm({manningMode:'worldcover', manning:'', infiltration:'curve_number', moisture:'auto'}), square, tr)
+  assert.equal(body.hydraulics.manning, 'worldcover')
+  assert.equal(body.hydraulics.infiltration, 'curve_number')
+  assert.equal(body.hydraulics.antecedent_moisture, 'auto')
+  for (const moisture of ['I', 'II', 'III']) assert.equal(buildRoiFloodRequest(filledForm({infiltration:'curve_number', moisture}), square, tr).hydraulics.antecedent_moisture, moisture)
+  assert.throws(() => buildRoiFloodRequest(filledForm({infiltration:'curve_number', moisture:''}), square, tr), /humedad/)
+  assert.ok(!('antecedent_moisture' in buildRoiFloodRequest(filledForm({moisture:'auto'}), square, tr).hydraulics))
+  assert.throws(() => buildRoiFloodRequest(filledForm({manningMode:'uniform', manning:''}), square, tr), /Manning/)
+})
+
+test('request builder sends a design storm with rainfall null; the simulation must cover it', () => {
+  const body = buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod:'10', stormHours:'1', duration:'3600', amount:'', rainDuration:'', seed:'', intervals:''}), square, tr)
+  assert.equal(body.rainfall, null)
+  assert.deepEqual(body.rainfall_profile, {source:'design_storm', return_period_years:10, duration_h:1, step_s:600})
+  assert.throws(() => buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod:'10', stormHours:'1', duration:'900'}), square, tr), /simulación/)
+  for (const returnPeriod of ['', '3', '1']) assert.throws(() => buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod, stormHours:'1', duration:'3600'}), square, tr), /periodo de retorno/)
+  for (const stormHours of ['', '0', '25', '0.05']) assert.throws(() => buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod:'10', stormHours, duration:'86400'}), square, tr), /Duración de la tormenta/)
+})
+
+test('the urban declaration is informational: an urban domain is sent, not refused', () => {
+  assert.equal(buildRoiFloodRequest(filledForm({nonurban:false}), square, tr).hydraulics.domain_nonurban, false)
+  assert.equal(buildRoiFloodRequest(filledForm({nonurban:true}), square, tr).hydraulics.domain_nonurban, true)
+  assert.throws(() => buildRoiFloodRequest(filledForm({confirm:false}), square, tr), /confirma/i)
+})
+
+test('example values pick Copernicus, WorldCover Manning and Curve Number with auto moisture, still DG2', async () => {
+  const { exampleFormValues, formStepStatus } = await import('../src/utils/floodDg2.ts')
+  const filled = exampleFormValues(emptyForm(), square)
+  assert.deepEqual([filled.terrainSource, filled.manningMode, filled.infiltration, filled.moisture, filled.solver, filled.rainKind], ['copernicus', 'worldcover', 'curve_number', 'auto', 'dg2', 'synthetic'])
+  const ready = {...filled, useRoi:true, lakes:'none', confirm:true}
+  assert.deepEqual(formStepStatus(ready, square), {zone:true, rain:true, terrain:true, solver:true, confirm:true})
+  const body = buildRoiFloodRequest(ready, square, tr)
+  assert.deepEqual([body.hydraulics.manning, body.hydraulics.infiltration, body.hydraulics.antecedent_moisture], ['worldcover', 'curve_number', 'auto'])
+  assert.equal(formStepStatus({...ready, rainKind:'design_storm', returnPeriod:'', stormHours:''}, square).rain, false)
+  assert.equal(formStepStatus({...ready, rainKind:'design_storm', returnPeriod:'25', stormHours:'2'}, square).rain, true)
+  assert.equal(formStepStatus({...ready, infiltration:'curve_number', moisture:''}, square).terrain, false)
+})
+
+test('urban warning, land-surface notes, design storm and dataset errors are shown in plain words', async () => {
+  const { urbanWarning, URBAN_WARNING, landSurfaceNotes, designStormNote, runErrorMessage, hyetographCaption } = await import('../src/utils/floodDg2.ts')
+  assert.equal(URBAN_WARNING, 'zona urbana: edificios y drenaje no representados; profundidades indicativas')
+  const land = {manning:'worldcover', manning_value:null, manning_fpfric:.035, infiltration:'curve_number',
+    curve_number:{antecedent_moisture:'auto', amc:'III', amc_source:'SMAP L4', mean_runoff_coefficient:.42, gross_rain_mm:30, mean_net_rain_mm:12.6},
+    urban:{declared_nonurban:true, built_up_fraction:.31, built_up_cells:12, warning:true}, attribution:['© ESA WorldCover project 2021']}
+  assert.equal(urbanWarning({land_surface:land, warnings:[URBAN_WARNING]}, tr), `${URBAN_WARNING} (31 % del dominio construido según ESA WorldCover).`)
+  assert.equal(urbanWarning({land_surface:{...land, urban:{declared_nonurban:false, built_up_fraction:null, built_up_cells:null, warning:true}}}, tr), `${URBAN_WARNING} (dominio declarado urbano).`)
+  assert.equal(urbanWarning({land_surface:{...land, urban:{...land.urban, warning:false}}}, tr), null)
+  assert.equal(urbanWarning({}, tr), null)
+  assert.deepEqual(landSurfaceNotes(land, tr), ['Manning por celda (ESA WorldCover); celdas sin dato: n = 0.035',
+    'Número de curva (WorldCover + HYSOGs250m), humedad previa AMC III (SMAP L4): 42 % de la lluvia escurre (30 mm → 12.6 mm netos)'])
+  assert.deepEqual(landSurfaceNotes({...land, manning:'uniform', manning_value:.05, infiltration:'unsupported', curve_number:null}, tr), ['Manning uniforme n = 0.05'])
+  assert.deepEqual(landSurfaceNotes(null, tr), [])
+  assert.equal(designStormNote({return_period_years:10, duration_s:3600, step_s:600, total_mm:61.24, extrapolated:true, within_stated_accuracy:false, attribution:'PXR v2.1.0 ODbL'}, tr),
+    'Tormenta de diseño: periodo de retorno 10 años, 1 h, 61.2 mm (bloques alternos de 10 min, PXR-4). Bloques menores de 1 h extrapolados; fuera del rango de exactitud declarado (2–360 h).')
+  assert.equal(designStormNote(null, tr), null)
+  assert.match(runErrorMessage('landcover_unavailable', tr), /WorldCover/)
+  assert.match(runErrorMessage('soils_unavailable', tr), /HYSOGs/)
+  assert.match(runErrorMessage('soil_moisture_unavailable', tr), /humedad del suelo/)
+  assert.equal(runErrorMessage('solver_timeout', tr), 'solver_timeout')
+  assert.equal(hyetographCaption({land_surface:land, rainfall_source:'design_storm'}, tr), 'Hietograma de la lluvia neta que recibe el solver, media de la ROI (tormenta de diseño, mm/h)')
+  assert.equal(hyetographCaption({}, tr), 'Hietograma de la lluvia sintética (mm/h)')
+  assert.equal(hyetographCaption({land_surface:{...land, infiltration:'runoff_coefficient'}, rainfall_source:'synthetic'}, tr), 'Hietograma de la lluvia neta que recibe el solver, media de la ROI (sintética, mm/h)')
 })

@@ -594,3 +594,274 @@ def test_native_copernicus_terrain_is_converted_from_the_ellipsoid_to_egm2008(ro
     with rasterio.open(root / job['id'] / 'prepared/solver-terrain.tif') as aligned:
         expected = 100 + geoid_shift('copernicus')
         assert aligned.read(1) == pytest.approx(np.full((aligned.height, aligned.width), expected), abs=5e-3)
+
+
+# --- Land surface (WorldCover Manning, Curve Number net rain, antecedent moisture), design storms, urban ---------
+
+from rasterio.transform import from_origin as _from_origin
+
+from pipeline.hydrology import roi_runner as rr
+from pipeline.hydrology.curve_number import convert_amc, scs_runoff_mm
+from pipeline.hydrology.results import URBAN_WARNING
+
+
+def worldcover_reader(code=30):
+    """Fake WorldCover tile reader: every 10 m pixel of the requested window has class ``code``."""
+    def read(url, window):
+        return np.full((window[3], window[2]), code, dtype=np.uint8)
+    return read
+
+
+def soil_reader(west_code=1, east_code=4, split=-92.9996):
+    """Fake HYSOGs reader on a 0.0001 degree grid: one hydrologic soil group west of ``split``, another east."""
+    def read(bounds):
+        west, south, east, north = bounds
+        x0, y0, step = west - .001, north + .001, .0001
+        width, height = math.ceil((east - west + .002) / step), math.ceil((north - south + .002) / step)
+        lon = x0 + (np.arange(width) + .5) * step
+        values = np.where(lon < split, west_code, east_code).astype(np.uint8)[None, :].repeat(height, axis=0)
+        return {'values': values, 'transform': _from_origin(x0, y0, step, step), 'crs': 'EPSG:4326', 'source': 'test'}
+    return read
+
+
+def moisture(amc='III', source='SMAP L4', tried=None):
+    def antecedent(bounds, event_time_utc, **kwargs):
+        return {'amc': amc, 'relative_saturation': .7 if source else None, 'source': source, 'grid': None,
+                'provenance': {'event_time_utc': str(event_time_utc), 'bounds': list(bounds),
+                               'tried': tried or [{'source': source, 'outcome': 'used'}]}}
+    return antecedent
+
+
+def boom(*args, **kwargs):
+    raise AssertionError('must not be called')
+
+
+def cn_payload(p=None, amc='auto', amount=30):
+    p = p or payload()
+    p['rainfall'] = {'amount': amount, 'unit': 'mm', 'duration': 1, 'duration_unit': 's'}
+    p['hydraulics'].update(infiltration='curve_number', antecedent_moisture=amc)
+    return p
+
+
+def pxr_reader(lon, lat):
+    return {'a': 30.0, 'alpha': -.6, 'b': 10.0, 'beta': -.6, 'cell': {'lat': round(lat * 4) / 4, 'lon': round(lon * 4) / 4 % 360}}
+
+
+def design(p=None, period=10, duration_h=2 / 3600, step_s=1):
+    p = p or payload()
+    p['rainfall'] = None
+    p['rainfall_profile'] = {'source': 'design_storm', 'return_period_years': period, 'duration_h': duration_h, 'step_s': step_s}
+    return p
+
+
+def test_existing_payload_keeps_its_parameter_file_and_rain_exactly(root):
+    # Pin: without the new options nothing reads land cover or soils and the solver gets the same files.
+    request = validate_roi_run(payload(), config())
+    assert solver_parameter_file(request) == ('dg2\nvoutput\nDEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
+                                              'sim_time 2\nsaveint 1\ninitial_tstep 0.1\nfpfric 0.02\n'
+                                              'dynamicrainfile rain.nc\nbcifile boundary.bci\n')
+    assert request['rainfall'] == payload()['rainfall'] and request['computed']['losses']['runoff_coefficient'] is None
+    job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
+    assert job['land_surface']['manning'] == 'uniform' and job['land_surface']['curve_number'] is None
+    assert job['rainfall_source'] == 'synthetic' and job['design_storm'] is None
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           landcover_reader=boom, soil_reader=boom, antecedent=boom)
+    assert state['state'] == 'succeeded', state
+    run = root / job['id']
+    assert not (run / 'landcover').exists() and not (run / 'work/manning.n').exists()
+    assert 'profile' in state['provenance']['rain'] and 'method' not in state['provenance']['rain']
+    with netcdf_file(run / 'rain.nc', 'r', mmap=False) as nc:
+        rain = nc.variables['rainfall_depth'][:].copy()
+    segments = state['provenance']['rain']['profile']['segments']
+    assert rain[0].max() == pytest.approx(segments[0]['intensity_m_s'] * .5 * 1000)
+    assert URBAN_WARNING not in state['result']['warnings']
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['hydraulics'].update(manning='WorldCover'),
+    lambda p: p['hydraulics'].update(manning='uniform'),
+    lambda p: p['hydraulics'].update(infiltration='curve_number'),  # antecedent moisture is required with CN
+    lambda p: p['hydraulics'].update(infiltration='curve_number', antecedent_moisture='IV'),
+    lambda p: p['hydraulics'].update(infiltration='runoff_coefficient', antecedent_moisture='auto'),
+    lambda p: p['hydraulics'].update(urban_drainage_mm_h=12),  # only with curve_number
+    lambda p: p['hydraulics'].update(infiltration='curve_number', antecedent_moisture='II', urban_drainage_mm_h=-1),
+    lambda p: p['hydraulics'].update(infiltration='curve_number', antecedent_moisture='II', urban_drainage_mm_h=True),
+    lambda p: p['hydraulics'].update(domain_nonurban='no'),
+    lambda p: p['hydraulics'].update(domain_nonurban=None),
+])
+def test_land_surface_options_are_validated(root, change):
+    p = payload(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+def test_urban_domains_are_allowed_and_declared_urban_is_recorded(root):
+    p = payload(); p['hydraulics']['domain_nonurban'] = False
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert job['land_surface']['urban'] == {'declared_nonurban': False, 'built_up_fraction': None,
+                                            'built_up_cells': None, 'warning': True}
+
+
+def test_native_worldcover_manning_file_is_written_and_referenced_with_fpfric_kept(root):
+    p = payload(); p['hydraulics']['manning'] = 'worldcover'
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert job['land_surface']['manning'] == 'worldcover' and job['land_surface']['manning_fpfric'] is None
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           landcover_reader=worldcover_reader(50), soil_reader=boom, antecedent=boom)
+    assert state['state'] == 'succeeded', state
+    work = root / job['id'] / 'work'
+    par = (work / 'roi.par').read_text().splitlines()
+    assert 'manningfile manning.n' in par and 'fpfric 0.1' in par  # built-up 0.10 is the median and the NODATA fallback
+    grid = np.loadtxt(work / 'manning.n', skiprows=6)
+    header = (work / 'manning.n').read_text().splitlines()[:6]
+    assert header == (work / 'terrain.dem').read_text().splitlines()[:6]
+    with rasterio.open(root / job['id'] / 'prepared/solver-terrain.tif') as dem:
+        assert grid.shape == (dem.height, dem.width) and np.allclose(grid, .1)
+    assert state['input_hashes']['manning.n'] == sha(work / 'manning.n')
+    land = state['land_surface']
+    assert land['manning_fpfric'] == pytest.approx(.1)
+    assert land['urban']['built_up_cells'] == grid.size and land['urban']['built_up_fraction'] == pytest.approx(1.0)
+    assert land['urban']['warning'] is True and URBAN_WARNING in state['result']['warnings']
+    assert any('ESA WorldCover' in a for a in land['attribution'])
+    provenance = state['provenance']['land_surface']['landcover']
+    assert provenance['class_counts'] == {'50': grid.size} and provenance['manning']['values']['50'] == .1
+
+
+def test_native_curve_number_net_rain_per_cell_with_auto_moisture(root):
+    job = start_roi_run('alice', cn_payload(), root=root, config=config(), launch=False)
+    assert job['land_surface']['curve_number']['antecedent_moisture'] == 'auto'
+    assert job['land_surface']['curve_number']['event_time_basis'] == 'run_start'
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           landcover_reader=worldcover_reader(30), soil_reader=soil_reader(), antecedent=moisture('III'))
+    assert state['state'] == 'succeeded', state
+    run = root / job['id']
+    with netcdf_file(run / 'rain.nc', 'r', mmap=False) as nc:
+        rain = nc.variables['rainfall_depth'][:].copy()
+    cn = np.load(run / 'landcover/curve-number.npy')
+    total = rain.sum(axis=0)
+    assert (rain >= 0).all()
+    roi = total > 0
+    # Grassland, HSG A (west) and D (east) under AMC III: net rain of each cell is its own SCS-CN runoff.
+    expected = scs_runoff_mm(30.0, cn)
+    assert total[roi] == pytest.approx(expected[roi])
+    assert len(np.unique(np.round(cn[roi], 6))) == 2
+    assert set(np.round(cn[roi], 3)) == {round(convert_amc(54.0, 'III'), 3), round(convert_amc(86.0, 'III'), 3)}
+    cnls = state['land_surface']['curve_number']
+    assert (cnls['amc'], cnls['amc_source']) == ('III', 'SMAP L4')
+    assert 0 < cnls['mean_runoff_coefficient'] < 1 and cnls['gross_rain_mm'] == pytest.approx(30)
+    assert cnls['mean_net_rain_mm'] == pytest.approx(total[roi].mean())
+    assert state['losses']['runoff_coefficient'] is None and state['losses']['infiltration'] == 'curve_number'
+    method = state['provenance']['rain']['method']
+    assert method['roi_mean_net_mm'] == pytest.approx([rain[k][roi].mean() for k in range(len(method['roi_mean_net_mm']))])
+    assert any('HYSOGs250m' in a for a in state['land_surface']['attribution'])
+    assert state['provenance']['land_surface']['antecedent_moisture']['source'] == 'SMAP L4'
+
+
+def test_native_explicit_moisture_skips_the_soil_moisture_lookup(root):
+    job = start_roi_run('alice', cn_payload(amc='II'), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           landcover_reader=worldcover_reader(30), soil_reader=soil_reader(4, 4), antecedent=boom)
+    assert state['state'] == 'succeeded', state
+    cnls = state['land_surface']['curve_number']
+    assert (cnls['amc'], cnls['amc_source']) == ('II', 'request')
+    with netcdf_file(root / job['id'] / 'rain.nc', 'r', mmap=False) as nc:
+        total = nc.variables['rainfall_depth'][:].sum(axis=0)
+    assert total.max() == pytest.approx(scs_runoff_mm(30.0, 86.0))
+
+
+@pytest.mark.parametrize('kwargs, code', [
+    ({'landcover_reader': 'fail'}, 'landcover_unavailable'),
+    ({'soil_reader': 'fail'}, 'soils_unavailable'),
+    ({'antecedent': moisture(amc='II', source=None, tried=[{'source': 'NISAR SME2', 'outcome': 'error'},
+                                                          {'source': 'SMAP L4', 'outcome': 'error'}])}, 'soil_moisture_unavailable'),
+    ({'antecedent': 'fail'}, 'soil_moisture_unavailable'),
+])
+def test_dataset_failures_give_a_specific_error_and_no_uniform_fallback(root, kwargs, code):
+    def fail(*args, **kw):
+        raise OSError('network down secret=private')
+    readers = {'landcover_reader': worldcover_reader(30), 'soil_reader': soil_reader(), 'antecedent': moisture('II')}
+    readers.update({k: (fail if v == 'fail' else v) for k, v in kwargs.items()})
+    job = start_roi_run('alice', cn_payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads, **readers)
+    assert state['state'] == 'failed' and state['error'] == code
+    assert state['solver_attempts'] == [] and 'private' not in json.dumps(state)
+
+
+def test_no_soil_moisture_observation_uses_amc_ii_and_says_so(root):
+    none = moisture(amc='II', source=None, tried=[{'source': 'NISAR SME2', 'outcome': 'no_granule'},
+                                                  {'source': 'SMAP L4', 'outcome': 'no_valid_cells'}])
+    job = start_roi_run('alice', cn_payload(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           landcover_reader=worldcover_reader(30), soil_reader=soil_reader(), antecedent=none)
+    assert state['state'] == 'succeeded', state
+    assert (state['land_surface']['curve_number']['amc'], state['land_surface']['curve_number']['amc_source']) == ('II', None)
+
+
+def test_observed_rain_auto_moisture_uses_the_series_start(root):
+    p = observed(); p['hydraulics'].update(infiltration='curve_number', antecedent_moisture='auto')
+    p['rainfall_profile']['provenance']['start_utc'] = '2026-10-01T06:00:00Z'
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    cnls = job['land_surface']['curve_number']
+    assert (cnls['event_time_utc'], cnls['event_time_basis']) == ('2026-10-01T06:00:00Z', 'rain_series_start')
+    del p['rainfall_profile']['provenance']['start_utc']
+    with pytest.raises(ValueError, match='start_utc'):
+        validate_roi_run(p, config())
+
+
+def test_design_storm_is_computed_at_the_domain_centroid_and_fills_rainfall(root):
+    request = validate_roi_run(design(), config(), design_storm_reader=pxr_reader)
+    storm = request['computed']['design_storm']
+    assert storm['point'] == pytest.approx([-92.9996, 16.80015], abs=1e-6)
+    assert [s['end_s'] for s in storm['segments']] == [1, 2] and storm['extrapolated'] is True
+    assert storm['within_stated_accuracy'] is False and storm['provenance']['dataset'] == 'PXR-4'
+    assert request['rainfall'] == {'amount': storm['total_mm'], 'unit': 'mm', 'duration': 2, 'duration_unit': 's'}
+    job = start_roi_run('alice', design(), root=root, config=config(), launch=False, design_storm_reader=pxr_reader)
+    assert job['synthetic'] is True and job['rainfall_source'] == 'design_storm'
+    assert job['design_storm']['return_period_years'] == 10 and job['design_storm']['total_mm'] == pytest.approx(storm['total_mm'])
+    assert 'ODbL' in job['design_storm']['attribution'] and 'segments' not in job['design_storm']
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p.update(rainfall={'amount': 2, 'unit': 'mm', 'duration': 2, 'duration_unit': 's'}),
+    lambda p: p['rainfall_profile'].update(return_period_years=1),
+    lambda p: p['rainfall_profile'].update(return_period_years='10'),
+    lambda p: p['rainfall_profile'].update(step_s=.5),
+    lambda p: p['rainfall_profile'].update(step_s=3),  # does not divide 2 s
+    lambda p: p['rainfall_profile'].update(seed=7),
+    lambda p: p['rainfall_profile'].update(duration_h=25),
+])
+def test_design_storm_requests_are_validated(root, change):
+    p = design(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False, design_storm_reader=pxr_reader)
+    assert not root.exists()
+
+
+def test_missing_design_storm_data_is_a_specific_unavailable_error(root, tmp_path):
+    cfg = config(); cfg['pxr_path'] = str(BASE.parent / 'reference/pxr/missing-pxr.nc')
+    with pytest.raises(rr.DatasetUnavailable) as error:
+        start_roi_run('alice', design(), root=root, config=cfg, launch=False)
+    assert error.value.code == 'design_storm_unavailable' and not root.exists()
+
+
+def test_native_design_storm_segments_reach_the_solver(root):
+    job = start_roi_run('alice', design(), root=root, config=config(), launch=False, design_storm_reader=pxr_reader)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    storm = json.loads((root / job['id'] / 'job.json').read_text())['payload']['computed']['design_storm']
+    with netcdf_file(root / job['id'] / 'rain.nc', 'r', mmap=False) as nc:
+        rain = nc.variables['rainfall_depth'][:].copy()
+    assert [rain[k].max() for k in range(2)] == pytest.approx([s['mm'] for s in storm['segments']])
+    assert state['provenance']['rain']['profile']['design_storm'] is True
+    assert state['provenance']['rain']['synthetic'] is True
+
+
+def test_worldcover_manning_file_is_read_by_both_solvers_and_needs_the_prepared_fpfric():
+    p = payload(); p['hydraulics']['manning'] = 'worldcover'
+    request = validate_roi_run(p, config())
+    for solver in ('dg2', 'fv1'):
+        lines = solver_parameter_file(request, solver=solver, fpfric=.035).splitlines()
+        assert lines[0] == solver and 'fpfric 0.035' in lines and 'manningfile manning.n' in lines
+    with pytest.raises(ValueError, match='fpfric'):
+        solver_parameter_file(request)

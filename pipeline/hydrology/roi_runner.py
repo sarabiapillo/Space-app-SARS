@@ -1,17 +1,24 @@
 """Trabajos privados ROI→terreno (NASADEM o Copernicus GLO-30)→DG2/FV1. Hipótesis sintéticas, no precisión hidráulica certificada.
 
 Payload exacto: roi, domain (GeoJSON Polygon EPSG:4326); rainfall (contrato
-normalize_request); rainfall_profile {interval_count,seed,distribution}; terrain
-{target_crs,resolution_m,resampling,source?} con source 'nasadem' (por defecto) o 'copernicus'
+normalize_request; null con tormenta de diseño, la calcula el servidor); rainfall_profile
+{interval_count,seed,distribution} (sintética), {source:'observed',segments,provenance} (observada) o
+{source:'design_storm',return_period_years,duration_h,step_s} (PXR-4 en el centroide del dominio, bloques
+alternos); terrain {target_crs,resolution_m,resampling,source?} con source 'nasadem' (por defecto) o 'copernicus'
 (NISAR_DEM v1.2 de ASF, elipsoidal); todas las alturas (terreno, level_m, agua en reposo) en EGM2008;
-hydraulics {manning,initial_condition,
-boundary,infiltration,domain_nonurban}; simulation {duration_s,save_interval_s,
+hydraulics {manning,initial_condition,boundary,infiltration,domain_nonurban} + opcionales
+{atmospheric_pressure_hpa,lakes,antecedent_moisture,urban_drainage_mm_h}; simulation {duration_s,save_interval_s,
 initial_tstep_s,dg2_depth_thresh_m,solver?}; solver 'dg2' (default) o 'fv1', con fallback
 automático al otro si el intento falla tras la preparación. boundary: 'closed', 'free' u objeto por lado
 (north/east/south/west: closed, free o fixed_level con level_m); initial_condition:
-'dry_zero_velocity' o 'still_water_at_fixed_level'; infiltration: 'unsupported' o
-'runoff_coefficient'; atmospheric_pressure_hpa opcional (950-1040, eleva el nivel del mar fijo).
-Ningún path ni binario procede del cliente.
+'dry_zero_velocity' o 'still_water_at_fixed_level'; manning: número (uniforme) o 'worldcover' (n por celda de
+ESA WorldCover en manningfile, fpfric = mediana); infiltration: 'unsupported', 'runoff_coefficient' o
+'curve_number' (lluvia neta SCS-CN por celda, WorldCover + HYSOGs250m; requiere antecedent_moisture 'auto'
+(NISAR SME2 / SMAP L4) o 'I'|'II'|'III', y admite urban_drainage_mm_h >= 0); domain_nonurban: booleano declarado
+(informativo: un dominio urbano se admite con aviso); atmospheric_pressure_hpa opcional (950-1040, eleva el nivel
+del mar fijo). Ningún path ni binario procede del cliente. Un fallo al leer WorldCover, HYSOGs o la humedad del suelo
+termina la corrida con un código propio (landcover_unavailable, soils_unavailable, soil_moisture_unavailable), sin
+valores uniformes de reemplazo; sin datos PXR-4 la solicitud se rechaza con design_storm_unavailable.
 """
 from __future__ import annotations
 
@@ -43,16 +50,20 @@ from pipeline.elevation.copernicus import CopernicusDEMProvider
 from pipeline.elevation.nasadem import NASADEMProvider, _required_tiles
 from pipeline.elevation.vertical_datum import DATUM, DEFAULT_GRID_DIR, GRIDS, load_grids
 from .inputs import normalize_request, validate_roi
+from . import design_storm as storms
+from .curve_number import curve_number_grid, hsg_for_grid, net_rain_cube
+from .landcover import BUILT_CLASS, landcover_for_grid, write_manning_file
+from .soil_moisture import _utc as _parse_utc, antecedent_condition
 from .dem_prepared import prepare_dem, _validate_crs
 from .dem_dg2 import prepare_dg2_dem
 from .rainfall import generate_rainfall_profile, observed_rainfall_profile
-from .rainfall_netcdf import export_rainfall_netcdf
+from .rainfall_netcdf import export_rainfall_cube_netcdf, export_rainfall_netcdf, roi_cell_mask
 from .boundaries import format_boundary, normalize_boundary
 from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
 from .lakes import CITATION as LAKES_CITATION, burn_lakes, lakes_in_bounds
-from .results import NegativeDepthArtifacts, summarize_results, export_depth_cog
+from .results import URBAN_WARNING, NegativeDepthArtifacts, summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
 _KEYS = {'roi', 'domain', 'rainfall', 'rainfall_profile', 'terrain', 'hydraulics', 'simulation'}
@@ -60,8 +71,25 @@ SOLVERS = ('dg2', 'fv1')
 # Terrain sources: NASADEM (EGM96, 56 S-60 N) or NISAR_DEM / Copernicus GLO-30 (ellipsoidal, global).
 TERRAIN_SOURCES = ('nasadem', 'copernicus')
 _COVERAGE = {'nasadem': (-56, 60), 'copernicus': (-90, 90)}
+INFILTRATION = ('unsupported', 'runoff_coefficient', 'curve_number')
+ANTECEDENT_MOISTURE = ('auto', 'I', 'II', 'III')
+MAX_URBAN_DRAINAGE_MM_H = 200.0
+MAX_RETURN_PERIOD_YEARS = 1000.0
+MAX_STORM_HOURS = 24.0
+# Urban warning when the dominant class of some cell is built-up, or 1 % of the domain's 10 m pixels are built-up.
+URBAN_FRACTION_WARNING = 0.01
+HYSOGS_ATTRIBUTION = ('HYSOGs250m: Ross, C.W. et al. 2018, Global Hydrologic Soil Groups for Curve Number-Based '
+                      'Runoff Modeling, ORNL DAAC, doi:10.3334/ORNLDAAC/1566')
 _CONFIG = {'executable', 'binary_sha256', 'dem_executable', 'dem_sha256', 'timeout_s',
            'preparation_timeout_s', 'max_cells', 'max_rain_values', 'max_frames', 'max_tiles', 'code_version'}
+
+
+class DatasetUnavailable(Exception):
+    """An open dataset the request needs could not be read; ``code`` is the public error code."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
 
 
 def _keys(obj, keys):
@@ -100,11 +128,14 @@ def validate_config(config):
     """Configuración exclusivamente del servidor; hashes y límites obligatorios."""
     # lakes_path (HydroLAKES GeoPackage) is optional: without it the lakes option is refused.
     # geoid_dir (EGM96/EGM2008 grids) defaults to data/reference/geoid; every run needs both grids.
-    if not isinstance(config, dict) or not _CONFIG <= set(config) <= _CONFIG | {'lakes_path', 'geoid_dir'}:
+    # pxr_path (PXR-4 netCDF, python -m pipeline.hydrology.design_storm prepare) is optional: without the file
+    # design-storm requests are refused with design_storm_unavailable.
+    if not isinstance(config, dict) or not _CONFIG <= set(config) <= _CONFIG | {'lakes_path', 'geoid_dir', 'pxr_path'}:
         raise ValueError('configuración: claves inválidas')
     result = dict(config)
-    if 'lakes_path' in config:
-        result['lakes_path'] = str(_path(config['lakes_path']))
+    for name in ('lakes_path', 'pxr_path'):
+        if name in config:
+            result[name] = str(_path(config[name]))
     geoid = _path(config.get('geoid_dir', str(DEFAULT_GRID_DIR)))
     if not all((geoid / spec['file']).is_file() for spec in GRIDS.values()):
         raise ValueError('rejillas del geoide no instaladas (python -m pipeline.elevation.vertical_datum prepare)')
@@ -178,8 +209,10 @@ def _geometry(payload, crs, resolution, budget, tiles, source='nasadem'):
     return mapping(geographic), [left,bottom,right,top], width, height
 
 
-def validate_roi_run(payload, limits):
-    """Normaliza JSON y comprueba presupuestos ANTES de crear estado/red."""
+def validate_roi_run(payload, limits, *, design_storm_reader=None):
+    """Normaliza JSON y comprueba presupuestos ANTES de crear estado/red.
+
+    ``design_storm_reader(lon, lat)`` replaces the PXR-4 cache reader (tests); the cache path is ``pxr_path``."""
     _keys(payload, _KEYS)
     try:
         if len(json.dumps(payload, allow_nan=False)) > 100_000:
@@ -195,13 +228,16 @@ def validate_roi_run(payload, limits):
     source = payload['terrain'].get('source', 'nasadem')
     if not isinstance(source, str) or source not in TERRAIN_SOURCES:
         raise ValueError("terrain.source debe ser 'nasadem' o 'copernicus'")
-    observed = isinstance(payload['rainfall_profile'], dict) and payload['rainfall_profile'].get('source') == 'observed'
-    _keys(payload['rainfall_profile'], {'source','segments','provenance'} if observed else {'interval_count','seed','distribution'})
+    kind = payload['rainfall_profile'].get('source') if isinstance(payload['rainfall_profile'], dict) else None
+    observed, design = kind == 'observed', kind == 'design_storm'
+    _keys(payload['rainfall_profile'], {'source','segments','provenance'} if observed else
+          {'source','return_period_years','duration_h','step_s'} if design else {'interval_count','seed','distribution'})
     if observed and not isinstance(payload['rainfall_profile']['provenance'], dict):
         raise ValueError('lluvia observada requiere su procedencia')
     hydraulic_keys = {'manning','initial_condition','boundary','infiltration','domain_nonurban'}
     if (not isinstance(payload['hydraulics'], dict) or not hydraulic_keys <= set(payload['hydraulics'])
-            or not set(payload['hydraulics']) <= hydraulic_keys | {'atmospheric_pressure_hpa', 'lakes'}):
+            or not set(payload['hydraulics']) <= hydraulic_keys | {'atmospheric_pressure_hpa', 'lakes',
+                                                                   'antecedent_moisture', 'urban_drainage_mm_h'}):
         raise ValueError('hydraulics: claves inválidas')
     simulation_keys = {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'}
     if (not isinstance(payload['simulation'], dict) or not simulation_keys <= set(payload['simulation'])
@@ -212,8 +248,9 @@ def validate_roi_run(payload, limits):
     resolution = _number(t['resolution_m'], 100_000)
     if t['resampling'] not in ('nearest','bilinear'):
         raise ValueError('resampling inválido')
+    # domain_nonurban is a declaration, not a gate: urban domains run with a visible warning.
     if (h['initial_condition'] not in ('dry_zero_velocity','still_water_at_fixed_level') or
-            h['infiltration'] not in ('unsupported','runoff_coefficient') or h['domain_nonurban'] is not True):
+            h['infiltration'] not in INFILTRATION or not isinstance(h['domain_nonurban'], bool)):
         raise ValueError('hipótesis hidráulicas explícitas requeridas')
     sides = normalize_boundary(h['boundary'])
     if h['initial_condition'] == 'still_water_at_fixed_level':
@@ -234,7 +271,18 @@ def validate_roi_run(payload, limits):
     # The sea level the solver sees: requested fixed level plus the inverse-barometer surge.
     solver_sides = {side: ({**spec, 'level_m': spec['level_m'] + surge} if spec['type'] == 'fixed_level' else spec)
                     for side, spec in sides.items()}
-    _number(h['manning'], 1)
+    worldcover = h['manning'] == 'worldcover'
+    if not worldcover:
+        _number(h['manning'], 1)
+    curve = h['infiltration'] == 'curve_number'
+    if curve != ('antecedent_moisture' in h) or (not curve and 'urban_drainage_mm_h' in h):
+        raise ValueError('antecedent_moisture (obligatoria) y urban_drainage_mm_h solo con infiltration curve_number')
+    if curve and (not isinstance(h['antecedent_moisture'], str) or h['antecedent_moisture'] not in ANTECEDENT_MOISTURE):
+        raise ValueError("antecedent_moisture debe ser 'auto', 'I', 'II' o 'III'")
+    drainage = h.get('urban_drainage_mm_h', 0)
+    if (isinstance(drainage, bool) or not isinstance(drainage, (int, float)) or not math.isfinite(drainage)
+            or not 0 <= drainage <= MAX_URBAN_DRAINAGE_MM_H):
+        raise ValueError('urban_drainage_mm_h debe estar entre 0 y 200 mm/h')
     duration = _number(s['duration_s'], 86400)
     save = _number(s['save_interval_s'], duration)
     _number(s['initial_tstep_s'], duration)
@@ -251,7 +299,15 @@ def validate_roi_run(payload, limits):
     frames = math.floor(duration / save) + 2
     if frames > limits['max_frames']:
         raise ValueError('cuadros exceden max_frames')
-    normalized = normalize_request({'roi': payload['roi'], 'rainfall': payload['rainfall']})
+    storm = None
+    rainfall = payload['rainfall']
+    if design:
+        # The depth comes from the server's PXR-4 data, so the client sends rainfall null and the server fills it.
+        if rainfall is not None:
+            raise ValueError('con tormenta de diseño, rainfall debe ser null: el servidor la calcula')
+        storm = _design_storm(payload['domain'], rp, limits, design_storm_reader)
+        rainfall = {'amount': storm['total_mm'], 'unit': 'mm', 'duration': storm['duration_s'], 'duration_unit': 's'}
+    normalized = normalize_request({'roi': payload['roi'], 'rainfall': rainfall})
     if normalized['rainfall']['duration_s'] > duration:
         raise ValueError('duración de lluvia supera simulación')
     coefficient = runoff_coefficient(normalized['rainfall']['duration_s']) if h['infiltration'] == 'runoff_coefficient' else None
@@ -259,23 +315,79 @@ def validate_roi_run(payload, limits):
               'atmospheric_pressure_hpa': pressure, 'barometric_surge_m': surge}
     if observed:
         count = len(rp['segments']) if isinstance(rp['segments'], list) else 0
+    elif design:
+        count = len(storm['segments'])
     else:
         if isinstance(rp['seed'], bool) or not isinstance(rp['seed'], int) or abs(rp['seed']) > 2**53:
             raise ValueError('seed fuera de rango')
         count = _number(rp['interval_count'], 10000, integer=True)
         if count < 2 or count % 2 or rp['distribution'] != 'uniform_balanced':
             raise ValueError('perfil no admitido')
+    land = _land_surface_request(h, rp, observed, drainage)
     geography, extent, width, height = _geometry(payload, crs, resolution, limits['max_cells'], limits['max_tiles'], source)
     if (count + 2)*width*height > limits['max_rain_values'] or frames*width*height > limits['max_rain_values']:
         raise ValueError('presupuesto acumulado de datos excedido')
+    computed = {'geographic_acquisition': geography, 'extent_m': extent,
+                'width': width, 'height': height, 'frame_budget': frames,
+                'boundary': sides, 'solver_boundary': solver_sides,
+                'losses': losses, 'lakes': lakes, 'land_surface': land, 'design_storm': storm}
+    request = {**payload, 'rainfall': rainfall, 'terrain': {**t, 'target_crs': crs.to_string(), 'source': source},
+               'simulation': {**s, 'solver': solver}, 'computed': computed}
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
-    _rain_profile(payload, losses)
-    return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string(), 'source': source},
-                                  'simulation': {**s, 'solver': solver},
-                                  'computed': {'geographic_acquisition': geography, 'extent_m': extent,
-                                               'width': width, 'height': height, 'frame_budget': frames,
-                                               'boundary': sides, 'solver_boundary': solver_sides,
-                                               'losses': losses, 'lakes': lakes}}, allow_nan=False))
+    _rain_profile(request, losses)
+    return json.loads(json.dumps(request, allow_nan=False))
+
+
+def _design_storm(domain, rp, limits, reader):
+    """PXR-4 alternating-block storm at the domain centroid; request errors are ValueError, missing data is not."""
+    period = rp['return_period_years']
+    if (isinstance(period, bool) or not isinstance(period, (int, float)) or not math.isfinite(period)
+            or not 1 < period <= MAX_RETURN_PERIOD_YEARS):
+        raise ValueError('return_period_years debe estar en (1, 1000] años')
+    hours = _number(rp['duration_h'], MAX_STORM_HOURS)
+    step = rp['step_s']
+    if isinstance(step, bool) or not isinstance(step, int) or step <= 0:
+        raise ValueError('step_s debe ser un entero positivo de segundos')
+    blocks = round(hours * 3600 / step)
+    if blocks < 1 or not math.isclose(blocks * step, hours * 3600, rel_tol=0, abs_tol=1e-6) or blocks > 10_000:
+        raise ValueError('step_s debe dividir exactamente la duración (como máximo 10 000 bloques)')
+    centre = shape(domain).centroid
+    if reader is None:
+        reader = storms.Pxr4Reader(limits.get('pxr_path') or storms.DEFAULT_PATH)
+    try:
+        storm = storms.design_storm(centre.x, centre.y, hours, period, step, reader=reader)
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        # Missing cache, a cell without parameters or a non-monotonic curve: data, not the request.
+        raise DatasetUnavailable('design_storm_unavailable') from None
+    return {**storm, 'point': [centre.x, centre.y]}
+
+
+def _land_surface_request(h, rp, observed, drainage):
+    """Requested land-surface options; values found during preparation (fpfric, AMC, built-up) start as null."""
+    curve = None
+    if h['infiltration'] == 'curve_number':
+        event, basis = None, None
+        if h['antecedent_moisture'] == 'auto':
+            if observed:
+                # Observed rain: the soil before the series starts.
+                try:
+                    event = _parse_utc(rp['provenance']['start_utc'])
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError('humedad previa auto con lluvia observada requiere provenance.start_utc') from None
+                event, basis = rp['provenance']['start_utc'], 'rain_series_start'
+            else:
+                # Synthetic or design rain is hypothetical: the soil as it is when the run starts.
+                event, basis = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'run_start'
+        curve = {'antecedent_moisture': h['antecedent_moisture'], 'event_time_utc': event, 'event_time_basis': basis,
+                 'urban_drainage_mm_h': float(drainage), 'amc': None if h['antecedent_moisture'] == 'auto' else h['antecedent_moisture'],
+                 'amc_source': None if h['antecedent_moisture'] == 'auto' else 'request', 'relative_saturation': None,
+                 'gross_rain_mm': None, 'mean_net_rain_mm': None, 'mean_runoff_coefficient': None, 'cn_mean': None}
+    worldcover = h['manning'] == 'worldcover'
+    return {'manning': 'worldcover' if worldcover else 'uniform', 'manning_value': None if worldcover else h['manning'],
+            'manning_fpfric': None, 'infiltration': h['infiltration'], 'curve_number': curve,
+            'urban': {'declared_nonurban': h['domain_nonurban'], 'built_up_fraction': None, 'built_up_cells': None,
+                      'warning': not h['domain_nonurban']},
+            'attribution': []}
 
 
 def _directory(root, run_id):
@@ -323,13 +435,13 @@ def get_roi_run(root, run_id):
     return state
 
 
-def start_roi_run(owner, payload, *, root, config, launch=True):
+def start_roi_run(owner, payload, *, root, config, launch=True, design_storm_reader=None):
     """Preflight sin efectos; crea carpeta 0700 privada y lanza worker desacoplado."""
     if not isinstance(owner, str) or not owner or len(owner) > 200:
         raise ValueError('owner requerido')
     root = _path(root)
     cfg = validate_config(config)
-    request = validate_roi_run(payload, cfg)
+    request = validate_roi_run(payload, cfg, design_storm_reader=design_storm_reader)
     if root.exists() and (not root.is_dir() or root.is_symlink() or root.stat().st_mode & 0o077):
         raise ValueError('root inseguro')
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -348,6 +460,11 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'initial_condition':request['hydraulics']['initial_condition'],
              'losses':request['computed']['losses'],
              'lakes':request['computed']['lakes'],
+             # Land surface (Manning, Curve Number, antecedent moisture, urban) and the rain source; values found
+             # during preparation are filled in by the worker.
+             'land_surface':request['computed']['land_surface'],
+             'rainfall_source':request['rainfall_profile'].get('source','synthetic'),
+             'design_storm':_storm_summary(request['computed']['design_storm']),
              # Terrain provider and the single vertical datum of every height (terrain, level_m, still water).
              'terrain_source':request['terrain']['source'],'vertical_datum':DATUM,
              'terrain_attribution':(copernicus.ATTRIBUTION + '. ' + copernicus.DISCLAIMER
@@ -367,7 +484,18 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
     return get_roi_run(root,run_id)
 
 
-def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads):
+def _storm_summary(storm):
+    """Design storm for status/results: no segments (they are in the rain provenance)."""
+    if not storm:
+        return None
+    keys = ('total_mm', 'duration_s', 'step_s', 'return_period_years', 'extrapolated', 'within_stated_accuracy', 'point')
+    return {**{key: storm[key] for key in keys}, 'method': storm['method'], 'dataset': storm['provenance']['dataset'],
+            'version': storm['provenance']['version'], 'doi': storm['provenance']['doi'],
+            'licence': storm['provenance']['licence'], 'attribution': storm['provenance']['attribution'],
+            'cell': storm['provenance']['cell']}
+
+
+def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads, datasets=None):
     geography = request['computed']['geographic_acquisition']
     records = provider.acquire_roi(geography)
     stage.write_text('preparation')
@@ -419,9 +547,13 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         write_still_water_start(directory/'dg2',directory/'initial',
                                 request['computed']['solver_boundary'] if _still_water(request) else None,
                                 max_cells=cfg['max_cells'],lake_depth=lake_depth)
+    land = _land_surface(directory, request, dem, datasets or {})
     profile = _rain_profile(request, request['computed']['losses'])
-    export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
-                           max_values=cfg['max_rain_values'])
+    if land is not None and land.get('cn') is not None:
+        _export_net_rain(directory, request, cfg, dem, profile, land)
+    else:
+        export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
+                               max_values=cfg['max_rain_values'])
     # OpenStreetMap roads for road-cut indicators; optional: an Overpass failure never stops the run.
     try:
         roads = roads_fetcher(shape(request['computed']['geographic_acquisition']).bounds)
@@ -431,12 +563,132 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
     return actual
 
 
+def _land_surface(directory, request, dem, datasets):
+    """WorldCover classes / Manning file and, for Curve Number, HYSOGs groups, antecedent moisture and CN per cell.
+
+    Returns None when the request needs no land data. Writes landcover/manifest.json (and manning.n,
+    curve-number.npy); a dataset that cannot be read raises DatasetUnavailable, never a uniform substitute."""
+    spec = request['computed']['land_surface']
+    curve = spec['infiltration'] == 'curve_number'
+    if spec['manning'] != 'worldcover' and not curve:
+        return None
+    out = directory / 'landcover'
+    out.mkdir(mode=0o700)
+    with rasterio.open(dem) as src:
+        grid = ((src.height, src.width), src.transform, src.crs.to_string())
+    try:
+        land = landcover_for_grid(*grid, reader=datasets.get('landcover_reader'))
+    except Exception:
+        raise DatasetUnavailable('landcover_unavailable') from None
+    classes, built = land['classes'], land['built_fraction']
+    built_cells = int(np.count_nonzero(classes == BUILT_CLASS))
+    fraction = float(np.nanmean(built)) if np.isfinite(built).any() else 0.0
+    urban = {'declared_nonurban': spec['urban']['declared_nonurban'], 'built_up_fraction': fraction,
+             'built_up_cells': built_cells,
+             'warning': (not spec['urban']['declared_nonurban']) or built_cells > 0 or fraction >= URBAN_FRACTION_WARNING,
+             'rule': f'warning when a cell is mostly built-up (WorldCover class 50) or >= {URBAN_FRACTION_WARNING:g} '
+                     'of the domain 10 m pixels are built-up, or the domain is declared urban'}
+    summary = {'urban': urban, 'attribution': [land['provenance']['attribution'] + ' (CC BY 4.0)'], 'manning_fpfric': None}
+    manifest = {'landcover': land['provenance'], 'urban': urban}
+    if spec['manning'] == 'worldcover':
+        finite = land['manning'][np.isfinite(land['manning'])]
+        # LISFLOOD-FP replaces NODATA cells of manningfile by fpfric: the median of the known cells.
+        summary['manning_fpfric'] = round(float(np.median(finite)), 6)
+        write_manning_file(out / 'manning.n', land['manning'], template_dem=directory / 'dg2/terrain.dem')
+        manifest['manning'] = {'file': 'manning.n', 'fpfric': summary['manning_fpfric'],
+                               'fpfric_rule': 'median of the per-cell Manning values (NODATA fallback)',
+                               'nodata_cells': int(np.count_nonzero(~np.isfinite(land['manning']))),
+                               'sha256': _sha(out / 'manning.n')}
+    result = {'summary': summary, 'built_fraction': built, 'cn': None, 'amc': None}
+    if curve:
+        try:
+            soils = hsg_for_grid(*grid, reader=datasets.get('soil_reader'))
+        except Exception:
+            raise DatasetUnavailable('soils_unavailable') from None
+        moisture = _antecedent(request, spec['curve_number'], datasets.get('antecedent') or antecedent_condition)
+        cn = curve_number_grid(classes, soils['hsg'], amc=moisture['amc'])
+        np.save(out / 'curve-number.npy', cn)
+        manifest.update(soils=soils['provenance'], antecedent_moisture=moisture['provenance'])
+        summary['attribution'].append(HYSOGS_ATTRIBUTION)
+        if moisture['source'] not in (None, 'request'):
+            summary['attribution'].append(moisture['provenance'].get('citation') or moisture['source'])
+        summary['curve_number'] = {'amc': moisture['amc'], 'amc_source': moisture['source'],
+                                   'relative_saturation': moisture['relative_saturation'],
+                                   'cn_mean': float(np.nanmean(cn)) if np.isfinite(cn).any() else None}
+        result.update(cn=cn, amc=moisture['amc'])
+    manifest['summary'] = summary
+    (out / 'manifest.json').write_text(json.dumps(manifest, allow_nan=False, default=_json_default))
+    return result
+
+
+def _json_default(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f'not JSON serialisable: {type(value).__name__}')
+
+
+def _antecedent(request, spec, lookup):
+    """Antecedent moisture condition: the requested class, or NISAR SME2 / SMAP L4 before the event (``auto``).
+
+    'auto' falls back to AMC II only when the services answered without a usable observation (recorded);
+    when every source failed to answer, the run stops with soil_moisture_unavailable."""
+    if spec['antecedent_moisture'] != 'auto':
+        return {'amc': spec['antecedent_moisture'], 'source': 'request', 'relative_saturation': None,
+                'provenance': {'method': 'antecedent moisture condition given in the request'}}
+    bounds = shape(request['computed']['geographic_acquisition']).bounds
+    try:
+        found = lookup(bounds, spec['event_time_utc'])
+    except Exception:
+        raise DatasetUnavailable('soil_moisture_unavailable') from None
+    tried = (found.get('provenance') or {}).get('tried') or []
+    if found.get('source') is None and tried and all(item.get('outcome') == 'error' for item in tried):
+        raise DatasetUnavailable('soil_moisture_unavailable')
+    if found.get('amc') not in ('I', 'II', 'III'):
+        raise DatasetUnavailable('soil_moisture_unavailable')
+    provenance = dict(found.get('provenance') or {})
+    # Error reasons may carry service URLs or messages: keep only what was tried and its outcome.
+    provenance['tried'] = [{k: v for k, v in item.items() if k != 'reason' or item.get('outcome') != 'error'}
+                           for item in tried]
+    provenance['source'] = found.get('source')
+    return {'amc': found['amc'], 'source': found.get('source'), 'relative_saturation': found.get('relative_saturation'),
+            'provenance': provenance}
+
+
+def _export_net_rain(directory, request, cfg, dem, profile, land):
+    """SCS-CN net rain per cell (zero outside the ROI cells, as the uniform profile) to rain.nc and rain.json."""
+    spec = request['computed']['land_surface']['curve_number']
+    mask = roi_cell_mask(request['roi'], dem)
+    cube, summary = net_rain_cube(profile['segments'], land['cn'], built_fraction=land['built_fraction'],
+                                  urban_drainage_mm_h=spec['urban_drainage_mm_h'])
+    cube = cube * mask[None]
+    gross = float(summary['total_rain_mm'])
+    net = cube.sum(axis=0)[mask]
+    method = {'method': 'scs_curve_number_incremental', 'curve_number': summary, 'gross_profile': profile,
+              'roi_cells': int(mask.sum()),
+              'roi_mean_net_mm': [float(v) for v in cube[:, mask].mean(axis=1)],
+              'roi_gross_mm': [float(v) for v in summary['interval_rain_mm']],
+              'roi_mean_net_total_mm': float(net.mean()), 'gross_total_mm': gross,
+              'roi_mean_runoff_coefficient': float(net.mean() / gross) if gross > 0 else 0.0,
+              'amc': land['amc'],
+              'spatial_policy': 'net rain per ROI cell centre; zero outside the ROI, as the uniform profile'}
+    export_rainfall_cube_netcdf(cube, summary['interval_edges_s'], dem, directory / 'rain.nc',
+                                simulation_duration_s=request['simulation']['duration_s'], method=method,
+                                synthetic=profile['synthetic'] is True, observed=profile.get('observed', False) is True,
+                                max_values=cfg['max_rain_values'])
+
+
 def _rain_profile(request, losses):
     """Rain profile the solver receives: synthetic from ``rainfall``, or an observed series (e.g. IMERG).
 
     An observed series must add up to the declared ``rainfall`` amount over the declared duration.
     """
     rp = request['rainfall_profile']
+    if rp.get('source') == 'design_storm':
+        # Hypothetical storm: synthetic, served through the same per-interval path as an observed series.
+        storm = request['computed']['design_storm']
+        profile = observed_rainfall_profile(request['roi'], storm['segments'], storm['provenance'],
+                                            scale=losses['runoff_coefficient'] or 1.0)
+        return {**profile, 'synthetic': True, 'observed': False, 'design_storm': True}
     if rp.get('source') != 'observed':
         return generate_rainfall_profile({'roi': request['roi'], 'rainfall': _solver_rainfall(request['rainfall'], losses)}, **rp)
     declared = normalize_request({'roi': request['roi'], 'rainfall': request['rainfall']})['rainfall']
@@ -461,12 +713,17 @@ def _still_water(request):
     return request['hydraulics']['initial_condition'] == 'still_water_at_fixed_level'
 
 
-def solver_parameter_file(request, start=None, solver=None):
+def solver_parameter_file(request, start=None, solver=None, fpfric=None):
     """LISFLOOD-FP .par text from a validated request. All file names are constant;
     only validated numbers are interpolated, so no untrusted directive can be injected.
 
-    ``solver`` overrides the requested one (automatic fallback); the same 8.0.3 binary takes `dg2` or `fv1`."""
+    ``solver`` overrides the requested one (automatic fallback); the same 8.0.3 binary takes `dg2` or `fv1`.
+    With ``manning: 'worldcover'`` the per-cell ``manningfile manning.n`` is read by both solvers and ``fpfric``
+    (the median found during preparation) fills its NODATA cells."""
     s, h = request['simulation'], request['hydraulics']
+    worldcover = h['manning'] == 'worldcover'
+    if worldcover and (isinstance(fpfric, bool) or not isinstance(fpfric, (int, float)) or not 0 < fpfric < 1):
+        raise ValueError('Manning por cobertura requiere fpfric de la preparación')
     solver = solver or s.get('solver', 'dg2')
     if solver not in SOLVERS:
         raise ValueError('solver inválido')
@@ -478,8 +735,10 @@ def solver_parameter_file(request, start=None, solver=None):
     parameter += 'voutput\n'
     parameter += ('DEMfile terrain.dem\ndirroot outputs\nresroot roi\n'
                   f'sim_time {s["duration_s"]}\nsaveint {s["save_interval_s"]}\n'
-                  f'initial_tstep {s["initial_tstep_s"]}\nfpfric {h["manning"]}\n'
+                  f'initial_tstep {s["initial_tstep_s"]}\nfpfric {fpfric if worldcover else h["manning"]}\n'
                   'dynamicrainfile rain.nc\n')
+    if worldcover:
+        parameter += 'manningfile manning.n\n'
     if _has_boundary_file(request):
         parameter += 'bcifile boundary.bci\n'
     if _still_water(request) if start is None else start:
@@ -488,12 +747,16 @@ def solver_parameter_file(request, start=None, solver=None):
     return parameter
 
 
-def _preparation_child(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads):
+def _preparation_child(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads, datasets=None):
     os.setsid()
     try:
         stage.write_text('acquisition')
-        actual = _prepare(directory,request,cfg,provider,stage,roads_fetcher)
+        actual = _prepare(directory,request,cfg,provider,stage,roads_fetcher,datasets)
         stage.write_text(json.dumps({'extent_m':actual}))
+    except DatasetUnavailable as exc:
+        # Public code only (landcover_unavailable, soils_unavailable, soil_moisture_unavailable).
+        stage.write_text(exc.code)
+        os._exit(1)
     except Exception as exc:
         # No exception messages or traceback: may contain credential/path data.
         stage.write_text('acquisition_failed' if stage.read_text()=='acquisition' else 'preparation_failed')
@@ -520,6 +783,8 @@ def _solver_inputs(directory, request, solver, started):
     if solver == 'dg2':
         sources += [('terrain.dem1x',directory/'dg2/terrain.dem1x'),('terrain.dem1y',directory/'dg2/terrain.dem1y')]
     sources.append(('rain.nc',directory/'rain.nc'))
+    if request['hydraulics']['manning'] == 'worldcover':
+        sources.append(('manning.n',directory/'landcover/manning.n'))
     if _has_boundary_file(request):
         sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
     if started:
@@ -538,7 +803,8 @@ def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
         if source.is_symlink() or not source.is_file():
             raise ValueError('invalid prepared source')
         (work/file_name).write_bytes(source.read_bytes())
-    (work/'roi.par').write_text(solver_parameter_file(request,start=started,solver=solver))
+    fpfric = (state.get('land_surface') or {}).get('manning_fpfric')
+    (work/'roi.par').write_text(solver_parameter_file(request,start=started,solver=solver,fpfric=fpfric))
     state['input_hashes'] = {file_name:_sha(work/file_name) for file_name in [n for n,_ in sources]+['roi.par']}
     state.update(state='running',stage='running'); _save(directory,state)
     with (directory/('solver.log' if name == 'work' else 'solver-fallback.log')).open('wb') as log:
@@ -560,6 +826,8 @@ def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
                              max_cells=cfg['max_cells'],initial_depth=work/'initial.wd' if started else None,
                              roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
         summary['lakes'] = state['provenance']['lakes']['lakes'] if state['provenance']['lakes'] else None
+        if ((state.get('land_surface') or {}).get('urban') or {}).get('warning'):
+            summary['warnings'] = [*summary.get('warnings', []), URBAN_WARNING]
         if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
             raise ValueError('output budget exceeded')
         artifacts=[]
@@ -585,8 +853,27 @@ def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
         raise _AttemptFailed('negative_depth_artifacts' if isinstance(exc, NegativeDepthArtifacts) else 'output_invalid') from None
 
 
-def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, summarizer=summarize_results):
-    """Claim exclusivo; preparación en grupo de proceso con deadline; estado terminal."""
+def _record_land_surface(state, manifest):
+    """Values found during preparation into the public land_surface summary; full provenance stays private."""
+    summary = manifest['summary']
+    land = state.setdefault('land_surface', {})
+    land.update(manning_fpfric=summary['manning_fpfric'], urban={**land.get('urban', {}), **summary['urban']},
+                attribution=summary['attribution'])
+    if summary.get('curve_number') and land.get('curve_number') is not None:
+        land['curve_number'].update(summary['curve_number'])
+        rain = state['provenance']['rain'].get('method') or {}
+        land['curve_number'].update(gross_rain_mm=rain.get('gross_total_mm'), mean_net_rain_mm=rain.get('roi_mean_net_total_mm'),
+                                    mean_runoff_coefficient=rain.get('roi_mean_runoff_coefficient'))
+    state['provenance']['land_surface'] = manifest
+
+
+def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, summarizer=summarize_results,
+                   landcover_reader=None, soil_reader=None, antecedent=None):
+    """Claim exclusivo; preparación en grupo de proceso con deadline; estado terminal.
+
+    ``landcover_reader`` (WorldCover tile window), ``soil_reader`` (HYSOGs window) and ``antecedent``
+    (soil_moisture.antecedent_condition) replace the network readers in tests."""
+    datasets = {'landcover_reader': landcover_reader, 'soil_reader': soil_reader, 'antecedent': antecedent}
     directory = _directory(root,run_id)
     try:
         fd = os.open(directory/'worker.claim',os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
@@ -605,7 +892,7 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, su
     stage = directory/'preparation.stage'
     try:
         context = multiprocessing.get_context('fork')
-        child = context.Process(target=_preparation_child,args=(directory,request,cfg,provider,stage,roads_fetcher))
+        child = context.Process(target=_preparation_child,args=(directory,request,cfg,provider,stage,roads_fetcher,datasets))
         child.start(); child.join(cfg['preparation_timeout_s'])
         if child.is_alive():
             os.killpg(child.pid,signal.SIGKILL); child.join()
@@ -627,6 +914,9 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, su
                                'helper_sha256':cfg['dem_sha256'], 'code_version':cfg['code_version'],
                                'terrain_source':request['terrain'].get('source','nasadem'),
                                'requested_solver':requested,'solver':requested,'solver_fallback':None}
+        land_manifest = directory/'landcover/manifest.json'
+        if land_manifest.is_file():
+            _record_land_surface(state, json.loads(land_manifest.read_text()))
         # Requested solver first; if its attempt fails after preparation, the other solver runs once on the same
         # prepared inputs in its own directory. Preparation failures never reach here (both would fail alike).
         failure = None

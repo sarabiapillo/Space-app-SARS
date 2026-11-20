@@ -122,6 +122,23 @@ test('method selector offers DG2 (default) and FV1 in the selected language only
   setLanguage('es')
 })
 
+test('rain type, Manning, Curve Number and urban declaration are offered in the selected language only', () => {
+  setLanguage('es')
+  const es = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  assert.match(es, /Tipo de lluvia<\/span><select/)
+  assert.match(es, /<option value="synthetic" selected="">Sintética<\/option><option value="design_storm">Tormenta de diseño<\/option>/)
+  assert.match(es, /<option value="uniform" selected="">uniforme \(un solo valor\)<\/option><option value="worldcover">según cobertura \(WorldCover\)<\/option>/)
+  assert.match(es, /<option value="curve_number">número de curva por celda/)
+  assert.match(es, /<option value="urban" selected="">incluye zona urbana<\/option><option value="nonurban">no es urbano<\/option>/)
+  setLanguage('en')
+  const en = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
+  for (const text of [/Rain type/, /Design storm/, /Manning roughness/, /from land cover \(WorldCover\)/, /Curve Number per cell/, /includes urban area/]) assert.match(en, text)
+  assert.doesNotMatch(en, /Tormenta de diseño|según cobertura|número de curva|zona urbana/)
+  assert.equal(localizeText('zona urbana: edificios y drenaje no representados; profundidades indicativas'),
+    'urban area: buildings and drainage not represented; indicative depths')
+  setLanguage('es')
+})
+
 test('result cards show the solver and an automatic switch in the selected language', async () => {
   const { FloodResultSummary } = await import('../src/components/flood/FloodResultSummary.tsx')
   const result = { grid: { cellsize_m: 30 }, frames: [], maximum: { stats: { max_m: 1 } }, artifacts: [],

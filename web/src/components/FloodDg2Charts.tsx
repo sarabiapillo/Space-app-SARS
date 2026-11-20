@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import { Bar, Line } from 'react-chartjs-2'
 import type { FloodRoiResult } from '../api/client'
-import { DEPTH_CLASSES, dg2ChartData } from '../utils/floodDg2'
+import { hyetographCaption, DEPTH_CLASSES, dg2ChartData } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend)
@@ -54,11 +54,11 @@ export function FloodDg2Charts({ result, frameIndex }: Props) {
   }
   return (
     <section className="flood-charts" aria-label={t('Gráficas de la simulación DG2', 'DG2 simulation charts')}>
-      <p className="flood-charts__source">{t('Solución numérica DG2 con lluvia sintética; no son observaciones.', 'DG2 numerical solution with synthetic rainfall; not observations.')}</p>
+      <p className="flood-charts__source">{t('Solución numérica con lluvia hipotética (sintética o de diseño); no son observaciones.', 'Numerical solution with hypothetical rainfall (synthetic or design); not observations.')}</p>
 
       {data.hyetograph && (
         <figure className="flood-charts__fig">
-          <figcaption>{t('Hietograma de la lluvia sintética (mm/h)', 'Synthetic rainfall hyetograph (mm/h)')}</figcaption>
+          <figcaption>{hyetographCaption(result, t)}</figcaption>
           <div className="flood-charts__canvas">
             <Bar
               data={{ labels: data.hyetograph.labels, datasets: [{ data: data.hyetograph.mmPerHour, backgroundColor: RAIN }] }}

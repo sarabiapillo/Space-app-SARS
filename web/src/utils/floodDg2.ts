@@ -1,14 +1,21 @@
-import type { FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
+import type { FloodDesignStorm, FloodLandSurface, FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
 import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
 export interface FloodDg2Form {
   domain: string; useRoi: boolean; crs: string; resolution: string; resampling: string; manning: string
   boundaryNorth: string; boundaryEast: string; boundarySouth: string; boundaryWest: string; seaLevel: string; stillWater: boolean
-  /** 'unsupported' or 'runoff_coefficient'; pressure in hPa, empty when not applied. */
+  /** 'unsupported', 'runoff_coefficient' or 'curve_number'; pressure in hPa, empty when not applied. */
   infiltration: string; pressure: string
+  /** Antecedent soil moisture for the Curve Number: 'auto' (NISAR SME2 / SMAP L4), 'I', 'II' or 'III'. */
+  moisture?: string
+  /** 'uniform' (the typed n, previous behaviour when absent) or 'worldcover' (per-cell n from ESA WorldCover). */
+  manningMode?: string
+  /** 'synthetic' (previous behaviour when absent) or 'design_storm' (PXR-4 return period, alternating blocks). */
+  rainKind?: string; returnPeriod?: string; stormHours?: string
   /** 'none' or 'hydrolakes' (HydroLAKES lakes full at start over a dug bed). */
   lakes: string
+  /** Declared non-urban domain; informational since urban domains are allowed (with a warning). */
   nonurban: boolean; amount: string; rainDuration: string; seed: string; intervals: string
   duration: string; save: string; tstep: string; thinDepth: string; thinDepthOff: boolean
   /** 'dg2' (more accurate, default) or 'fv1' (stable on steep terrain); the thin-depth threshold only applies to DG2. */
@@ -19,6 +26,16 @@ export interface FloodDg2Form {
 }
 type Polygon = { type: 'Polygon'; coordinates: unknown }
 type Translate = (es: string, en: string) => string
+
+/** Return periods offered for design storms (years). */
+export const RETURN_PERIODS = [2, 5, 10, 25, 50, 100]
+/** Block length of the design-storm hyetograph: 10 min (PXR-4 is fitted from 1 h; shorter blocks are flagged extrapolated). */
+export const DESIGN_STORM_STEP_S = 600
+export const ANTECEDENT_MOISTURE = ['auto', 'I', 'II', 'III']
+const stormHoursValid = (raw: string | undefined) => {
+  const hours = Number(raw)
+  return Boolean(raw?.trim()) && Number.isFinite(hours) && hours > 0 && hours <= 24 && Math.abs(hours * 6 - Math.round(hours * 6)) < 1e-9
+}
 
 /** Builds the exact POST body of /api/flood-scenarios/roi/start/ or throws a user-facing message. */
 export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t: Translate) {
@@ -42,17 +59,36 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   if(anyFixed&&(!form.seaLevel.trim()||!Number.isFinite(level)||Math.abs(level)>10000))throw Error(t('Nivel del mar fijo: indica un número en metros (EGM2008).','Fixed sea level: enter a number in metres (EGM2008).'))
   if(form.stillWater&&!anyFixed)throw Error(t('El mar lleno al inicio requiere al menos un lado de nivel fijo.','A still-water start needs at least one fixed-level side.'))
   if(!['none','hydrolakes'].includes(form.lakes))throw Error(t('Elige si incluir lagos (HydroLAKES).','Choose whether to include lakes (HydroLAKES).'))
-  if(!['unsupported','runoff_coefficient'].includes(form.infiltration))throw Error(t('Selecciona cómo tratar la infiltración.','Select how to treat infiltration.'))
+  if(!['unsupported','runoff_coefficient','curve_number'].includes(form.infiltration))throw Error(t('Selecciona cómo tratar la infiltración.','Select how to treat infiltration.'))
+  const curveNumber=form.infiltration==='curve_number'
+  if(curveNumber&&!ANTECEDENT_MOISTURE.includes(form.moisture??''))throw Error(t('Elige la humedad previa del suelo (auto, I, II o III).','Choose the antecedent soil moisture (auto, I, II or III).'))
+  const manningMode=form.manningMode||'uniform'
+  if(!['uniform','worldcover'].includes(manningMode))throw Error(t('Elige cómo fijar la rugosidad de Manning.','Choose how to set the Manning roughness.'))
+  const rainKind=form.rainKind||'synthetic'
+  if(!['synthetic','design_storm'].includes(rainKind))throw Error(t('Selecciona el tipo de lluvia.','Select the rain type.'))
   // Inverse barometer (about 1 cm per hPa below 1013.25), as in the terrapulseai_v2.1 simulator; it only raises the fixed sea level.
   const pressure=Number(form.pressure)
   if(form.pressure.trim()&&(!Number.isFinite(pressure)||pressure<950||pressure>1040))throw Error(t('Presión atmosférica: indica entre 950 y 1040 hPa, o déjala vacía.','Atmospheric pressure: enter 950 to 1040 hPa, or leave it empty.'))
   if(form.pressure.trim()&&!anyFixed)throw Error(t('La presión atmosférica solo eleva un lado de nivel fijo del mar.','Atmospheric pressure only raises a fixed sea-level side.'))
   const boundary=Object.fromEntries(Object.entries(sides).map(([side,type])=>[side,type==='fixed_level'?{type,level_m:level}:{type}]))
-  if(!form.nonurban||!form.confirm)throw Error(t('Declara el dominio no urbano y confirma las hipótesis.','Declare a nonurban domain and confirm the assumptions.'))
+  // The urban declaration is informational (urban domains run with a warning); the confirmation is required.
+  if(!form.confirm)throw Error(t('Confirma las hipótesis antes de simular.','Confirm the assumptions before simulating.'))
   if(!['dg2','fv1'].includes(form.solver))throw Error(t('Selecciona el método de cálculo (DG2 o FV1).','Select the computation method (DG2 or FV1).'))
   // LISFLOOD-FP `dg2depththresh`: DG2 only; null when the user explicitly disables it or chooses FV1. The API caps it at 1 m.
   const thinDepth=form.solver==='fv1'||form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
-  return {roi,domain,rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'},terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource},hydraulics:{manning:positive(form.manning,'Manning'),initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:true,lakes:form.lakes,...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation:{duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}}
+  const simulation={duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}
+  let rain
+  if(rainKind==='design_storm'){
+    // The server computes the depth from PXR-4 at the domain centroid, so `rainfall` is null.
+    const period=Number(form.returnPeriod)
+    if(!RETURN_PERIODS.includes(period))throw Error(t('Elige el periodo de retorno (2, 5, 10, 25, 50 o 100 años).','Choose the return period (2, 5, 10, 25, 50 or 100 years).'))
+    if(!stormHoursValid(form.stormHours))throw Error(t('Duración de la tormenta: indica horas en múltiplos de 10 min, hasta 24 h.','Storm duration: enter hours in multiples of 10 min, up to 24 h.'))
+    const hours=Number(form.stormHours)
+    if(simulation.duration_s<hours*3600)throw Error(t('La duración de simulación debe cubrir toda la tormenta de diseño.','The simulation duration must cover the whole design storm.'))
+    rain={rainfall:null,rainfall_profile:{source:'design_storm',return_period_years:period,duration_h:hours,step_s:DESIGN_STORM_STEP_S}}
+  } else rain={rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'}}
+  const manning=manningMode==='worldcover'?'worldcover':positive(form.manning,'Manning')
+  return {roi,domain,...rain,terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource},hydraulics:{manning,initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:form.nonurban,lakes:form.lakes,...(curveNumber?{antecedent_moisture:form.moisture}:{}),...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation}
 }
 
 /** Terrain sources of the API (`terrain.source`); heights of both end in EGM2008. */
@@ -87,10 +123,6 @@ export function utmEpsgFor(lon: number, lat: number) {
   return `EPSG:${lat >= 0 ? 326 : 327}${String(zone).padStart(2, '0')}`
 }
 
-/** Fills the form with illustrative example values (not recommendations) so the user can review and run a
- * small test. Declarations and modelling choices (domain, infiltration, lakes, nonurban, confirmation) stay
- * the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a ROI) and the
- * terrain is the recommended Copernicus GLO-30. */
 /**
  * Applies one form change. Any value change withdraws the confirmation, so the user confirms the values
  * actually sent; the non-urban declaration sits beside the confirmation and leaves it as it is.
@@ -100,13 +132,18 @@ export function withFormChange<F extends { confirm: boolean }>(form: F, name: ke
   return { ...form, [name]: value, confirm }
 }
 
+/** Fills the form with illustrative example values (not recommendations) so the user can review and run a
+ * small test. The domain, lakes, the urban declaration and the confirmation stay the user's; the CRS is the UTM
+ * zone of the ROI centre (EPSG:32615, the study area, without a ROI); the terrain is Copernicus GLO-30, Manning
+ * comes from ESA WorldCover and losses from the Curve Number with automatic antecedent moisture (DG2). */
 export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): FloodDg2Form {
   const ring = outerRing(roi)
   const lons = ring?.map(p => p[0]) ?? [], lats = ring?.map(p => p[1]) ?? []
   const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
   return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus', confirm:false}
+    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus',
+    rainKind:'synthetic', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false}
 }
 
 /** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM2008) and starts full; the other sides are free. */
@@ -144,14 +181,18 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   const pressure = num(form.pressure)
   return {
     zone: Boolean(roi) && (form.useRoi || parsePolygon(form.domain) !== null),
-    rain: positive(form.amount) && positive(form.rainDuration) && integer(form.intervals, 1) && integer(form.seed, 0),
-    terrain: TERRAIN_SOURCES.includes(form.terrainSource) && /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling) && positive(form.manning)
+    rain: (form.rainKind || 'synthetic') === 'design_storm'
+      ? RETURN_PERIODS.includes(num(form.returnPeriod ?? '')) && stormHoursValid(form.stormHours)
+      : positive(form.amount) && positive(form.rainDuration) && integer(form.intervals, 1) && integer(form.seed, 0),
+    terrain: TERRAIN_SOURCES.includes(form.terrainSource) && /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling)
+      && (form.manningMode === 'worldcover' || positive(form.manning))
       && sides.every(v => ['closed','free','fixed_level'].includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
-      && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
+      && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient','curve_number'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
+      && (form.infiltration !== 'curve_number' || ANTECEDENT_MOISTURE.includes(form.moisture ?? ''))
       && (!form.pressure.trim() || (anyFixed && pressure >= 950 && pressure <= 1040)),
     solver: positive(form.duration, 86400) && positive(form.save) && positive(form.tstep) && ['dg2','fv1'].includes(form.solver)
       && (form.solver === 'fv1' || form.thinDepthOff || positive(form.thinDepth, 1)),
-    confirm: form.nonurban && form.confirm,
+    confirm: form.confirm,
   }
 }
 
@@ -221,6 +262,75 @@ export function negativeDepthWarning(result: Pick<FloodRoiResult, 'negative_dept
   const pct = negative.max_added_volume_ratio == null ? '—' : String(Math.round(negative.max_added_volume_ratio * 1000) / 10)
   return t(`${NEGATIVE_DEPTH_WARNING} (las profundidades negativas puestas en 0 añadieron hasta ${pct} % del agua de un cuadro).`,
     `numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid (negative depths set to 0 added up to ${pct} % of the water of a frame).`)
+}
+
+/** Server warning (verbatim) for domains with built-up land (ESA WorldCover) or declared urban. */
+export const URBAN_WARNING = 'zona urbana: edificios y drenaje no representados; profundidades indicativas'
+
+const pct = (ratio: number) => String(Math.round(ratio * 100))
+const mm = (value: number) => String(Math.round(value * 10) / 10)
+
+/** Visible urban warning with the built-up share of the domain (or the user's declaration); null otherwise. */
+export function urbanWarning(result: Pick<FloodRoiResult, 'land_surface' | 'warnings'>, t: Translate) {
+  const urban = result.land_surface?.urban
+  if (!urban?.warning && !result.warnings?.includes(URBAN_WARNING)) return null
+  if (urban?.built_up_fraction != null && (urban.built_up_cells ?? 0) + urban.built_up_fraction > 0) {
+    return t(`${URBAN_WARNING} (${pct(urban.built_up_fraction)} % del dominio construido según ESA WorldCover).`,
+      `urban area: buildings and drainage not represented; indicative depths (${pct(urban.built_up_fraction)} % of the domain built-up according to ESA WorldCover).`)
+  }
+  return t(`${URBAN_WARNING} (dominio declarado urbano).`, 'urban area: buildings and drainage not represented; indicative depths (domain declared urban).')
+}
+
+/** One line per land-surface choice of a run: Manning and, with the Curve Number, the moisture and losses. */
+export function landSurfaceNotes(land: FloodLandSurface | null | undefined, t: Translate) {
+  if (!land) return []
+  const notes = [land.manning === 'worldcover'
+    ? t(`Manning por celda (ESA WorldCover); celdas sin dato: n = ${land.manning_fpfric ?? '—'}`, `Per-cell Manning (ESA WorldCover); cells without data: n = ${land.manning_fpfric ?? '—'}`)
+    : t(`Manning uniforme n = ${land.manning_value}`, `Uniform Manning n = ${land.manning_value}`)]
+  const cn = land.curve_number
+  if (land.infiltration === 'curve_number' && cn) {
+    const source = cn.amc_source === 'request' ? t('elegida', 'chosen') : cn.amc_source ?? t('sin observación: AMC II supuesta', 'no observation: AMC II assumed')
+    const amc = cn.amc ? `AMC ${cn.amc} (${source})` : t('pendiente', 'pending')
+    const losses = cn.mean_runoff_coefficient == null || cn.gross_rain_mm == null || cn.mean_net_rain_mm == null ? ''
+      : t(`: ${pct(cn.mean_runoff_coefficient)} % de la lluvia escurre (${mm(cn.gross_rain_mm)} mm → ${mm(cn.mean_net_rain_mm)} mm netos)`,
+        `: ${pct(cn.mean_runoff_coefficient)} % of the rain runs off (${mm(cn.gross_rain_mm)} mm → ${mm(cn.mean_net_rain_mm)} mm net)`)
+    notes.push(t(`Número de curva (WorldCover + HYSOGs250m), humedad previa ${amc}${losses}`, `Curve Number (WorldCover + HYSOGs250m), antecedent moisture ${amc}${losses}`))
+  }
+  return notes
+}
+
+/** Design-storm summary (return period, duration, depth and range flags); null for other rain. */
+export function designStormNote(storm: FloodDesignStorm | null | undefined, t: Translate) {
+  if (!storm) return null
+  const hours = String(Math.round(storm.duration_s / 3600 * 100) / 100), minutes = String(Math.round(storm.step_s / 60 * 10) / 10)
+  let note = t(`Tormenta de diseño: periodo de retorno ${storm.return_period_years} años, ${hours} h, ${mm(storm.total_mm)} mm (bloques alternos de ${minutes} min, PXR-4).`,
+    `Design storm: ${storm.return_period_years}-year return period, ${hours} h, ${mm(storm.total_mm)} mm (alternating blocks of ${minutes} min, PXR-4).`)
+  if (storm.extrapolated) note += t(' Bloques menores de 1 h extrapolados;', ' Blocks shorter than 1 h extrapolated;')
+  if (!storm.within_stated_accuracy) note += storm.extrapolated ? t(' fuera del rango de exactitud declarado (2–360 h).', ' outside the stated accuracy range (2–360 h).')
+    : t(' Fuera del rango de exactitud declarado (2–360 h).', ' Outside the stated accuracy range (2–360 h).')
+  return note
+}
+
+/** Plain-language text for the dataset error codes of a failed run; other codes are shown as they are. */
+export function runErrorMessage(code: string | null | undefined, t: Translate) {
+  switch (code) {
+    case 'landcover_unavailable': return t('No se pudo leer la cobertura del suelo (ESA WorldCover); no se usó un valor uniforme en su lugar.', 'Land cover (ESA WorldCover) could not be read; no uniform value was used instead.')
+    case 'soils_unavailable': return t('No se pudieron leer los grupos de suelo (HYSOGs250m, NASA Earthdata).', 'Soil groups (HYSOGs250m, NASA Earthdata) could not be read.')
+    case 'soil_moisture_unavailable': return t('No se pudo consultar la humedad del suelo (NISAR SME2 / SMAP L4); elige la humedad previa I, II o III.', 'Soil moisture (NISAR SME2 / SMAP L4) could not be queried; choose antecedent moisture I, II or III.')
+    default: return code ?? ''
+  }
+}
+
+/** Caption of the hyetograph: the net rain the solver received when losses are modelled. */
+export function hyetographCaption(result: Pick<FloodRoiResult, 'land_surface' | 'rainfall_source'>, t: Translate) {
+  const source = result.rainfall_source
+  const kind = source === 'design_storm' ? t('tormenta de diseño', 'design storm') : source === 'observed' ? t('observada', 'observed') : t('sintética', 'synthetic')
+  if (['curve_number', 'runoff_coefficient'].includes(result.land_surface?.infiltration ?? '')) {
+    return t(`Hietograma de la lluvia neta que recibe el solver, media de la ROI (${kind}, mm/h)`, `Hyetograph of the net rain the solver receives, ROI mean (${kind}, mm/h)`)
+  }
+  if (source === 'design_storm') return t('Hietograma de la tormenta de diseño (mm/h)', 'Design-storm hyetograph (mm/h)')
+  if (source === 'observed') return t('Hietograma de la lluvia observada (mm/h)', 'Observed rainfall hyetograph (mm/h)')
+  return t('Hietograma de la lluvia sintética (mm/h)', 'Synthetic rainfall hyetograph (mm/h)')
 }
 
 /** Solver-velocity arrows of one frame as GeoJSON; null for the maximum or runs without velocities. */

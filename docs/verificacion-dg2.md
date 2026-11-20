@@ -22,6 +22,7 @@ La [guía oficial NASADEM V1.3, enero de 2025](https://lpdaac.usgs.gov/documents
 
 - `NASADEM_HGT` merged: 3601 × 3601 muestras, entero con signo de 16 bits, orden big-endian; elevaciones en **metros respecto del geoide EGM96**, no profundidad de agua ni altura elipsoidal.
 - El producto SRTM-only de otro grupo contiene alturas respecto del elipsoide WGS84: no son intercambiables ni se convierten cambiando una etiqueta.
+- El simulador ROI no usa EGM96 como datum de trabajo: convierte NASADEM a EGM2008 con las rejillas de la NGA (`h + N_EGM96 − N_EGM2008`) y todas sus alturas (terreno, nivel del mar, agua en reposo, lagos) quedan en EGM2008.
 - La tabla indica rango HGT `−32767…32767` y `N/A` en nodata. `−32768` queda fuera de ese rango: debe tratarse como muestra inválida, nunca como cota ni como cero. No se afirma que la guía lo declare nodata del producto merged.
 - El espaciado de un segundo de arco es angular, no una resolución métrica constante. Remuestrear a una celda más fina no crea detalle topográfico.
 

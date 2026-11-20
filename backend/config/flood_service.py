@@ -55,6 +55,9 @@ def build_flood_service_settings(project_root, environ):
         # NGA EGM96/EGM2008 geoid grids (python -m pipeline.elevation.vertical_datum prepare): every height
         # is converted to EGM2008, so the service is unavailable while they are missing.
         'geoid_dir': path('GEOID_DIR', 'reference/geoid'),
+        # PXR-4 v2.1.0 return levels (python -m pipeline.hydrology.design_storm prepare); design-storm requests
+        # are answered 503 design_storm_unavailable while this file does not exist.
+        'pxr_path': path('PXR_PATH', 'reference/pxr/pxr4-2.1.0.nc'),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):
         supplied = environ.get(prefix + key, pinned)

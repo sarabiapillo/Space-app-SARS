@@ -401,6 +401,23 @@ export async function runSolarSimulation(
 /** Automatic switch to the other solver after the requested one failed (reason: public code of the worker). */
 export interface FloodSolverFallback { from: string; to: string; reason: string }
 export interface FloodSolverAttempt { solver: string; outcome: 'succeeded' | 'failed'; reason: string | null }
+/** Land surface of a run: Manning (uniform or ESA WorldCover per cell), Curve Number losses and urban warning.
+ * Values found during preparation (fpfric, AMC, losses, built-up share) are null until then; null in older runs. */
+export interface FloodLandSurface {
+  manning: 'uniform' | 'worldcover'; manning_value: number | null; manning_fpfric: number | null
+  infiltration: string
+  curve_number: {antecedent_moisture: string; amc: string | null; amc_source: string | null; event_time_utc?: string | null; event_time_basis?: string | null
+    relative_saturation?: number | null; urban_drainage_mm_h?: number; gross_rain_mm?: number | null; mean_net_rain_mm?: number | null
+    mean_runoff_coefficient?: number | null; cn_mean?: number | null} | null
+  urban: {declared_nonurban: boolean; built_up_fraction: number | null; built_up_cells: number | null; warning: boolean}
+  attribution: string[]
+}
+/** PXR-4 design storm at the domain centroid (no segments: they are the hyetograph). */
+export interface FloodDesignStorm {
+  total_mm: number; duration_s: number; step_s: number; return_period_years: number
+  extrapolated: boolean; within_stated_accuracy: boolean; point?: [number, number]
+  method?: string; dataset?: string; version?: string; doi?: string; licence?: string; attribution?: string
+}
 export interface FloodRoiRun {
   id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null
   losses?: {infiltration: string; runoff_coefficient: number | null; atmospheric_pressure_hpa: number | null; barometric_surge_m: number} | null
@@ -412,6 +429,8 @@ export interface FloodRoiRun {
   terrain_source?: string; vertical_datum?: string
   /** Licence notice the terrain source requires (Copernicus GLO-30); null for NASADEM. */
   terrain_attribution?: string | null
+  /** Land surface (null in older runs), rain source ('synthetic', 'observed' or 'design_storm') and design storm. */
+  land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
 }
 export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
 export interface FloodRoiResult {
@@ -421,12 +440,14 @@ export interface FloodRoiResult {
   warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
   requested_solver?: string; solver?: string; solver_fallback?: FloodSolverFallback | null
   terrain_source?: string; vertical_datum?: string; terrain_attribution?: string | null
+  land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
   /** Negative depths set to 0 and the volume they add relative to the water of each frame (null in older runs). */
   negative_depth?: {status?: 'none' | 'minor' | 'artifacts'; clipped_cell_frames?: number; frames?: Array<number | 'maximum'>; min_m?: number | null; max_added_volume_ratio?: number | null; thresholds?: {warning: number; fail: number}} | null
   /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
   flow?: FloodRoiFlow | null
   grid?: {cellsize_m: number; shape?: [number, number]}
-  /** Chart inputs (null in older runs): depth class lower bounds (m), synthetic rain segments and the volume series. */
+  /** Chart inputs (null in older runs): depth class lower bounds (m), the rain the solver received (net when losses are
+   * modelled; ROI mean for the Curve Number) and the volume series. */
   depth_classes_m?: number[] | null
   rainfall_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
   mass_balance?: {series?: Array<[number, number, number]>; [key: string]: unknown} | null

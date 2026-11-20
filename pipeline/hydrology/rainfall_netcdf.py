@@ -189,6 +189,23 @@ def export_rainfall_netcdf(profile, dem_path, output_path, *, simulation_duratio
     return manifest_path
 
 
+def roi_cell_mask(roi, dem_path):
+    """Cells of the DEM grid whose centres fall inside the ROI: the cells ``export_rainfall_netcdf`` rains on.
+
+    Same rule as that exporter (projected ROI, cell centres, ``all_touched=False``), so a per-cell cube multiplied
+    by this mask rains on exactly the same cells as the uniform profile.
+    """
+    roi = validate_roi(roi)
+    with rasterio.open(dem_path) as dem:
+        crs, transform = _validated_dem_grid(dem)
+        projector = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform
+        selected = geometry_mask([transform_geometry(projector, shape(roi))], out_shape=(dem.height, dem.width),
+                                 transform=transform, all_touched=False, invert=True)
+    if not selected.any():
+        raise ValueError("ROI selects no DEM cell centers")
+    return selected
+
+
 def export_rainfall_cube_netcdf(cube_mm, interval_edges_s, dem_path, output_path, *, simulation_duration_s,
                                 method, synthetic, observed=False, max_values=50_000_000):
     """Write a per-cell rain cube (intervals x rows x cols, mm per interval) in the native DG2 layout.

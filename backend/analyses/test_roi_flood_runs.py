@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from pipeline.tests.test_roi_runner import payload, config
 
 BASE = Path(__file__).resolve().parents[2] / 'data/test-runs'
+STATUS_KEYS = {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','land_surface','rainfall_source','design_storm','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'}
 PROOF = BASE / 'roi-dg2-136934da-7370-4113-b337-36ebc0bcafcc/6c5b38f4-9d14-4c71-912b-04ed7629d94a'
 
 
@@ -48,7 +49,7 @@ class RoiHttpTests(SimpleTestCase):
             response = self.alice.post(self.start, payload(), format='json')
         self.assertEqual(response.status_code, 202)
         self.assertEqual(start.call_args.args, ('1', payload()))
-        self.assertEqual(set(response.json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(response.json()), STATUS_KEYS)
         self.assertIsNone(response.json()['dg2_depth_thresh_m'])
         # A payload without `solver` runs DG2; no fallback and no attempt yet.
         self.assertEqual([response.json()[k] for k in ('requested_solver', 'solver', 'solver_fallback', 'solver_attempts')], ['dg2', 'dg2', None, []])
@@ -58,6 +59,10 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(response.json()['losses'], {'infiltration': 'unsupported', 'runoff_coefficient': None, 'atmospheric_pressure_hpa': None, 'barometric_surge_m': 0.0})
         # A payload without terrain.source keeps NASADEM; every height is EGM2008.
         self.assertEqual([response.json()[k] for k in ('terrain_source', 'vertical_datum', 'terrain_attribution')], ['nasadem', 'EGM2008', None])
+        # A payload without the land-surface options keeps uniform Manning and synthetic rain.
+        self.assertEqual([response.json()['land_surface']['manning'], response.json()['land_surface']['manning_value'],
+                          response.json()['land_surface']['curve_number'], response.json()['rainfall_source'], response.json()['design_storm']],
+                         ['uniform', .02, None, 'synthetic', None])
         self.assertEqual(response.json()['state'], 'created')
         self.assertEqual(self.alice.get(response.json()['results_url']).status_code, 409)
         self.assertEqual(self.bob.get(response.json()['status_url']).status_code, 404)
@@ -97,7 +102,7 @@ class RoiHttpTests(SimpleTestCase):
             self.assertNotEqual(client.get(results).status_code, 200)
             self.assertNotEqual(client.get(download).status_code, 200)
         # Runs recorded before the threshold existed ran with the solver default (off): reported as null.
-        self.assertEqual(set(self.alice.get(status).json()), {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'})
+        self.assertEqual(set(self.alice.get(status).json()), STATUS_KEYS)
         self.assertIsNone(self.alice.get(status).json()['dg2_depth_thresh_m'])
         self.assertIsNone(self.alice.get(status).json()['boundary'])  # seeded run predates per-side boundaries
         # Runs recorded before the solver choice ran DG2 without fallback.
@@ -123,6 +128,9 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual([self.alice.get(status).json()[k] for k in ('terrain_source', 'vertical_datum')], ['nasadem', 'EGM96'])
         self.assertIsNone(body['roads'])
         self.assertIsNone(body['lakes'])
+        # Runs recorded before the land-surface options: no land data, synthetic rain.
+        self.assertEqual([body['land_surface'], body['rainfall_source'], body['design_storm']], [None, 'synthetic', None])
+        self.assertEqual([self.alice.get(status).json()[k] for k in ('land_surface', 'rainfall_source', 'design_storm')], [None, 'synthetic', None])
         self.assertEqual(len(body['artifacts']), 4)
         self.assertTrue(all('file' not in item and item['url'].startswith(status) and item['nodata'] == body['grid']['nodata'] for item in body['artifacts']))
         self.assertTrue(all(frame['time_s'] is None for frame in body['frames']))
@@ -208,3 +216,41 @@ class RoiHttpTests(SimpleTestCase):
         from analyses.roi_flood_runs import _DEPTH_CLASSES
         from pipeline.hydrology.results import DEPTH_CLASS_BOUNDS_M
         self.assertEqual(tuple(lower for lower, _ in _DEPTH_CLASSES), DEPTH_CLASS_BOUNDS_M)
+
+    def test_curve_number_run_echoes_land_surface_and_charts_the_net_rain(self):
+        run_id, state, directory = self.seed()
+        land = {'manning': 'worldcover', 'manning_value': None, 'manning_fpfric': .035, 'infiltration': 'curve_number',
+                'curve_number': {'antecedent_moisture': 'auto', 'amc': 'III', 'amc_source': 'SMAP L4', 'mean_runoff_coefficient': .4},
+                'urban': {'declared_nonurban': False, 'built_up_fraction': .3, 'built_up_cells': 4, 'warning': True},
+                'attribution': ['ESA WorldCover']}
+        state.update(land_surface=land, rainfall_source='design_storm',
+                     design_storm={'return_period_years': 10, 'total_mm': 61.2, 'extrapolated': True})
+        state['provenance']['rain'] = {'method': {'method': 'scs_curve_number_incremental', 'roi_mean_net_mm': [1.0, 3.0],
+                                                  'curve_number': {'interval_edges_s': [0, 600, 1200]}}}
+        (directory / 'state.json').write_text(json.dumps(state))
+        url = f'/api/flood-roi-runs/{run_id}/'
+        status = self.alice.get(url).json()
+        self.assertEqual([status['land_surface'], status['rainfall_source'], status['design_storm']['total_mm']], [land, 'design_storm', 61.2])
+        body = self.alice.get(url + 'results/').json()
+        self.assertEqual(body['land_surface'], land)
+        self.assertEqual(body['design_storm']['return_period_years'], 10)
+        # The hyetograph is the net rain the solver received: ROI-mean mm per interval as mm/h.
+        self.assertEqual(body['rainfall_segments'], [{'start_s': 0.0, 'end_s': 600.0, 'intensity_mm_h': 6.0},
+                                                     {'start_s': 600.0, 'end_s': 1200.0, 'intensity_mm_h': 18.0}])
+
+    def test_dataset_errors_are_public_codes(self):
+        run_id, state, directory = self.seed()
+        for code in ('landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable'):
+            state.update(state='failed', stage='failed', error=code)
+            (directory / 'state.json').write_text(json.dumps(state))
+            self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{run_id}/').json()['error'], code)
+
+    def test_missing_design_storm_data_is_a_service_error_with_its_code(self):
+        body = payload(); body['rainfall'] = None
+        body['rainfall_profile'] = {'source': 'design_storm', 'return_period_years': 10, 'duration_h': 1, 'step_s': 600}
+        missing = dict(config(), pxr_path=str(BASE.parent / 'reference/pxr/missing-pxr.nc'))
+        with override_settings(FLOOD_ROI_DG2_CONFIG=missing):
+            response = self.alice.post(self.start, body, format='json')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['error'], 'design_storm_unavailable')
+        self.assertFalse(self.jobs.exists())
