@@ -41,7 +41,9 @@ test('simulation panels switch display language but retain numeric input and sci
   const enRain = render(RainDg2Panel, { flood, onFloodChange() {}, croppedRegion: roi })
   const enSolar = render(RightPanel, { solar, onSolarChange() {}, onClose() {}, croppedRegion: roi })
   assert.match(enRain, /Hypothetical rainfall \(mm\)/)
-  assert.match(enRain, /infiltration not modeled/)
+  assert.match(enRain, /Infiltration <select>/)
+  assert.match(enRain, /not modeled \(all rain runs off\)/)
+  assert.match(enRain, /Atmospheric pressure \(hPa, 950–1040; optional\)/)
   assert.match(enRain, /Synthetic profile seed/)
   assert.match(enSolar, /Incident irradiance/)
   assert.match(enSolar, /aria-valuenow="90"/)
@@ -78,7 +80,8 @@ test('curated backend messages and risk labels translate only known display text
   assert.equal(localizeText('Leve'), 'Leve')
 })
 
-test('DG2 panel does not present unsupported hydraulic equations or pressure forcing', () => {
+test('DG2 panel does not reuse the terrapulseai_v2 simulator state or its unsupported equations', () => {
+  // Pressure and infiltration now reach DG2 through the ROI API (atmospheric_pressure_hpa, infiltration), not old state fields.
   const source = readFileSync(new URL('../src/components/RainDg2Panel.tsx', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /FloodCharts|pressureHpa|Q_bank|Kirpich|Froude|baroSurge/)
   assert.match(translate('Infiltración no modelada','Infiltration not modeled'), /Infiltración|Infiltration/)

@@ -1,5 +1,6 @@
 """Contrato público mínimo del flujo ROI (sin credenciales ni descargas reales)."""
 import hashlib
+import math
 import json
 from pathlib import Path
 import uuid
@@ -151,6 +152,44 @@ def test_native_fixed_level_starts_and_keeps_still_water(root):
     last = state['result']['frames'][-1]['stats']
     assert last['max_m'] == pytest.approx(.502, abs=.01)  # 0.5 m sea plus the 2 mm of rain inside the ROI
     assert state['result']['flow']['frames'][-1]['max_speed_m_s'] < .05
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['hydraulics'].update(infiltration='green_ampt'),
+    lambda p: p['hydraulics'].update(atmospheric_pressure_hpa=1000),  # no fixed-level side to raise
+    lambda p: p['hydraulics'].update(boundary=SEA_WEST, atmospheric_pressure_hpa=900),
+    lambda p: p['hydraulics'].update(boundary=SEA_WEST, atmospheric_pressure_hpa='1000'),
+])
+def test_losses_and_pressure_reject_invalid_or_ineffective_values(root, change):
+    p = payload(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+def test_losses_and_pressure_are_recorded_in_state(root):
+    p = with_sea(); p['hydraulics'].update(infiltration='runoff_coefficient', atmospheric_pressure_hpa=1003.25)
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    losses = job['losses']
+    assert losses['infiltration'] == 'runoff_coefficient' and losses['atmospheric_pressure_hpa'] == 1003.25
+    assert losses['runoff_coefficient'] == pytest.approx(.65 + .27 * (1 - math.exp(-.5 / 24)))
+    assert losses['barometric_surge_m'] == pytest.approx(1000 / 9810)
+    legacy = start_roi_run('alice', payload(), root=root, config=config(), launch=False)['losses']
+    assert legacy == {'infiltration': 'unsupported', 'runoff_coefficient': None,
+                      'atmospheric_pressure_hpa': None, 'barometric_surge_m': 0.0}
+
+
+def test_native_pressure_raises_the_sea_and_infiltration_reduces_the_rain(root):
+    p = with_sea(); p['hydraulics'].update(infiltration='runoff_coefficient', atmospheric_pressure_hpa=1003.25)
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']))
+    assert state['state'] == 'succeeded', state
+    surge, coefficient = 1000 / 9810, job['losses']['runoff_coefficient']
+    bci = (root / job['id'] / 'work' / 'boundary.bci').read_text().splitlines()
+    assert float(bci[1].split()[-1]) == pytest.approx(100.5 + surge)
+    assert state['result']['frames'][0]['stats']['min_m'] == pytest.approx(.5 + surge, abs=1e-3)
+    rain = state['provenance']['rain']['profile']['rainfall']['amount_m']
+    assert rain == pytest.approx(.002 * coefficient)
 
 
 def flat_provider(root, run_id):

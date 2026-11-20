@@ -43,6 +43,15 @@ El sobre acepta exactamente estas siete secciones. La lluvia es hipotética, per
 
 Comprobado con el solver sobre el DEM real de la corrida NASADEM (577 celdas bajo 845.25 m, sin lluvia, 300 s): **sin** `startfile`, el lado `HFIX` no llenó nada (0 % del volumen a los 300 s), porque en DG2 8.0.3 la frontera copia la velocidad interior y un dominio seco en reposo no recibe flujo de masa; **con** `startfile`, el mar conservó el 100 % del volumen, la superficie quedó a ±3 cm del nivel y la rapidez donde hay al menos 0.15 m fue ≤ 0.23 m/s. El ajuste residual ocurre en la orilla (celdas parcialmente sumergidas, mojado y secado de DG2). Por eso, si el nivel está sobre el terreno, conviene iniciar con el mar lleno. NASADEM no tiene batimetría: con nivel 0 sobre un mar plano a 0 m la profundidad inicial es cero y el lado `HFIX` actúa como sumidero a nivel del mar. El estado de la corrida devuelve `boundary` (lados normalizados) e `initial_condition`; ambos son `null` en corridas anteriores a esta función.
 
+### Infiltración y presión atmosférica
+
+Se portaron del simulador de inundación de la rama `terrapulseai_v2.1` (`backend/analyses/simulate.py`), con las mismas fórmulas:
+
+- `hydraulics.infiltration`: `"unsupported"` (toda la lluvia escurre) o `"runoff_coefficient"`. Con coeficiente, DG2 recibe lluvia × C, con C = min(0.92, 0.65 + 0.27·(1 − e^(−D/24 h))) y D la duración de la lluvia (mínimo 0.5 h); el resto se cuenta como infiltrado. Es un coeficiente agregado tipo Horton, no un modelo físico de infiltración. Por ejemplo, 600 s de lluvia dan C ≈ 0.656 (34 % se infiltra) y 72 h dan C ≈ 0.907.
+- `hydraulics.atmospheric_pressure_hpa` (opcional, 950–1040 hPa): barómetro invertido, sobreelevación = max(0, 1013.25 − p)·100 / (1000·9.81) m, unos 1.02 cm por hPa bajo la presión estándar. Se **suma al nivel fijo del mar** (líneas `HFIX` y mar lleno al inicio) y exige al menos un lado de nivel fijo. A diferencia del simulador de `terrapulseai_v2.1`, no se suma a los encharcamientos tierra adentro: el barómetro invertido actúa sobre agua abierta.
+
+El estado de la corrida devuelve `losses` = `{infiltration, runoff_coefficient, atmospheric_pressure_hpa, barometric_surge_m}` (`null` en corridas anteriores). El hietograma de resultados muestra la lluvia que recibió el solver, es decir, la efectiva cuando hay coeficiente.
+
 ## Respuestas y animación
 
 `202` (valores ilustrativos; UUID asignado por servidor):

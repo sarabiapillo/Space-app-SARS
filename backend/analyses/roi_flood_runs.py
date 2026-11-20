@@ -48,6 +48,8 @@ def _public(run):
     # Runs created before per-side boundaries existed report null; their request is in job.json.
     result['boundary'] = run.get('boundary')
     result['initial_condition'] = run.get('initial_condition')
+    # Infiltration coefficient and barometric surge (null in runs created before they existed).
+    result['losses'] = run.get('losses')
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'

@@ -101,7 +101,7 @@ test('controller invalidation aborts stale ROI and revokes object URLs; no resul
 const { buildRoiFloodRequest } = await import('../src/utils/floodDg2.ts')
 const tr = es => es
 const square = {type:'Polygon',coordinates:[[[-93.3,16.67],[-93.29,16.67],[-93.29,16.68],[-93.3,16.68],[-93.3,16.67]]]}
-const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
+const filledForm = (overrides={}) => ({domain:'',useRoi:true,crs:'EPSG:32615',resolution:'30',resampling:'nearest',manning:'0.05',boundaryNorth:'free',boundaryEast:'free',boundarySouth:'free',boundaryWest:'free',seaLevel:'',stillWater:false,infiltration:'unsupported',pressure:'',nonurban:true,amount:'20',rainDuration:'600',seed:'7',intervals:'4',duration:'900',save:'300',tstep:'1',thinDepth:'',thinDepthOff:true,confirm:true,...overrides})
 
 test('request builder keeps every previous field and sends an explicitly disabled thin-depth threshold as null', () => {
   assert.deepEqual(buildRoiFloodRequest(filledForm(), square, tr), {roi:square,domain:square,
@@ -125,6 +125,21 @@ test('request builder rejects a missing side, a fixed side without a sea level, 
     assert.throws(() => buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel}), square, tr), /Nivel del mar/)
   }
   assert.throws(() => buildRoiFloodRequest(filledForm({stillWater:true}), square, tr), /nivel fijo/)
+})
+
+test('request builder sends infiltration by runoff coefficient and an atmospheric pressure that raises the sea', () => {
+  const hydraulics = buildRoiFloodRequest(filledForm({infiltration:'runoff_coefficient',boundaryWest:'fixed_level',seaLevel:'0',pressure:'990'}), square, tr).hydraulics
+  assert.equal(hydraulics.infiltration, 'runoff_coefficient')
+  assert.equal(hydraulics.atmospheric_pressure_hpa, 990)
+  assert.equal('atmospheric_pressure_hpa' in buildRoiFloodRequest(filledForm(), square, tr).hydraulics, false)
+})
+
+test('request builder rejects a missing infiltration choice, a pressure out of 950-1040 hPa, and a pressure without a fixed sea level', () => {
+  assert.throws(() => buildRoiFloodRequest(filledForm({infiltration:''}), square, tr), /infiltración/)
+  for (const pressure of ['940', '1050', 'abc']) {
+    assert.throws(() => buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel:'0',pressure}), square, tr), /Presión atmosférica/)
+  }
+  assert.throws(() => buildRoiFloodRequest(filledForm({pressure:'990'}), square, tr), /nivel fijo/)
 })
 
 test('request builder sends an explicit thin-depth threshold in meters', () => {

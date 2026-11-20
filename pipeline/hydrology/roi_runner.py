@@ -6,7 +6,9 @@ normalize_request); rainfall_profile {interval_count,seed,distribution}; terrain
 boundary,infiltration,domain_nonurban}; simulation {duration_s,save_interval_s,
 initial_tstep_s,dg2_depth_thresh_m}. boundary: 'closed', 'free' u objeto por lado
 (north/east/south/west: closed, free o fixed_level con level_m); initial_condition:
-'dry_zero_velocity' o 'still_water_at_fixed_level'. Ningún path ni binario procede del cliente.
+'dry_zero_velocity' o 'still_water_at_fixed_level'; infiltration: 'unsupported' o
+'runoff_coefficient'; atmospheric_pressure_hpa opcional (950-1040, eleva el nivel del mar fijo).
+Ningún path ni binario procede del cliente.
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ from .rainfall import generate_rainfall_profile
 from .rainfall_netcdf import export_rainfall_netcdf
 from .boundaries import format_boundary, normalize_boundary
 from .initial_state import write_still_water_start
+from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .results import summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -148,7 +151,9 @@ def validate_roi_run(payload, limits):
     validate_roi(payload['roi']); validate_roi(payload['domain'])
     _keys(payload['terrain'], {'target_crs','resolution_m','resampling'})
     _keys(payload['rainfall_profile'], {'interval_count','seed','distribution'})
-    _keys(payload['hydraulics'], {'manning','initial_condition','boundary','infiltration','domain_nonurban'})
+    hydraulic_keys = {'manning','initial_condition','boundary','infiltration','domain_nonurban'}
+    if not isinstance(payload['hydraulics'], dict) or set(payload['hydraulics']) not in (hydraulic_keys, hydraulic_keys | {'atmospheric_pressure_hpa'}):
+        raise ValueError('hydraulics: claves inválidas')
     _keys(payload['simulation'], {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'})
     t, h, s, rp = (payload[k] for k in ('terrain','hydraulics','simulation','rainfall_profile'))
     crs = _validate_crs(t['target_crs'])
@@ -156,13 +161,22 @@ def validate_roi_run(payload, limits):
     if t['resampling'] not in ('nearest','bilinear'):
         raise ValueError('resampling inválido')
     if (h['initial_condition'] not in ('dry_zero_velocity','still_water_at_fixed_level') or
-            h['infiltration'] != 'unsupported' or h['domain_nonurban'] is not True):
+            h['infiltration'] not in ('unsupported','runoff_coefficient') or h['domain_nonurban'] is not True):
         raise ValueError('hipótesis hidráulicas explícitas requeridas')
     sides = normalize_boundary(h['boundary'])
     if h['initial_condition'] == 'still_water_at_fixed_level':
         levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
         if len(levels) != 1:
             raise ValueError('agua en reposo requiere lados de nivel fijo con un único nivel')
+    pressure = h.get('atmospheric_pressure_hpa')
+    surge = 0.0
+    if pressure is not None:
+        surge = barometric_surge_m(pressure)
+        if not any(spec['type'] == 'fixed_level' for spec in sides.values()):
+            raise ValueError('la presión atmosférica solo eleva lados de nivel fijo (mar)')
+    # The sea level the solver sees: requested fixed level plus the inverse-barometer surge.
+    solver_sides = {side: ({**spec, 'level_m': spec['level_m'] + surge} if spec['type'] == 'fixed_level' else spec)
+                    for side, spec in sides.items()}
     _number(h['manning'], 1)
     duration = _number(s['duration_s'], 86400)
     save = _number(s['save_interval_s'], duration)
@@ -177,6 +191,9 @@ def validate_roi_run(payload, limits):
     normalized = normalize_request({'roi': payload['roi'], 'rainfall': payload['rainfall']})
     if normalized['rainfall']['duration_s'] > duration:
         raise ValueError('duración de lluvia supera simulación')
+    coefficient = runoff_coefficient(normalized['rainfall']['duration_s']) if h['infiltration'] == 'runoff_coefficient' else None
+    losses = {'infiltration': h['infiltration'], 'runoff_coefficient': coefficient,
+              'atmospheric_pressure_hpa': pressure, 'barometric_surge_m': surge}
     if isinstance(rp['seed'], bool) or not isinstance(rp['seed'], int) or abs(rp['seed']) > 2**53:
         raise ValueError('seed fuera de rango')
     count = _number(rp['interval_count'], 10000, integer=True)
@@ -186,11 +203,12 @@ def validate_roi_run(payload, limits):
     if (count + 2)*width*height > limits['max_rain_values'] or frames*width*height > limits['max_rain_values']:
         raise ValueError('presupuesto acumulado de datos excedido')
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
-    generate_rainfall_profile({'roi': payload['roi'], 'rainfall': payload['rainfall']}, **rp)
+    generate_rainfall_profile({'roi': payload['roi'], 'rainfall': _solver_rainfall(payload['rainfall'], losses)}, **rp)
     return json.loads(json.dumps({**payload, 'terrain': {**t, 'target_crs': crs.to_string()},
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
                                                'width': width, 'height': height, 'frame_budget': frames,
-                                               'boundary': sides}}, allow_nan=False))
+                                               'boundary': sides, 'solver_boundary': solver_sides,
+                                               'losses': losses}}, allow_nan=False))
 
 
 def _directory(root, run_id):
@@ -258,6 +276,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'dg2_depth_thresh_m':request['simulation']['dg2_depth_thresh_m'],
              'boundary':request['computed']['boundary'],
              'initial_condition':request['hydraulics']['initial_condition'],
+             'losses':request['computed']['losses'],
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+cfg['timeout_s']+30}
     _save(directory,state)
@@ -306,13 +325,19 @@ def _prepare(directory, request, cfg, provider, stage):
     prepare_dg2_dem(dem, directory / 'dg2', executable=cfg['dem_executable'],vertical_datum='EGM96',
                     code_version=cfg['code_version'],timeout_s=min(cfg['preparation_timeout_s'],120),max_cells=cfg['max_cells'])
     if _has_boundary_file(request):
-        format_boundary(dem,directory/'boundary',request['computed']['boundary'])
+        format_boundary(dem,directory/'boundary',request['computed']['solver_boundary'])
     if _still_water(request):
-        write_still_water_start(directory/'dg2',directory/'initial',request['computed']['boundary'],max_cells=cfg['max_cells'])
-    profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':request['rainfall']},**request['rainfall_profile'])
+        write_still_water_start(directory/'dg2',directory/'initial',request['computed']['solver_boundary'],max_cells=cfg['max_cells'])
+    rainfall = _solver_rainfall(request['rainfall'],request['computed']['losses'])
+    profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':rainfall},**request['rainfall_profile'])
     export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
                            max_values=cfg['max_rain_values'])
     return actual
+
+
+def _solver_rainfall(rainfall, losses):
+    """Rain the solver receives: the request, or rain x runoff coefficient when infiltration is on."""
+    return rainfall if losses['runoff_coefficient'] is None else effective_rainfall(rainfall, losses['runoff_coefficient'])
 
 
 def _has_boundary_file(request):
