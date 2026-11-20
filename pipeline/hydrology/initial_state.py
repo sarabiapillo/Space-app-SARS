@@ -21,31 +21,45 @@ from .results import read_signed_ascii
 _EDGE = {'north': np.s_[0, :], 'south': np.s_[-1, :], 'west': np.s_[:, 0], 'east': np.s_[:, -1]}
 
 
-def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000):
-    """Write ``initial.wd``, ``initial.wd1x`` and ``initial.wd1y`` beside a manifest; return a summary."""
-    sides = normalize_boundary(sides)
-    levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
-    if not levels:
-        raise ValueError('still-water start needs at least one fixed_level side')
-    if len(levels) != 1:
-        raise ValueError('still-water start needs every fixed_level side at one level')
-    level = levels.pop()
+def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, lake_depth=None):
+    """Write ``initial.wd``, ``initial.wd1x`` and ``initial.wd1y`` beside a manifest; return a summary.
+
+    ``sides`` fills the sea at the fixed level (None: no sea). ``lake_depth`` (a depth grid on the DEM
+    grid, e.g. from HydroLAKES) adds lakes already full to their surface; where both apply the deeper wins.
+    """
     dg2_dir, output = Path(dg2_dir), Path(output_dir)
     dem, slope_x, slope_y = (read_signed_ascii(dg2_dir / name, max_cells=max_cells)
                              for name in ('terrain.dem', 'terrain.dem1x', 'terrain.dem1y'))
     if any((g['grid'], g['nodata']) != (dem['grid'], dem['nodata']) for g in (slope_x, slope_y)):
         raise ValueError('DEM slope grids must match the DEM grid')
     z = dem['values']
-    below = (z != dem['nodata']) & (z < level)
-    seeds = np.zeros_like(below)
-    for side in SIDES:
-        if sides[side]['type'] == 'fixed_level':
-            seeds[_EDGE[side]] = below[_EDGE[side]]
-    labels, _ = ndi.label(below)  # default structure: 4-connectivity
-    sea = np.isin(labels, np.unique(labels[seeds & (labels > 0)]))
-    depth = np.where(sea, level - z, 0.0)
+    level, depth = None, np.zeros_like(z)
+    if sides is not None:
+        sides = normalize_boundary(sides)
+        levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
+        if not levels:
+            raise ValueError('still-water start needs at least one fixed_level side')
+        if len(levels) != 1:
+            raise ValueError('still-water start needs every fixed_level side at one level')
+        level = levels.pop()
+        below = (z != dem['nodata']) & (z < level)
+        seeds = np.zeros_like(below)
+        for side in SIDES:
+            if sides[side]['type'] == 'fixed_level':
+                seeds[_EDGE[side]] = below[_EDGE[side]]
+        labels, _ = ndi.label(below)  # default structure: 4-connectivity
+        sea = np.isin(labels, np.unique(labels[seeds & (labels > 0)]))
+        depth = np.where(sea, level - z, 0.0)
+    if lake_depth is not None:
+        lake_depth = np.asarray(lake_depth, dtype='float64')
+        if lake_depth.shape != z.shape:
+            raise ValueError('lake depth grid must match the DEM grid')
+        depth = np.maximum(depth, np.where(z != dem['nodata'], lake_depth, 0.0))
+    sea = depth > 0
     cell = dem['grid']['cellsize_m']
     summary = {'level_m': level, 'wet_cells': int(sea.sum()), 'volume_m3': float(depth.sum() * cell * cell)}
+    if lake_depth is not None:
+        summary['lake_cells'] = int(np.count_nonzero(lake_depth > 0))
     header = ''.join((dg2_dir / 'terrain.dem').read_text(encoding='ascii').splitlines(keepends=True)[:6])
     output.mkdir(parents=False, exist_ok=False)
     for name, values in (('initial.wd', depth), ('initial.wd1x', np.where(sea, -slope_x['values'], 0.0)),

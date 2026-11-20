@@ -50,6 +50,7 @@ def _public(run):
     result['initial_condition'] = run.get('initial_condition')
     # Infiltration coefficient and barometric surge (null in runs created before they existed).
     result['losses'] = run.get('losses')
+    result['lakes'] = run.get('lakes')  # 'none' or 'hydrolakes'; null in older runs
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'
@@ -120,6 +121,8 @@ class RoiRunResultsView(APIView):
             result['time_of_concentration'] = run['result'].get('time_of_concentration')
             # Road exposure on OpenStreetMap roads (© OpenStreetMap contributors, ODbL); null in older runs.
             result['roads'] = run['result'].get('roads')
+            # HydroLAKES lakes started full in this run (HydroLAKES v1.0, CC BY 4.0); null when none.
+            result['lakes'] = run['result'].get('lakes')
             # Chart inputs; null for runs summarized before depth classes existed.
             result['depth_classes_m'] = run['result'].get('depth_classes_m')
             result['rainfall_segments'] = _rainfall_segments(run)

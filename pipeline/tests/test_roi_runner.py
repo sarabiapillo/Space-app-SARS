@@ -215,6 +215,40 @@ def test_native_roads_are_fetched_for_the_domain_and_a_failure_does_not_stop_the
     assert state['result']['roads'] == {'available': False, 'reason': 'unavailable'}
 
 
+def lake_config(tmp_path, depth=2.0):
+    import geopandas as gpd
+    from shapely.geometry import box
+    # Server paths must live under the project data/ directory (validate_config).
+    path = BASE / f'lakes-{uuid.uuid4()}.gpkg'
+    gpd.GeoDataFrame([{'Hylak_id': 42, 'Lake_name': 'Test lake', 'Lake_area': .002, 'Depth_avg': depth,
+                       'Vol_total': 0.0, 'Elevation': 100}],
+                     geometry=[box(-92.99985, 16.79995, -92.99945, 16.80035)], crs='EPSG:4326').to_file(path, layer='lakes', driver='GPKG')
+    return {**config(), 'lakes_path': str(path)}
+
+
+@pytest.mark.parametrize('lakes, with_dataset', [('hydrolakes', False), ('glwd', True)])
+def test_lakes_option_needs_a_known_source_installed_on_the_server(root, tmp_path, lakes, with_dataset):
+    p = payload(); p['hydraulics']['lakes'] = lakes
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=lake_config(tmp_path) if with_dataset else config(), launch=False)
+    assert not root.exists()
+
+
+def test_native_hydrolakes_lake_starts_full_over_a_burned_bed(root, tmp_path):
+    p = payload(); p['hydraulics']['lakes'] = 'hydrolakes'
+    job = start_roi_run('alice', p, root=root, config=lake_config(tmp_path), launch=False)
+    assert job['lakes'] == 'hydrolakes'
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    [lake] = state['result']['lakes']
+    assert lake['hylak_id'] == 42 and lake['depth_avg_m'] == 2.0 and lake['cells'] > 0 and lake['surface_m'] == 100
+    assert 'startfile initial.wd' in (root / job['id'] / 'work' / 'roi.par').read_text().splitlines()
+    # Lake full from the first frame; a 2 x 2-cell lake with dug vertical walls loses ~1 % at the shore
+    # in the first step (DG2 wet/dry adjustment, as with the sea).
+    assert state['result']['frames'][0]['stats']['max_m'] == pytest.approx(2.0, rel=.05)
+    assert 'HydroLAKES' in state['provenance']['lakes']['citation']
+
+
 def flat_provider(root, run_id):
     class Provider:
         def acquire_roi(self, geometry):

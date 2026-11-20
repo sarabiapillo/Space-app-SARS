@@ -49,6 +49,9 @@ def build_flood_service_settings(project_root, environ):
         'max_rain_values': positive('MAX_RAIN_VALUES', 100_000, 50_000_000, integer=True),
         'max_frames': positive('MAX_FRAMES', 20, 50_000_000, integer=True),
         'max_tiles': positive('MAX_TILES', 2, 50_000_000, integer=True),
+        # HydroLAKES GeoPackage (python -m pipeline.hydrology.lakes prepare ...); the lakes option is
+        # refused per request while this file does not exist.
+        'lakes_path': path('LAKES_PATH', 'reference/hydrolakes/HydroLAKES_polys_v10.gpkg'),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):
         supplied = environ.get(prefix + key, pinned)

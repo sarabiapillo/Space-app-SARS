@@ -44,6 +44,7 @@ from .boundaries import format_boundary, normalize_boundary
 from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
+from .lakes import CITATION as LAKES_CITATION, burn_lakes, lakes_in_bounds
 from .results import summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -86,8 +87,12 @@ def _sha(path):
 
 def validate_config(config):
     """Configuración exclusivamente del servidor; hashes y límites obligatorios."""
-    _keys(config, _CONFIG)
+    # lakes_path (HydroLAKES GeoPackage) is optional: without it the lakes option is refused.
+    if not isinstance(config, dict) or set(config) not in (_CONFIG, _CONFIG | {'lakes_path'}):
+        raise ValueError('configuración: claves inválidas')
     result = dict(config)
+    if 'lakes_path' in config:
+        result['lakes_path'] = str(_path(config['lakes_path']))
     for name, digest in (('executable', 'binary_sha256'), ('dem_executable', 'dem_sha256')):
         p = _path(config[name])
         if not p.is_file() or not os.access(p, os.X_OK) or _sha(p) != config[digest]:
@@ -153,7 +158,8 @@ def validate_roi_run(payload, limits):
     _keys(payload['terrain'], {'target_crs','resolution_m','resampling'})
     _keys(payload['rainfall_profile'], {'interval_count','seed','distribution'})
     hydraulic_keys = {'manning','initial_condition','boundary','infiltration','domain_nonurban'}
-    if not isinstance(payload['hydraulics'], dict) or set(payload['hydraulics']) not in (hydraulic_keys, hydraulic_keys | {'atmospheric_pressure_hpa'}):
+    if (not isinstance(payload['hydraulics'], dict) or not hydraulic_keys <= set(payload['hydraulics'])
+            or not set(payload['hydraulics']) <= hydraulic_keys | {'atmospheric_pressure_hpa', 'lakes'}):
         raise ValueError('hydraulics: claves inválidas')
     _keys(payload['simulation'], {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'})
     t, h, s, rp = (payload[k] for k in ('terrain','hydraulics','simulation','rainfall_profile'))
@@ -169,6 +175,11 @@ def validate_roi_run(payload, limits):
         levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
         if len(levels) != 1:
             raise ValueError('agua en reposo requiere lados de nivel fijo con un único nivel')
+    lakes = h.get('lakes', 'none')
+    if lakes not in ('none', 'hydrolakes'):
+        raise ValueError('lakes debe ser none o hydrolakes')
+    if lakes == 'hydrolakes' and not (limits.get('lakes_path') and Path(limits['lakes_path']).is_file()):
+        raise ValueError('HydroLAKES no está instalado en el servidor')
     pressure = h.get('atmospheric_pressure_hpa')
     surge = 0.0
     if pressure is not None:
@@ -209,7 +220,7 @@ def validate_roi_run(payload, limits):
                                   'computed': {'geographic_acquisition': geography, 'extent_m': extent,
                                                'width': width, 'height': height, 'frame_budget': frames,
                                                'boundary': sides, 'solver_boundary': solver_sides,
-                                               'losses': losses}}, allow_nan=False))
+                                               'losses': losses, 'lakes': lakes}}, allow_nan=False))
 
 
 def _directory(root, run_id):
@@ -278,6 +289,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True):
              'boundary':request['computed']['boundary'],
              'initial_condition':request['hydraulics']['initial_condition'],
              'losses':request['computed']['losses'],
+             'lakes':request['computed']['lakes'],
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+cfg['timeout_s']+30}
     _save(directory,state)
@@ -319,6 +331,17 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         if not np.isfinite(values).all():
             raise ValueError('NASADEM coverage missing on computational grid')
         profile = src.profile.copy()
+    lake_depth = None
+    if request['computed']['lakes'] == 'hydrolakes':
+        # HydroLAKES bed dug into the aligned DEM before DG2 coefficients; recorded with the lakes used.
+        found = lakes_in_bounds(cfg['lakes_path'],shape(geography).bounds)
+        values,lake_depth,records = burn_lakes(values,transform,request['terrain']['target_crs'],found)
+        values = values.astype('float32')
+        (directory/'lakes').mkdir()
+        np.save(directory/'lakes/lake-depth.npy',lake_depth)
+        (directory/'lakes/manifest.json').write_text(json.dumps({'citation':LAKES_CITATION,'lakes':records,
+            'method':'surface = median DEM of lake cells; depth grows with distance to shore, mean = Depth_avg; '
+                      'terrain change from an estimated depth, not surveyed bathymetry'},allow_nan=False))
     profile.update(height=height,width=width,transform=transform,nodata=float('nan'))
     with rasterio.open(dem,'w',**profile) as dst:
         dst.write(values,1)
@@ -327,8 +350,10 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
                     code_version=cfg['code_version'],timeout_s=min(cfg['preparation_timeout_s'],120),max_cells=cfg['max_cells'])
     if _has_boundary_file(request):
         format_boundary(dem,directory/'boundary',request['computed']['solver_boundary'])
-    if _still_water(request):
-        write_still_water_start(directory/'dg2',directory/'initial',request['computed']['solver_boundary'],max_cells=cfg['max_cells'])
+    if _still_water(request) or (lake_depth is not None and lake_depth.any()):
+        write_still_water_start(directory/'dg2',directory/'initial',
+                                request['computed']['solver_boundary'] if _still_water(request) else None,
+                                max_cells=cfg['max_cells'],lake_depth=lake_depth)
     rainfall = _solver_rainfall(request['rainfall'],request['computed']['losses'])
     profile = generate_rainfall_profile({'roi':request['roi'],'rainfall':rainfall},**request['rainfall_profile'])
     export_rainfall_netcdf(profile,dem,directory/'rain.nc',simulation_duration_s=request['simulation']['duration_s'],
@@ -355,7 +380,7 @@ def _still_water(request):
     return request['hydraulics']['initial_condition'] == 'still_water_at_fixed_level'
 
 
-def solver_parameter_file(request):
+def solver_parameter_file(request, start=None):
     """LISFLOOD-FP .par text from a validated request. All file names are constant;
     only validated numbers are interpolated, so no untrusted directive can be injected."""
     s, h = request['simulation'], request['hydraulics']
@@ -371,8 +396,8 @@ def solver_parameter_file(request):
                   'dynamicrainfile rain.nc\n')
     if _has_boundary_file(request):
         parameter += 'bcifile boundary.bci\n'
-    if _still_water(request):
-        # DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients) next to it.
+    if _still_water(request) if start is None else start:
+        # Sea and/or lakes full at start. DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients).
         parameter += 'startfile initial.wd\n'
     return parameter
 
@@ -418,13 +443,14 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
         actual = json.loads(stage.read_text())['extent_m']
         state.update(state='preparing',stage='preparing',computed_extent_m=actual); _save(directory,state)
         s,h = request['simulation'],request['hydraulics']
-        parameter = solver_parameter_file(request)
+        started = (directory/'initial/initial.wd').is_file()
+        parameter = solver_parameter_file(request,start=started)
         work = directory/'work'; work.mkdir(mode=0o700)
         sources = [('terrain.dem',directory/'dg2/terrain.dem'),('terrain.dem1x',directory/'dg2/terrain.dem1x'),
                    ('terrain.dem1y',directory/'dg2/terrain.dem1y'),('rain.nc',directory/'rain.nc')]
         if _has_boundary_file(request):
             sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
-        if _still_water(request):
+        if started:
             sources += [(name,directory/'initial'/name) for name in ('initial.wd','initial.wd1x','initial.wd1y')]
         for name,source in sources:
             if source.is_symlink() or not source.is_file():
@@ -433,7 +459,9 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
         (work/'roi.par').write_text(parameter)
         names = [name for name,_ in sources]+['roi.par']
         state['input_hashes'] = {name:_sha(work/name) for name in names}
-        state['provenance'] = {'terrain':json.loads((directory/'prepared/manifest.json').read_text()),
+        lakes_manifest = directory/'lakes/manifest.json'
+        state['provenance'] = {'lakes':json.loads(lakes_manifest.read_text()) if lakes_manifest.is_file() else None,
+                               'terrain':json.loads((directory/'prepared/manifest.json').read_text()),
                                'aligned_terrain_sha256':_sha(directory/'prepared/solver-terrain.tif'),
                                'aligned_extent_m':actual,
                                'dg2':json.loads((directory/'dg2/manifest.json').read_text()),
@@ -454,8 +482,9 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
             raise ValueError('invalid solver output')
         state.update(state='results',stage='results'); _save(directory,state)
         summary = summarize_results(outputs,save_interval_s=s['save_interval_s'],crs=request['terrain']['target_crs'],max_cells=cfg['max_cells'],
-                                    initial_depth=work/'initial.wd' if _still_water(request) else None,
+                                    initial_depth=work/'initial.wd' if started else None,
                                     roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
+        summary['lakes'] = state['provenance']['lakes']['lakes'] if state['provenance']['lakes'] else None
         if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
             raise ValueError('output budget exceeded')
         artifacts=[]
