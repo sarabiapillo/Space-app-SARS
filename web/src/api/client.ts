@@ -59,8 +59,15 @@ export type {
   ExploreWebManifest,
 }
 
+/** Django's CSRF token from its cookie; DRF session auth rejects a logged-in POST without it (HTTP 403). */
+export function csrfHeaders(): Record<string, string> {
+  const token = typeof document === 'undefined' ? '' : decodeURIComponent(document.cookie.split(';').map(s => s.trim()).find(s => s.startsWith('csrftoken='))?.slice(10) ?? '')
+  return token ? { 'X-CSRFToken': token } : {}
+}
+
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(init?.headers ?? {}) } })
+  const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes((init?.method ?? 'GET').toUpperCase())
+  const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(unsafe ? csrfHeaders() : {}), ...(init?.headers ?? {}) } })
   const body = await response.json().catch(() => ({})) as Record<string, unknown>
   if (!response.ok) {
     const detail = ['detail', 'query', 'radius_km', 'place_id', 'geometry', 'q', 'roi', 'scene_id']
@@ -380,6 +387,7 @@ export async function runSolarSimulation(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify(req),
   })
@@ -428,9 +436,6 @@ export function roiFloodArtifactUrl(id: string, name: string) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.tif$/.test(name) || name.includes('..')) throw new Error('Nombre de artefacto inválido')
   return `${roiRunPath(id)}artifacts/${name}/`
 }
-function csrfCookie() {
-  return typeof document === 'undefined' ? '' : decodeURIComponent(document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('csrftoken='))?.slice(10) ?? '')
-}
 async function roiResponse(path: string, init: RequestInit = {}) {
   const response = await fetch(path, {credentials:'same-origin', ...init})
   if (!response.ok) {
@@ -443,7 +448,7 @@ async function roiResponse(path: string, init: RequestInit = {}) {
   return response
 }
 export async function startRoiFlood(req: unknown, signal?: AbortSignal): Promise<FloodRoiRun> {
-  const res = await roiResponse('/api/flood-scenarios/roi/start/', {method:'POST',signal,headers:{'Content-Type':'application/json','Accept':'application/json','X-CSRFToken':csrfCookie()},body:JSON.stringify(req)})
+  const res = await roiResponse('/api/flood-scenarios/roi/start/', {method:'POST',signal,headers:{'Content-Type':'application/json','Accept':'application/json',...csrfHeaders()},body:JSON.stringify(req)})
   if (res.status!==202) throw new Error('Respuesta de inicio DG2 inválida')
   const run = await res.json() as FloodRoiRun
   roiRunPath(run.id)
@@ -530,6 +535,7 @@ export async function prepareFloodScenario(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify(req),
   })
@@ -608,6 +614,7 @@ export async function simulateFloodScenario(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify(req),
   })

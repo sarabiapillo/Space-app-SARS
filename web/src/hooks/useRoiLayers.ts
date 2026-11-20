@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { LngLat } from '../types/workspace'
 import type { RoiGeometry } from '../utils/roi'
-import type { ExploreWebManifest } from '../api/client'
+import { csrfHeaders, type ExploreWebManifest } from '../api/client'
 import type { ExploreChartsManifest } from '../mocks/initialWorkspaces'
 import { localizeText } from '../i18n/core.ts'
 import { useTranslation } from '../i18n/useTranslation.ts'
@@ -44,7 +44,7 @@ export function useRoiLayers(region: LngLat[] | RoiGeometry | null, viewKey: str
     async function json(url: string, body?: unknown) {
       const response = await fetch(url, {
         method: body ? 'POST' : 'GET', signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(body ? csrfHeaders() : {}) },
         body: body ? JSON.stringify(body) : undefined,
       })
       if (!response.ok) throw new Error(`No se pudo cargar la ROI (HTTP ${response.status}). Verifica el servidor y los límites de la región.`)
