@@ -79,6 +79,12 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(response.json()['dg2_depth_thresh_m'], .02)
         self.assertEqual(self.alice.get(response.json()['status_url']).json()['dg2_depth_thresh_m'], .02)
 
+    def test_a_rejected_request_says_why(self):
+        budget = payload(); budget['simulation']['save_interval_s'] = .000001
+        message = self.alice.post(self.start, budget, format='json').json()['errors']['request'][0]
+        self.assertIn('max_frames', message)
+        self.assertTrue(message.startswith('Solicitud ROI inválida o fuera de presupuesto'))
+
     def test_rejections_leave_no_jobs(self):
         examples = [dict(payload(), extra='path'), {k:v for k,v in payload().items() if k != 'domain'}]
         bad_domain = payload(); bad_domain['domain'] = bad_domain['roi']; bad_domain['roi'] = payload()['domain']; examples.append(bad_domain)

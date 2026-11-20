@@ -123,13 +123,17 @@ class RoiRunStartView(APIView):
         except DatasetUnavailable as exc:
             message = _DATASET_MESSAGES.get(exc.code, 'Datos requeridos no disponibles.')
             return Response({'errors': {'service': [message]}, 'error': exc.code if exc.code in _DATASET_MESSAGES else 'dataset_unavailable'}, status=503)
-        except (ValueError, TypeError, KeyError, OverflowError):
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
             # Configuración inválida no debe diagnosticarse como entrada mala.
             try:
                 validate_config(config)
             except (ValueError, TypeError, KeyError, OSError):
                 return Response({'errors': {'service': ['Ejecución ROI DG2 no disponible.']}}, status=503)
-            return Response({'errors': {'request': ['Solicitud ROI inválida o fuera de presupuesto.']}}, status=400)
+            # The request validator's ValueError messages describe the payload (e.g. 'cuadros exceden max_frames'),
+            # so they are shown to the user; other exception types stay generic.
+            reason = str(exc).strip()[:300] if isinstance(exc, ValueError) else ''
+            message = 'Solicitud ROI inválida o fuera de presupuesto' + (f': {reason}' if reason else '.')
+            return Response({'errors': {'request': [message]}}, status=400)
         except OSError:
             return Response({'errors': {'service': ['Ejecución ROI DG2 no disponible.']}}, status=503)
         return Response(_public(run), status=202)
