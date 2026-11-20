@@ -467,3 +467,47 @@ test('urban warning, land-surface notes, design storm and dataset errors are sho
   assert.equal(hyetographCaption({}, tr), 'Hietograma de la lluvia sintética (mm/h)')
   assert.equal(hyetographCaption({land_surface:{...land, infiltration:'runoff_coefficient'}, rainfall_source:'synthetic'}, tr), 'Hietograma de la lluvia neta que recibe el solver, media de la ROI (sintética, mm/h)')
 })
+
+test('tide sides: the builder sends {type:"tide"}, the UTC start time and the optional GEBCO sea floor', async () => {
+  const { utcStart } = await import('../src/utils/floodDg2.ts')
+  const body = buildRoiFloodRequest(filledForm({boundarySouth:'tide',stillWater:true,startUtc:'2026-10-16T12:00',bathymetry:true,pressure:'1003'}), square, tr)
+  assert.deepEqual(body.hydraulics.boundary, {north:{type:'free'},east:{type:'free'},south:{type:'tide'},west:{type:'free'}})
+  assert.equal(body.hydraulics.initial_condition, 'still_water_at_fixed_level')
+  assert.equal(body.hydraulics.atmospheric_pressure_hpa, 1003)  // the pressure raises the tide too
+  assert.equal(body.simulation.start_utc, '2026-10-16T12:00:00Z')
+  assert.deepEqual(body.terrain, {target_crs:'EPSG:32615',resolution_m:30,resampling:'nearest',source:'nasadem',bathymetry:'gebco'})
+  // GEBCO over a fixed-level sea, without a tide: no start time is sent.
+  const fixed = buildRoiFloodRequest(filledForm({boundaryWest:'fixed_level',seaLevel:'0',bathymetry:true,startUtc:'2026-10-16T12:00'}), square, tr)
+  assert.equal('start_utc' in fixed.simulation, false)
+  assert.equal(fixed.terrain.bathymetry, 'gebco')
+  assert.deepEqual(['2026-10-16T12:00:30', '2026-02-30T00:00', '1899-12-31T23:00', '2026-10-16 12:00', ''].map(utcStart),
+    ['2026-10-16T12:00:30Z', null, null, null, null])
+})
+
+test('tide sides need a start time, cannot share a still-water start with a fixed level, and GEBCO needs a sea side', () => {
+  assert.throws(() => buildRoiFloodRequest(filledForm({boundarySouth:'tide'}), square, tr), /Marea: indica el inicio del evento en UTC/)
+  assert.throws(() => buildRoiFloodRequest(filledForm({boundarySouth:'tide',boundaryWest:'fixed_level',seaLevel:'0',stillWater:true,startUtc:'2026-10-16T12:00'}), square, tr), /todos los lados de mar deben ser de marea/)
+  assert.throws(() => buildRoiFloodRequest(filledForm({bathymetry:true}), square, tr), /GEBCO requiere un lado de mar/)
+})
+
+test('step status counts the tide start time and the GEBCO sea side', async () => {
+  const { formStepStatus } = await import('../src/utils/floodDg2.ts')
+  assert.equal(formStepStatus(filledForm({boundarySouth:'tide'}), square).terrain, false)
+  assert.equal(formStepStatus(filledForm({boundarySouth:'tide',startUtc:'2026-10-16T12:00',stillWater:true,bathymetry:true}), square).terrain, true)
+  assert.equal(formStepStatus(filledForm({bathymetry:true}), square).terrain, false)
+})
+
+test('run notes summarize the tide levels and GEBCO cells, and name their dataset errors', async () => {
+  const { tideNote, bathymetryNote, runErrorMessage } = await import('../src/utils/floodDg2.ts')
+  const tide = {model:'EOT20',sides:['south'],mdt:'DTUUH22MDT',start_utc:'2026-10-16T12:00:00Z',end_utc:'2026-10-16T12:20:00Z',step_s:600,
+    event_time_basis:'simulation_start',point:[-92.4,14.7],node:[-92.375,14.625],mdt_m:.31,datum:'EGM2008',barometric_surge_m:0,
+    start_level_m:.512,min_m:.4,max_m:.876,count:3,attribution:['EOT20']}
+  assert.equal(tideNote(tide, tr), 'Marea EOT20 en el lado sur, 2026-10-16T12:00:00Z → 2026-10-16T12:20:00Z: nivel de 0.4 a 0.88 m EGM2008 (inicio 0.51 m), nodo oceánico (-92.375, 14.625). Solo marea astronómica: sin marea de tormenta, oleaje ni anomalías.')
+  assert.match(tideNote({...tide, min_m:null, max_m:null}, tr), /\(pendiente\)/)
+  assert.equal(tideNote(null, tr), null)
+  assert.equal(bathymetryNote({source:'gebco',dataset:'GEBCO_2026 Grid',sea_sides:['south','west'],mdt:'DTUUH22MDT',mdt_m:.3,datum:'EGM2008',replaced_cells:42,min_elevation_m:-12.346,attribution:'GEBCO'}, tr),
+    'Fondo marino GEBCO_2026 (~450 m) en 42 celdas de mar conectadas a los lados sur, oeste, hasta -12.35 m EGM2008.')
+  assert.equal(bathymetryNote(undefined, tr), null)
+  assert.match(runErrorMessage('tide_unavailable', tr), /EOT20/)
+  assert.match(runErrorMessage('bathymetry_unavailable', tr), /GEBCO_2026/)
+})

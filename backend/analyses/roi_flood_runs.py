@@ -28,7 +28,9 @@ _ERRORS = frozenset(('acquisition_failed', 'preparation_failed', 'preparation_or
                      'worker_stopped', 'worker_deadline', 'worker_launch_failed',
                      'preparation_timeout', 'solver_timeout',
                      # An open dataset the run needs could not be read (no uniform substitute is used).
-                     'landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable'))
+                     'landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable',
+                     # EOT20 / DTUUH22MDT caches missing or no ocean near the tide point; GEBCO window unreadable.
+                     'tide_unavailable', 'bathymetry_unavailable'))
 # Start-time data errors: answered 503 with this code, the request itself was valid.
 _DATASET_MESSAGES = {'design_storm_unavailable': 'Datos de tormenta de diseño (PXR-4) no disponibles en el servidor.'}
 
@@ -62,6 +64,7 @@ def _public(run):
     result['lakes'] = run.get('lakes')  # 'none' or 'hydrolakes'; null in older runs
     result.update(_land_and_rain(run))
     result.update(_terrain(run))
+    result.update(_coast(run))
     result.update(_urls(run['id']))
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'
@@ -75,6 +78,13 @@ def _terrain(run):
     return {'terrain_source': run.get('terrain_source', 'nasadem'),
             'vertical_datum': run.get('vertical_datum', 'EGM96'),
             'terrain_attribution': run.get('terrain_attribution')}
+
+
+def _coast(run):
+    """Tide (EOT20 HVAR series: sides, window, node, levels, attribution) and GEBCO sea-cell summaries.
+
+    Null when the run did not request them (and in runs created before they existed)."""
+    return {'tide': run.get('tide'), 'bathymetry': run.get('bathymetry')}
 
 
 def _land_and_rain(run):
@@ -166,6 +176,7 @@ class RoiRunResultsView(APIView):
             result['solver_fallback'] = run['result'].get('solver_fallback')
             # Terrain source and datum come from the run state (the summary does not repeat them).
             result.update(_terrain(run))
+            result.update(_coast(run))
             result.update(_land_and_rain(run))
             result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]

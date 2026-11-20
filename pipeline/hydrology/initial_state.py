@@ -1,5 +1,8 @@
 """Still-water start for LISFLOOD-FP DG2 (`startfile`): the sea begins at the fixed boundary level.
 
+With tide (HVAR) sides the sea begins at the tide level of the first time of the series (t = 0),
+given by the caller, so the run starts at rest and the tide then moves the level.
+
 Without it DG2 starts dry and an HFIX side has to fill the sea during the run, an artificial
 transient. Cells start wet when their mean elevation is below the level and they are 4-connected
 to an edge cell of a fixed-level side that is also below it; enclosed depressions stay dry.
@@ -23,11 +26,13 @@ from .results import read_signed_ascii
 _EDGE = {'north': np.s_[0, :], 'south': np.s_[-1, :], 'west': np.s_[:, 0], 'east': np.s_[:, -1]}
 
 
-def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, lake_depth=None):
+def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, lake_depth=None, tide_level_m=None):
     """Write ``initial.wd``, ``initial.wd1x`` and ``initial.wd1y`` beside a manifest; return a summary.
 
-    ``sides`` fills the sea at the fixed level (None: no sea). ``lake_depth`` (a depth grid on the DEM
-    grid, e.g. from HydroLAKES) adds lakes already full to their surface; where both apply the deeper wins.
+    ``sides`` fills the sea at the fixed level (None: no sea). Tide sides need ``tide_level_m``, the
+    level of the tide series at t = 0; it must equal any fixed level, as all sea sides share one level.
+    ``lake_depth`` (a depth grid on the DEM grid, e.g. from HydroLAKES) adds lakes already full to
+    their surface; where both apply the deeper wins.
     """
     dg2_dir, output = Path(dg2_dir), Path(output_dir)
     dem, slope_x, slope_y = (read_signed_ascii(dg2_dir / name, max_cells=max_cells)
@@ -39,15 +44,19 @@ def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, 
     if sides is not None:
         sides = normalize_boundary(sides)
         levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
+        if any(spec['type'] == 'tide' for spec in sides.values()):
+            if tide_level_m is None:
+                raise ValueError('still-water start with tide sides needs the tide level at t = 0')
+            levels.add(float(tide_level_m))
         if not levels:
-            raise ValueError('still-water start needs at least one fixed_level side')
+            raise ValueError('still-water start needs at least one fixed_level or tide side')
         if len(levels) != 1:
             raise ValueError('still-water start needs every fixed_level side at one level')
         level = levels.pop()
         below = (z != dem['nodata']) & (z < level)
         seeds = np.zeros_like(below)
         for side in SIDES:
-            if sides[side]['type'] == 'fixed_level':
+            if sides[side]['type'] in ('fixed_level', 'tide'):
                 seeds[_EDGE[side]] = below[_EDGE[side]]
         labels, _ = ndi.label(below)  # default structure: 4-connectivity
         sea = np.isin(labels, np.unique(labels[seeds & (labels > 0)]))
@@ -72,5 +81,8 @@ def write_still_water_start(dg2_dir, output_dir, sides, *, max_cells=4_000_000, 
                 'method': 'cells below the fixed level 4-connected to a fixed-level edge; H = level - z, '
                           'H1x = -Z1x, H1y = -Z1y (flat free surface)',
                 'datum': 'EGM2008, the vertical datum of the prepared DEM', 'bathymetry': 'none (terrain DEM only)'}
+    if tide_level_m is not None and sides is not None and any(s['type'] == 'tide' for s in sides.values()):
+        manifest['tide_level_m'] = float(tide_level_m)
+        manifest['method'] += '; tide sides: level of the tide series at t = 0'
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return summary

@@ -244,8 +244,9 @@ def _sample_grid(lats, lons, values, lon, lat, search_cells, max_km=math.inf):
     if not np.isfinite(distance).any() or distance.min() > max_km:
         return None, {'method': 'none'}
     k = np.unravel_index(np.argmin(distance), distance.shape)
+    node_lon = (float(lons[cols[k]]) + 180.0) % 360.0 - 180.0  # grids run 0-360: report -180..180 like the point
     return window[k], {'method': 'nearest valid node', 'distance_km': float(distance[k]),
-                       'node': [float(lons[cols[k]]), float(lats[rr[k]])]}
+                       'node': [node_lon, float(lats[rr[k]])]}
 
 
 def mdt_offset_m(lon, lat, path=DEFAULT_MDT_PATH, reader=_cached_gravsoft_grid, search_cells=MDT_SEARCH_CELLS):

@@ -118,6 +118,7 @@ def test_mdt_offset_is_bilinear_and_falls_back_to_the_nearest_valid_node(tmp_pat
     masked[0:2, 0:2] = np.nan
     value, record = mdt_offset_m(-93.6, 15.6, reader=lambda path: (lats, lons, masked))
     assert record['method'] == 'nearest valid node' and value == pytest.approx(0.2)  # node (268E, 16N)
+    assert record['node'] == [-92.0, 16.0]  # reported in -180..180 like the requested point
     with pytest.raises(ValueError):
         mdt_offset_m(-93.5, 15.5, reader=lambda path: (lats, lons, np.full((3, 3), np.nan)))
 

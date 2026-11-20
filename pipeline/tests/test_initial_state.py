@@ -58,3 +58,19 @@ def test_level_below_every_edge_cell_leaves_the_domain_dry(dg2, tmp_path):
     sides = {**SIDES_WEST, 'west': {'type': 'fixed_level', 'level_m': -1.0}}
     assert write_still_water_start(dg2, tmp_path / 'initial', sides)['wet_cells'] == 0
     assert not read(tmp_path / 'initial/initial.wd').any()
+
+
+def test_tide_sides_start_the_sea_at_the_tide_level_of_t0(dg2, tmp_path):
+    sides = {**SIDES_WEST, 'west': {'type': 'tide', 'mdt': None}}
+    with pytest.raises(ValueError, match='tide level'):
+        write_still_water_start(dg2, tmp_path / 'missing', sides)
+    summary = write_still_water_start(dg2, tmp_path / 'initial', sides, tide_level_m=1.0)
+    sea = np.array([[1, 1, 0, 0], [1, 0, 0, 0], [1, 1, 0, 0]], dtype=bool)
+    np.testing.assert_allclose(read(tmp_path / 'initial/initial.wd'), np.where(sea, 1.0, 0.0))
+    assert summary == {'level_m': 1.0, 'wet_cells': 5, 'volume_m3': pytest.approx(5 * 900)}
+    manifest = json.loads((tmp_path / 'initial/manifest.json').read_text())
+    assert manifest['tide_level_m'] == 1.0 and 't = 0' in manifest['method']
+    # A fixed side beside the tide must share its level.
+    with pytest.raises(ValueError, match='one level'):
+        write_still_water_start(dg2, tmp_path / 'mixed', {**sides, 'north': {'type': 'fixed_level', 'level_m': 2.0}},
+                                tide_level_m=1.0)

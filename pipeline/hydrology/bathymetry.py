@@ -92,13 +92,17 @@ def gebco_on_grid(transform, crs, shape, source=GEBCO_COG_URL, resampling=Resamp
     return out
 
 
+_EDGES = {'north': np.s_[0, :], 'south': np.s_[-1, :], 'west': np.s_[:, 0], 'east': np.s_[:, -1]}
+
+
 def sea_cell_elevations(dem, transform, crs, *, sea_mask=None, msl_offset_m=None, source=GEBCO_COG_URL,
-                        sea_dem_max_m=SEA_DEM_MAX_M, gebco_reader=gebco_on_grid):
+                        sea_dem_max_m=SEA_DEM_MAX_M, gebco_reader=gebco_on_grid, sea_edges=None):
     """GEBCO sea-floor elevation for the sea cells of a metric DEM grid.
 
     Without ``sea_mask`` a cell is sea when GEBCO is below MSL, the DEM is at most ``sea_dem_max_m``
     (the DEM shows the sea surface there) and the cell connects through such cells to the grid edge
-    (so an inland pit or a closed lagoon is not taken as sea). Returns ``{'sea', 'elevation',
+    (so an inland pit or a closed lagoon is not taken as sea). ``sea_edges`` (names among north, east,
+    south, west) limits that edge to the given sides, e.g. the sea sides of a boundary. Returns ``{'sea', 'elevation',
     'provenance'}``: ``elevation`` is GEBCO (+ ``msl_offset_m`` if given) on sea cells and NaN elsewhere.
     """
     dem = np.asarray(dem, dtype='float64')
@@ -108,9 +112,17 @@ def sea_cell_elevations(dem, transform, crs, *, sea_mask=None, msl_offset_m=None
     if sea_mask is None:
         candidate = np.isfinite(gebco) & (gebco < 0) & np.isfinite(dem) & (dem <= sea_dem_max_m)
         labels, _ = ndi.label(candidate)
-        edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+        if sea_edges is None:
+            edge = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+            where = 'the grid edge'
+        else:
+            names = list(sea_edges)
+            if not names or any(name not in _EDGES for name in names):
+                raise ValueError('sea_edges must name sides among north, east, south and west')
+            edge = np.unique(np.concatenate([labels[_EDGES[name]] for name in names]))
+            where = 'a sea-side edge (' + ', '.join(names) + ')'
         sea = np.isin(labels, edge[edge > 0])
-        rule = f'GEBCO < 0 m, DEM <= {sea_dem_max_m} m and connected to the grid edge'
+        rule = f'GEBCO < 0 m, DEM <= {sea_dem_max_m} m and connected to {where}'
     else:
         sea = np.asarray(sea_mask, dtype=bool)
         if sea.shape != dem.shape:

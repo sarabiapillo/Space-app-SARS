@@ -382,7 +382,7 @@ def test_native_hydrolakes_lake_starts_full_over_a_burned_bed(root, tmp_path):
     assert 'HydroLAKES' in state['provenance']['lakes']['citation']
 
 
-def flat_provider(root, run_id):
+def flat_provider(root, run_id, height=100):
     class Provider:
         def acquire_roi(self, geometry):
             cache = root / run_id / 'cache'
@@ -391,7 +391,7 @@ def flat_provider(root, run_id):
             for tile in _required_tiles(_validated_geometry(geometry)):
                 path = cache / (tile + '.zip')
                 with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-                    archive.writestr(tile + '.hgt', np.full((3601,3601), 100, dtype='>i2').tobytes())
+                    archive.writestr(tile + '.hgt', np.full((3601,3601), height, dtype='>i2').tobytes())
                 records.append(NASADEMGranule(tile, 'NASADEM_HGT_' + tile, 'NASADEM_HGT', '001', path))
             return records
     return Provider()
@@ -664,11 +664,15 @@ def test_existing_payload_keeps_its_parameter_file_and_rain_exactly(root):
     job = start_roi_run('alice', payload(), root=root, config=config(), launch=False)
     assert job['land_surface']['manning'] == 'uniform' and job['land_surface']['curve_number'] is None
     assert job['rainfall_source'] == 'synthetic' and job['design_storm'] is None
+    assert not {'tide', 'bathymetry'} & set(job) and not {'tide', 'bathymetry'} & set(validate_roi_run(payload(), config())['computed'])
     state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
-                           landcover_reader=boom, soil_reader=boom, antecedent=boom)
+                           landcover_reader=boom, soil_reader=boom, antecedent=boom, tide_series=boom, gebco_reader=boom,
+                           mdt_reader=boom)
     assert state['state'] == 'succeeded', state
     run = root / job['id']
     assert not (run / 'landcover').exists() and not (run / 'work/manning.n').exists()
+    assert not (run / 'tide').exists() and not (run / 'bathymetry').exists() and not (run / 'work/boundary.bdy').exists()
+    assert not {'tide', 'bathymetry'} & set(state) and 'boundary.bdy' not in state['input_hashes']
     assert 'profile' in state['provenance']['rain'] and 'method' not in state['provenance']['rain']
     with netcdf_file(run / 'rain.nc', 'r', mmap=False) as nc:
         rain = nc.variables['rainfall_depth'][:].copy()
@@ -865,3 +869,201 @@ def test_worldcover_manning_file_is_read_by_both_solvers_and_needs_the_prepared_
         assert lines[0] == solver and 'fpfric 0.035' in lines and 'manningfile manning.n' in lines
     with pytest.raises(ValueError, match='fpfric'):
         solver_parameter_file(request)
+
+
+# ---------------------------------------------------------------------------------- coast: tide (HVAR) and GEBCO
+TIDE_WEST = {'north': {'type': 'closed'}, 'east': {'type': 'closed'}, 'south': {'type': 'closed'},
+             'west': {'type': 'tide', 'mdt': 'DTUUH22MDT'}}
+START = '2026-10-16T12:00:00Z'
+
+
+def tide_payload(p=None, sides=TIDE_WEST, initial='still_water_at_fixed_level', start=START, duration=120, save=40):
+    p = p or payload()
+    p['hydraulics'].update(boundary=sides, initial_condition=initial)
+    p['simulation'].update(duration_s=duration, save_interval_s=save, initial_tstep_s=1)
+    if start is not None:
+        p['simulation']['start_utc'] = start
+    return p
+
+
+def tide_provider(first, last):
+    """Synthetic EOT20 stand-in: a linear tide from ``first`` to ``last`` metres (EGM2008) over the window."""
+    def provide(lon, lat, start, end, step_s, *, mdt):
+        import datetime as dt
+        parse = lambda v: dt.datetime.fromisoformat(v.replace('Z', '+00:00'))
+        span = (parse(end) - parse(start)).total_seconds()
+        times = [k * step_s for k in range(int(round(span / step_s)) + 1)]
+        series = [(t, first + (last - first) * t / span) for t in times]
+        return {'series': series, 'provenance': {'model': 'EOT20 (test)', 'point': [lon, lat], 'start_utc': start,
+                                                 'end_utc': end, 'step_s': step_s, 'mdt_requested': mdt,
+                                                 'offset_m': 0.25, 'datum': 'EGM2008 (test)',
+                                                 'sampling': {'method': 'nearest valid node', 'node': [-93.1, 16.7],
+                                                              'distance_km': 3.0}}}
+    return provide
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['simulation'].pop('start_utc'),  # synthetic rain: the tide needs an explicit start time
+    lambda p: p['simulation'].update(start_utc='2026-10-16T12:00:00'),  # no UTC offset
+    lambda p: p['simulation'].update(start_utc='1850-01-01T00:00:00Z'),
+    lambda p: p['simulation'].update(start_utc=1792152000),
+    lambda p: p['hydraulics'].update(boundary={**TIDE_WEST, 'north': {'type': 'fixed_level', 'level_m': 1}}),  # still water
+    lambda p: p['hydraulics'].update(boundary={**TIDE_WEST, 'west': {'type': 'tide', 'mdt': 'TPXO'}}),
+    lambda p: p['terrain'].update(bathymetry='srtm15'),
+])
+def test_tide_sides_are_validated_and_need_a_start_time(root, change):
+    p = tide_payload(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert not root.exists()
+
+
+def test_design_storm_with_a_tide_side_needs_simulation_start_utc(root):
+    with pytest.raises(ValueError, match='start_utc'):
+        validate_roi_run(design(tide_payload(start=None)), config(), design_storm_reader=pxr_reader)
+    request = validate_roi_run(design(tide_payload()), config(), design_storm_reader=pxr_reader)
+    assert request['computed']['tide']['event_time_basis'] == 'simulation_start'
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p['simulation'].update(start_utc=START),  # no tide side
+    lambda p: p['terrain'].update(bathymetry='gebco'),  # no sea side
+])
+def test_start_time_and_gebco_need_a_coast(root, change):
+    p = payload(); change(p)
+    with pytest.raises(ValueError):
+        start_roi_run('alice', p, root=root, config=config(), launch=False)
+
+
+def test_observed_rain_sets_the_tide_window_from_its_series_start(root):
+    p = observed(tide_payload(start=None, duration=2, save=1))
+    p['rainfall_profile']['provenance']['start_utc'] = '2026-06-18T11:30:00+00:00'
+    tide = validate_roi_run(p, config())['computed']['tide']
+    assert (tide['start_utc'], tide['end_utc'], tide['step_s']) == ('2026-06-18T11:30:00Z', '2026-06-18T11:30:02Z', 2.0)
+    assert tide['event_time_basis'] == 'rain_series_start'
+    p['simulation']['start_utc'] = START  # a second event time is refused
+    with pytest.raises(ValueError, match='provenance.start_utc'):
+        validate_roi_run(p, config())
+
+
+def test_tide_request_is_recorded_in_state_with_one_point_on_the_tide_sides(root):
+    p = tide_payload(sides={**TIDE_WEST, 'south': {'type': 'tide'}}, duration=1500, save=500)
+    job = start_roi_run('alice', p, root=root, config={**config(), 'max_frames': 5}, launch=False)
+    tide = job['tide']
+    # 1500 s in 600 s steps: the window is rounded up so the last level covers the end of the run.
+    assert (tide['start_utc'], tide['end_utc'], tide['step_s']) == (START, '2026-10-16T12:30:00Z', 600.0)
+    assert tide['sides'] == ['south', 'west'] and tide['mdt'] == 'DTUUH22MDT' and tide['model'] == 'EOT20'
+    assert tide['event_time_basis'] == 'simulation_start' and tide['min_m'] is None
+    # One series for both sides, at the mean of their midpoints: south-west quarter of the computational rectangle.
+    lon, lat = tide['point']
+    assert -93.0001 < lon < -92.9996 and 16.7995 < lat < 16.8002
+    assert job['boundary']['south'] == {'type': 'tide', 'mdt': 'DTUUH22MDT'} and 'bathymetry' not in job
+
+
+def test_parameter_file_reads_the_tide_series_after_the_boundary_file():
+    lines = solver_parameter_file(validate_roi_run(tide_payload(), config())).splitlines()
+    assert lines[lines.index('bcifile boundary.bci') + 1] == 'bdyfile boundary.bdy'
+    assert 'startfile initial.wd' in lines
+
+
+def edge_depths(run, state):
+    """West-column depth of every frame COG: {scheduled_time_s: (min, max)}."""
+    found = {}
+    for artifact in state['artifacts']:
+        if artifact['frame_index'] is None:
+            continue
+        with rasterio.open(run / artifact['file']) as cog:
+            column = cog.read(1)[:, 0]
+        found[artifact['scheduled_time_s']] = (float(column.min()), float(column.max()))
+    return found
+
+
+@pytest.mark.parametrize('solver', ['dg2', 'fv1'])
+def test_native_tide_side_follows_the_series_from_a_still_sea_with_the_pressure_surge(root, solver):
+    # A slow tide (0.1 m in 20 min) so the closed basin behind the west side keeps up with it.
+    p = tide_payload(duration=1200, save=400)
+    p['hydraulics']['atmospheric_pressure_hpa'] = 1003.25
+    if solver == 'fv1':
+        p = fv1(p)
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    first, last = 100.5, 100.6  # EGM2008 tide levels at t = 0 and t = 1200 s (flat terrain at ~100 m)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads,
+                           tide_series=tide_provider(first, last))
+    assert state['state'] == 'succeeded', state
+    assert state['solver'] == solver and state['solver_fallback'] is None
+    run, surge = root / job['id'], 1000 / 9810
+    work = run / 'work'
+    bci = (work / 'boundary.bci').read_text().splitlines()
+    assert len(bci) == 1 and bci[0].startswith('W ') and bci[0].endswith(' HVAR tide')
+    assert (work / 'boundary.bdy').read_text() == (
+        'LISFLOOD-FP HVAR tide series: level_m time_s (metres on the DEM vertical datum)\ntide\n3 seconds\n'
+        f'{first + surge:.4f} 0.0\n{(first + last) / 2 + surge:.4f} 600.0\n{last + surge:.4f} 1200.0\n')
+    assert state['input_hashes']['boundary.bdy'] == sha(work / 'boundary.bdy')
+    assert 'bdyfile boundary.bdy' in (work / 'roi.par').read_text().splitlines()
+    # Still-water start at the t = 0 tide level (plus surge), then the west edge follows the series.
+    level = lambda t: first + (last - first) * t / 1200 + surge
+    depths = edge_depths(run, state)
+    assert sorted(depths) == [0, 400, 800, 1200]
+    for t, (low, high) in depths.items():
+        assert low == pytest.approx(level(t) - terrain_m(), abs=5e-3), t
+        assert high == pytest.approx(level(t) - terrain_m(), abs=5e-3), t
+    assert state['result']['frames'][0]['stats']['min_m'] == pytest.approx(level(0) - terrain_m(), abs=5e-3)
+    tide = state['tide']
+    assert tide['start_level_m'] == pytest.approx(first + surge) and tide['max_m'] == pytest.approx(last + surge)
+    assert tide['min_m'] == pytest.approx(first + surge) and tide['count'] == 3 and tide['barometric_surge_m'] == pytest.approx(surge)
+    assert tide['node'] == [-93.1, 16.7] and tide['sampling'] == 'nearest valid node' and tide['mdt_m'] == 0.25
+    assert tide['attribution'] == [rr.EOT20_ATTRIBUTION, rr.MDT_ATTRIBUTION, rr.PYTMD_ATTRIBUTION]
+    provenance = state['provenance']['tide']['provenance']
+    assert provenance['start_utc'] == START and provenance['end_utc'] == '2026-10-16T12:20:00Z'
+    assert provenance['mdt_requested'] == 'DTUUH22MDT' and provenance['point'] == job['tide']['point']
+    assert get_roi_run(root, job['id']) == state
+
+
+@pytest.mark.parametrize('kwargs, code', [({'tide_series': boom}, 'tide_unavailable'),
+                                          ({'gebco_reader': boom}, 'bathymetry_unavailable')])
+def test_tide_and_gebco_failures_give_a_specific_error(root, kwargs, code):
+    p = tide_payload(); p['terrain']['bathymetry'] = 'gebco'
+    readers = {'tide_series': tide_provider(100.5, 100.6), 'gebco_reader': lambda *a, **k: np.full(a[2], np.nan),
+               'mdt_reader': lambda lon, lat: (0.3, {'source': 'test'}), **kwargs}
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads, **readers)
+    assert state['state'] == 'failed' and state['error'] == code and state['solver_attempts'] == []
+
+
+def test_native_gebco_replaces_the_sea_cells_connected_to_the_sea_side(root):
+    # Terrain at 0 m (sea surface): GEBCO says sea (-5 m) on the three western columns and land elsewhere.
+    p = with_sea(sides={**SEA_WEST, 'east': {'type': 'closed'}, 'west': {'type': 'fixed_level', 'level_m': 0.5}})
+    p['terrain']['bathymetry'] = 'gebco'
+    p = fv1(p)
+    job = start_roi_run('alice', p, root=root, config=config(), launch=False)
+    assert job['bathymetry']['sea_sides'] == ['west'] and job['bathymetry']['mdt'] == 'DTUUH22MDT'
+
+    def gebco(transform, crs, shape, **kwargs):
+        values = np.full(shape, 2.0)
+        values[:, :3] = -5.0
+        return values
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id'], height=0), roads_fetcher=no_roads,
+                           gebco_reader=gebco, mdt_reader=lambda lon, lat: (0.3, {'source': 'test MDT'}))
+    assert state['state'] == 'succeeded', state
+    with rasterio.open(root / job['id'] / 'prepared/solver-terrain.tif') as aligned:
+        values = aligned.read(1)
+    rows = values.shape[0]
+    np.testing.assert_allclose(values[:, :3], -4.7, atol=1e-5)  # GEBCO -5 m on MSL + 0.3 m MDT = EGM2008
+    assert np.all(values[:, 3:] > -1)  # land on GEBCO: the DEM is kept
+    bathymetry = state['bathymetry']
+    assert bathymetry['replaced_cells'] == 3 * rows and bathymetry['mdt_m'] == 0.3 and 'DTUUH22MDT' in bathymetry['datum']
+    assert bathymetry['min_elevation_m'] == pytest.approx(-4.7, abs=1e-5)
+    assert bathymetry['attribution'] == 'GEBCO Compilation Group (2026) GEBCO 2026 Grid'
+    assert 'a sea-side edge (west)' in state['provenance']['bathymetry']['provenance']['sea_rule']
+    assert state['provenance']['bathymetry']['provenance']['mdt'] == {'source': 'test MDT'}
+    # The still sea fills the GEBCO floor up to the fixed level.
+    assert state['result']['frames'][0]['stats']['max_m'] == pytest.approx(0.5 + 4.7, abs=.01)
+
+
+def test_server_config_accepts_the_eot20_and_mdt_cache_paths_inside_data():
+    data = Path(__file__).resolve().parents[2] / 'data'
+    checked = validate_config({**config(), 'eot20_dir': str(data / 'reference/eot20'),
+                               'mdt_path': str(data / 'reference/dtu22mdt/dtuuh22mdt.grd.gz')})
+    assert checked['eot20_dir'] == str(data / 'reference/eot20')
+    with pytest.raises(ValueError):
+        validate_config({**config(), 'eot20_dir': '/tmp/eot20'})

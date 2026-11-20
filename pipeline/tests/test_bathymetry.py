@@ -87,3 +87,20 @@ def test_sea_cells_use_a_given_mask_instead_of_the_rule():
                                  gebco_reader=lambda *a, **k: gebco)
     np.testing.assert_array_equal(result['sea'], mask)
     assert result['elevation'][0, 0] == -4.0 and np.isnan(result['elevation'][1:, :]).all()
+
+
+def test_sea_edges_limit_the_sea_to_cells_connected_to_the_sea_sides():
+    # Two low strips: one along the east edge (sea side) and one along the west edge (a free side, not sea).
+    dem = np.full((4, 6), 5.0)
+    dem[:, 5] = 0.0
+    dem[:, 0] = 0.0
+    gebco = np.full((4, 6), -3.0)
+    result = sea_cell_elevations(dem, from_origin(500000, 1769000, 30, 30), 'EPSG:32615', sea_edges=['east'],
+                                 gebco_reader=lambda *a, **k: gebco)
+    expected = np.zeros((4, 6), bool)
+    expected[:, 5] = True
+    np.testing.assert_array_equal(result['sea'], expected)
+    assert result['provenance']['sea_rule'] == 'GEBCO < 0 m, DEM <= 0.5 m and connected to a sea-side edge (east)'
+    with pytest.raises(ValueError, match='sea_edges'):
+        sea_cell_elevations(dem, from_origin(500000, 1769000, 30, 30), 'EPSG:32615', sea_edges=['up'],
+                            gebco_reader=lambda *a, **k: gebco)

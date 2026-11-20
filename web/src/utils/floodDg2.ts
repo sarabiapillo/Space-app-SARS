@@ -1,4 +1,4 @@
-import type { FloodDesignStorm, FloodLandSurface, FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
+import type { FloodDesignStorm, FloodLandSurface, FloodRoiBathymetry, FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodRoiTide, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
 import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
@@ -22,6 +22,10 @@ export interface FloodDg2Form {
   solver: string
   /** 'copernicus' (Copernicus GLO-30, NISAR_DEM from ASF/Earthdata, recommended) or 'nasadem'; empty until chosen. */
   terrainSource: string
+  /** GEBCO_2026 sea floor on the sea cells (`terrain.bathymetry: 'gebco'`); off (previous behaviour) when absent. */
+  bathymetry?: boolean
+  /** Event start in UTC (`YYYY-MM-DDTHH:MM`, datetime-local read as UTC) for the tide window of tide sides. */
+  startUtc?: string
   confirm: boolean
 }
 type Polygon = { type: 'Polygon'; coordinates: unknown }
@@ -32,6 +36,17 @@ export const RETURN_PERIODS = [2, 5, 10, 25, 50, 100]
 /** Block length of the design-storm hyetograph: 10 min (PXR-4 is fitted from 1 h; shorter blocks are flagged extrapolated). */
 export const DESIGN_STORM_STEP_S = 600
 export const ANTECEDENT_MOISTURE = ['auto', 'I', 'II', 'III']
+/** Boundary types per side: wall, FREE, fixed sea level (HFIX) and EOT20 tide (HVAR). */
+export const BOUNDARY_TYPES = ['closed', 'free', 'fixed_level', 'tide']
+/** `YYYY-MM-DDTHH:MM[:SS]` read as UTC → ISO 8601 with Z, or null; the server accepts 1900–2100. */
+export function utcStart(raw: string | undefined) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(raw?.trim() ?? '')
+  if (!match) return null
+  const [, y, mo, d, h, mi, se = '00'] = match
+  const date = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +se))
+  if (date.getUTCFullYear() !== +y || date.getUTCMonth() !== +mo - 1 || date.getUTCDate() !== +d || +y < 1900 || +y > 2100) return null
+  return `${y}-${mo}-${d}T${h}:${mi}:${se}Z`
+}
 const stormHoursValid = (raw: string | undefined) => {
   const hours = Number(raw)
   return Boolean(raw?.trim()) && Number.isFinite(hours) && hours > 0 && hours <= 24 && Math.abs(hours * 6 - Math.round(hours * 6)) < 1e-9
@@ -52,12 +67,18 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   if(!['nearest','bilinear'].includes(form.resampling))throw Error(t('Selecciona remuestreo.','Select resampling.'))
   if(!TERRAIN_SOURCES.includes(form.terrainSource))throw Error(t('Selecciona la fuente del terreno (Copernicus GLO-30 o NASADEM).','Select the terrain source (Copernicus GLO-30 or NASADEM).'))
   const sides={north:form.boundaryNorth,east:form.boundaryEast,south:form.boundarySouth,west:form.boundaryWest}
-  if(Object.values(sides).some(v=>!['closed','free','fixed_level'].includes(v)))throw Error(t('Selecciona la frontera de cada lado (N, E, S, O).','Select the boundary of each side (N, E, S, W).'))
-  const anyFixed=Object.values(sides).includes('fixed_level')
+  if(Object.values(sides).some(v=>!BOUNDARY_TYPES.includes(v)))throw Error(t('Selecciona la frontera de cada lado (N, E, S, O).','Select the boundary of each side (N, E, S, W).'))
+  const anyFixed=Object.values(sides).includes('fixed_level'), anyTide=Object.values(sides).includes('tide'), anySea=anyFixed||anyTide
   // One sea level for every fixed side (metres over EGM2008, the datum of every height); 0 and negative values are valid.
   const level=Number(form.seaLevel)
   if(anyFixed&&(!form.seaLevel.trim()||!Number.isFinite(level)||Math.abs(level)>10000))throw Error(t('Nivel del mar fijo: indica un número en metros (EGM2008).','Fixed sea level: enter a number in metres (EGM2008).'))
-  if(form.stillWater&&!anyFixed)throw Error(t('El mar lleno al inicio requiere al menos un lado de nivel fijo.','A still-water start needs at least one fixed-level side.'))
+  if(form.stillWater&&!anySea)throw Error(t('El mar lleno al inicio requiere al menos un lado de nivel fijo o de marea.','A still-water start needs at least one fixed-level or tide side.'))
+  // The sea starts at the tide level of t = 0, so a still-water start cannot mix tide and fixed-level sides.
+  if(form.stillWater&&anyTide&&anyFixed)throw Error(t('Con marea y mar lleno al inicio, todos los lados de mar deben ser de marea.','With tide and a still-water start, every sea side must be a tide side.'))
+  // EOT20 tide for the event window [start, start + duration]: the start time is required (synthetic or design rain).
+  const start=anyTide?utcStart(form.startUtc):null
+  if(anyTide&&!start)throw Error(t('Marea: indica el inicio del evento en UTC (AAAA-MM-DDTHH:MM, 1900–2100).','Tide: enter the event start in UTC (YYYY-MM-DDTHH:MM, 1900–2100).'))
+  if(form.bathymetry&&!anySea)throw Error(t('El fondo marino de GEBCO requiere un lado de mar (nivel fijo o marea).','The GEBCO sea floor needs a sea side (fixed level or tide).'))
   if(!['none','hydrolakes'].includes(form.lakes))throw Error(t('Elige si incluir lagos (HydroLAKES).','Choose whether to include lakes (HydroLAKES).'))
   if(!['unsupported','runoff_coefficient','curve_number'].includes(form.infiltration))throw Error(t('Selecciona cómo tratar la infiltración.','Select how to treat infiltration.'))
   const curveNumber=form.infiltration==='curve_number'
@@ -69,14 +90,15 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
   // Inverse barometer (about 1 cm per hPa below 1013.25), as in the terrapulseai_v2.1 simulator; it only raises the fixed sea level.
   const pressure=Number(form.pressure)
   if(form.pressure.trim()&&(!Number.isFinite(pressure)||pressure<950||pressure>1040))throw Error(t('Presión atmosférica: indica entre 950 y 1040 hPa, o déjala vacía.','Atmospheric pressure: enter 950 to 1040 hPa, or leave it empty.'))
-  if(form.pressure.trim()&&!anyFixed)throw Error(t('La presión atmosférica solo eleva un lado de nivel fijo del mar.','Atmospheric pressure only raises a fixed sea-level side.'))
+  if(form.pressure.trim()&&!anySea)throw Error(t('La presión atmosférica solo eleva un lado de mar (nivel fijo o marea).','Atmospheric pressure only raises a sea side (fixed level or tide).'))
+  // A tide side sends only its type: the server uses EOT20 + the DTUUH22MDT mean dynamic topography (EGM2008).
   const boundary=Object.fromEntries(Object.entries(sides).map(([side,type])=>[side,type==='fixed_level'?{type,level_m:level}:{type}]))
   // The urban declaration is informational (urban domains run with a warning); the confirmation is required.
   if(!form.confirm)throw Error(t('Confirma las hipótesis antes de simular.','Confirm the assumptions before simulating.'))
   if(!['dg2','fv1'].includes(form.solver))throw Error(t('Selecciona el método de cálculo (DG2 o FV1).','Select the computation method (DG2 or FV1).'))
   // LISFLOOD-FP `dg2depththresh`: DG2 only; null when the user explicitly disables it or chooses FV1. The API caps it at 1 m.
   const thinDepth=form.solver==='fv1'||form.thinDepthOff?null:positive(form.thinDepth,'Umbral de lámina delgada DG2',1)
-  const simulation={duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver}
+  const simulation={duration_s:positive(form.duration,'Duración DG2',86400),save_interval_s:positive(form.save,'Guardado'),initial_tstep_s:positive(form.tstep,'Paso inicial'),dg2_depth_thresh_m:thinDepth,solver:form.solver,...(start?{start_utc:start}:{})}
   let rain
   if(rainKind==='design_storm'){
     // The server computes the depth from PXR-4 at the domain centroid, so `rainfall` is null.
@@ -88,7 +110,7 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
     rain={rainfall:null,rainfall_profile:{source:'design_storm',return_period_years:period,duration_h:hours,step_s:DESIGN_STORM_STEP_S}}
   } else rain={rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'}}
   const manning=manningMode==='worldcover'?'worldcover':positive(form.manning,'Manning')
-  return {roi,domain,...rain,terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource},hydraulics:{manning,initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:form.nonurban,lakes:form.lakes,...(curveNumber?{antecedent_moisture:form.moisture}:{}),...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation}
+  return {roi,domain,...rain,terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource,...(form.bathymetry?{bathymetry:'gebco'}:{})},hydraulics:{manning,initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:form.nonurban,lakes:form.lakes,...(curveNumber?{antecedent_moisture:form.moisture}:{}),...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation}
 }
 
 /** Terrain sources of the API (`terrain.source`); heights of both end in EGM2008. */
@@ -177,7 +199,7 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   const positive = (raw: string, max = Infinity) => num(raw) > 0 && num(raw) <= max
   const integer = (raw: string, min: number) => Number.isSafeInteger(num(raw)) && num(raw) >= min
   const sides = [form.boundaryNorth, form.boundaryEast, form.boundarySouth, form.boundaryWest]
-  const anyFixed = sides.includes('fixed_level')
+  const anyFixed = sides.includes('fixed_level'), anyTide = sides.includes('tide'), anySea = anyFixed || anyTide
   const pressure = num(form.pressure)
   return {
     zone: Boolean(roi) && (form.useRoi || parsePolygon(form.domain) !== null),
@@ -186,10 +208,11 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
       : positive(form.amount) && positive(form.rainDuration) && integer(form.intervals, 1) && integer(form.seed, 0),
     terrain: TERRAIN_SOURCES.includes(form.terrainSource) && /^EPSG:\d+$/.test(form.crs) && positive(form.resolution) && ['nearest','bilinear'].includes(form.resampling)
       && (form.manningMode === 'worldcover' || positive(form.manning))
-      && sides.every(v => ['closed','free','fixed_level'].includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
-      && (!form.stillWater || anyFixed) && ['unsupported','runoff_coefficient','curve_number'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
+      && sides.every(v => BOUNDARY_TYPES.includes(v)) && (!anyFixed || Number.isFinite(num(form.seaLevel)))
+      && (!form.stillWater || (anySea && !(anyTide && anyFixed))) && ['unsupported','runoff_coefficient','curve_number'].includes(form.infiltration) && ['none','hydrolakes'].includes(form.lakes)
       && (form.infiltration !== 'curve_number' || ANTECEDENT_MOISTURE.includes(form.moisture ?? ''))
-      && (!form.pressure.trim() || (anyFixed && pressure >= 950 && pressure <= 1040)),
+      && (!anyTide || utcStart(form.startUtc) !== null) && (!form.bathymetry || anySea)
+      && (!form.pressure.trim() || (anySea && pressure >= 950 && pressure <= 1040)),
     solver: positive(form.duration, 86400) && positive(form.save) && positive(form.tstep) && ['dg2','fv1'].includes(form.solver)
       && (form.solver === 'fv1' || form.thinDepthOff || positive(form.thinDepth, 1)),
     confirm: form.confirm,
@@ -311,12 +334,39 @@ export function designStormNote(storm: FloodDesignStorm | null | undefined, t: T
   return note
 }
 
+const metres = (value: number) => String(Math.round(value * 100) / 100)
+const sideNames = (sides: string[], t: Translate) => sides.map(side => ({north: t('norte', 'north'), east: t('este', 'east'), south: t('sur', 'south'), west: t('oeste', 'west')} as Record<string, string>)[side] ?? side).join(', ')
+/** "el lado sur" / "los lados sur, oeste" and "the south side" / "the south, west sides". */
+const sidePhrase = (sides: string[], t: Translate) => sides.length > 1
+  ? t(`los lados ${sideNames(sides, t)}`, `the ${sideNames(sides, t)} sides`) : t(`el lado ${sideNames(sides, t)}`, `the ${sideNames(sides, t)} side`)
+
+/** Tide line of a run: sides, window and the levels the solver received (after preparation); null without tide sides. */
+export function tideNote(tide: FloodRoiTide | null | undefined, t: Translate) {
+  if (!tide) return null
+  const where = sidePhrase(tide.sides, t)
+  const window = `${tide.start_utc} → ${tide.end_utc}`
+  if (tide.min_m == null || tide.max_m == null) return t(`Marea EOT20 en ${where}, ${window} (pendiente).`, `EOT20 tide on ${where}, ${window} (pending).`)
+  const node = tide.node ? ` (${tide.node[0].toFixed(3)}, ${tide.node[1].toFixed(3)})` : ''
+  return t(`Marea EOT20 en ${where}, ${window}: nivel de ${metres(tide.min_m)} a ${metres(tide.max_m)} m EGM2008 (inicio ${metres(tide.start_level_m ?? tide.min_m)} m), nodo oceánico${node}. Solo marea astronómica: sin marea de tormenta, oleaje ni anomalías.`,
+    `EOT20 tide on ${where}, ${window}: level from ${metres(tide.min_m)} to ${metres(tide.max_m)} m EGM2008 (start ${metres(tide.start_level_m ?? tide.min_m)} m), ocean node${node}. Astronomical tide only: no storm surge, waves or anomalies.`)
+}
+
+/** GEBCO sea-floor line of a run; null when not requested. */
+export function bathymetryNote(bathymetry: FloodRoiBathymetry | null | undefined, t: Translate) {
+  if (!bathymetry) return null
+  if (bathymetry.replaced_cells == null) return t('Fondo marino GEBCO_2026 en las celdas de mar (pendiente).', 'GEBCO_2026 sea floor on the sea cells (pending).')
+  return t(`Fondo marino GEBCO_2026 (~450 m) en ${bathymetry.replaced_cells} celdas de mar conectadas a ${sidePhrase(bathymetry.sea_sides, t)}${bathymetry.min_elevation_m != null ? `, hasta ${metres(bathymetry.min_elevation_m)} m EGM2008` : ''}.`,
+    `GEBCO_2026 sea floor (~450 m) on ${bathymetry.replaced_cells} sea cells connected to ${sidePhrase(bathymetry.sea_sides, t)}${bathymetry.min_elevation_m != null ? `, down to ${metres(bathymetry.min_elevation_m)} m EGM2008` : ''}.`)
+}
+
 /** Plain-language text for the dataset error codes of a failed run; other codes are shown as they are. */
 export function runErrorMessage(code: string | null | undefined, t: Translate) {
   switch (code) {
     case 'landcover_unavailable': return t('No se pudo leer la cobertura del suelo (ESA WorldCover); no se usó un valor uniforme en su lugar.', 'Land cover (ESA WorldCover) could not be read; no uniform value was used instead.')
     case 'soils_unavailable': return t('No se pudieron leer los grupos de suelo (HYSOGs250m, NASA Earthdata).', 'Soil groups (HYSOGs250m, NASA Earthdata) could not be read.')
     case 'soil_moisture_unavailable': return t('No se pudo consultar la humedad del suelo (NISAR SME2 / SMAP L4); elige la humedad previa I, II o III.', 'Soil moisture (NISAR SME2 / SMAP L4) could not be queried; choose antecedent moisture I, II or III.')
+    case 'tide_unavailable': return t('No se pudo calcular la marea (EOT20 / DTUUH22MDT no instalados en el servidor o sin océano a menos de 10 km del lado de marea).', 'The tide could not be computed (EOT20 / DTUUH22MDT not installed on the server, or no ocean within 10 km of the tide side).')
+    case 'bathymetry_unavailable': return t('No se pudo leer el fondo marino (GEBCO_2026).', 'The sea floor (GEBCO_2026) could not be read.')
     default: return code ?? ''
   }
 }

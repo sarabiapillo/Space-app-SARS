@@ -13,7 +13,7 @@ from rest_framework.test import APIClient
 from pipeline.tests.test_roi_runner import payload, config
 
 BASE = Path(__file__).resolve().parents[2] / 'data/test-runs'
-STATUS_KEYS = {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','land_surface','rainfall_source','design_storm','terrain_source','vertical_datum','terrain_attribution','synthetic','hydraulic_accuracy_validated','status_url','results_url'}
+STATUS_KEYS = {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','land_surface','rainfall_source','design_storm','terrain_source','vertical_datum','terrain_attribution','tide','bathymetry','synthetic','hydraulic_accuracy_validated','status_url','results_url'}
 PROOF = BASE / 'roi-dg2-136934da-7370-4113-b337-36ebc0bcafcc/6c5b38f4-9d14-4c71-912b-04ed7629d94a'
 
 
@@ -63,6 +63,8 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual([response.json()['land_surface']['manning'], response.json()['land_surface']['manning_value'],
                           response.json()['land_surface']['curve_number'], response.json()['rainfall_source'], response.json()['design_storm']],
                          ['uniform', .02, None, 'synthetic', None])
+        # Without tide sides or GEBCO the coast summaries are null.
+        self.assertEqual([response.json()['tide'], response.json()['bathymetry']], [None, None])
         self.assertEqual(response.json()['state'], 'created')
         self.assertEqual(self.alice.get(response.json()['results_url']).status_code, 409)
         self.assertEqual(self.bob.get(response.json()['status_url']).status_code, 404)
@@ -240,7 +242,8 @@ class RoiHttpTests(SimpleTestCase):
 
     def test_dataset_errors_are_public_codes(self):
         run_id, state, directory = self.seed()
-        for code in ('landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable'):
+        for code in ('landcover_unavailable', 'soils_unavailable', 'soil_moisture_unavailable', 'tide_unavailable',
+                     'bathymetry_unavailable'):
             state.update(state='failed', stage='failed', error=code)
             (directory / 'state.json').write_text(json.dumps(state))
             self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{run_id}/').json()['error'], code)
@@ -254,3 +257,31 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()['error'], 'design_storm_unavailable')
         self.assertFalse(self.jobs.exists())
+
+    def test_start_status_and_results_echo_the_tide_and_gebco_options(self):
+        body = payload()
+        body['hydraulics'].update(boundary={'north': {'type': 'closed'}, 'east': {'type': 'free'}, 'south': {'type': 'closed'},
+                                            'west': {'type': 'tide'}}, initial_condition='still_water_at_fixed_level')
+        body['terrain']['bathymetry'] = 'gebco'
+        # Synthetic rain: the tide window needs an explicit start time.
+        self.assertEqual(self.alice.post(self.start, body, format='json').status_code, 400)
+        body['simulation']['start_utc'] = '2026-10-16T12:00:00Z'
+        with patch('analyses.roi_flood_runs.start_roi_run') as start:
+            from pipeline.hydrology.roi_runner import start_roi_run
+            start.side_effect = lambda *args, **kwargs: start_roi_run(*args, **{**kwargs, 'launch': False})
+            response = self.alice.post(self.start, body, format='json')
+        self.assertEqual(response.status_code, 202)
+        tide = response.json()['tide']
+        self.assertEqual([tide['model'], tide['sides'], tide['mdt'], tide['start_utc'], tide['end_utc'], tide['event_time_basis']],
+                         ['EOT20', ['west'], 'DTUUH22MDT', '2026-10-16T12:00:00Z', '2026-10-16T12:00:02Z', 'simulation_start'])
+        self.assertEqual(response.json()['boundary']['west'], {'type': 'tide', 'mdt': 'DTUUH22MDT'})
+        self.assertEqual([response.json()['bathymetry']['sea_sides'], response.json()['bathymetry']['replaced_cells']], [['west'], None])
+        run_id, state, directory = self.seed()
+        found = {**tide, 'min_m': .41, 'max_m': .87, 'node': [-92.3, 14.6], 'attribution': ['EOT20']}
+        gebco = {'source': 'gebco', 'replaced_cells': 12, 'attribution': 'GEBCO Compilation Group (2026) GEBCO 2026 Grid'}
+        state.update(tide=found, bathymetry=gebco)
+        (directory / 'state.json').write_text(json.dumps(state))
+        url = f'/api/flood-roi-runs/{run_id}/'
+        self.assertEqual([self.alice.get(url).json()[k] for k in ('tide', 'bathymetry')], [found, gebco])
+        result = self.alice.get(url + 'results/').json()
+        self.assertEqual([result['tide'], result['bathymetry']], [found, gebco])

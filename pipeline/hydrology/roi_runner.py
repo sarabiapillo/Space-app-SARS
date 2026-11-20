@@ -16,13 +16,21 @@ ESA WorldCover en manningfile, fpfric = mediana); infiltration: 'unsupported', '
 'curve_number' (lluvia neta SCS-CN por celda, WorldCover + HYSOGs250m; requiere antecedent_moisture 'auto'
 (NISAR SME2 / SMAP L4) o 'I'|'II'|'III', y admite urban_drainage_mm_h >= 0); domain_nonurban: booleano declarado
 (informativo: un dominio urbano se admite con aviso); atmospheric_pressure_hpa opcional (950-1040, eleva el nivel
-del mar fijo). Ningún path ni binario procede del cliente. Un fallo al leer WorldCover, HYSOGs o la humedad del suelo
+del mar fijo y la marea). Un lado de boundary puede ser {type:'tide', mdt?} (marea astronómica EOT20 como serie HVAR
+en boundary.bdy; mdt 'DTUUH22MDT' por defecto, un número de metros o null); todos los lados de marea comparten una
+serie, calculada en el punto medio de esos lados; la ventana es [inicio, inicio + duration_s] con inicio =
+provenance.start_utc (lluvia observada) o simulation.start_utc (obligatorio con lluvia sintética o de diseño).
+terrain.bathymetry 'gebco' (opcional; 'none' por defecto) pone el fondo de GEBCO_2026 en las celdas de mar (DEM <= 0.5 m
+conectadas a un lado de mar) en EGM2008 con la misma MDT. Ningún path ni binario procede del cliente. Un fallo al leer WorldCover, HYSOGs o la humedad del suelo
 termina la corrida con un código propio (landcover_unavailable, soils_unavailable, soil_moisture_unavailable), sin
-valores uniformes de reemplazo; sin datos PXR-4 la solicitud se rechaza con design_storm_unavailable.
+valores uniformes de reemplazo; sin datos PXR-4 la solicitud se rechaza con design_storm_unavailable; sin EOT20/MDT
+la corrida termina con tide_unavailable y sin GEBCO con bathymetry_unavailable.
 """
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import functools
 import hashlib
 import json
 import math
@@ -58,7 +66,9 @@ from .dem_prepared import prepare_dem, _validate_crs
 from .dem_dg2 import prepare_dg2_dem
 from .rainfall import generate_rainfall_profile, observed_rainfall_profile
 from .rainfall_netcdf import export_rainfall_cube_netcdf, export_rainfall_netcdf, roi_cell_mask
-from .boundaries import format_boundary, normalize_boundary
+from .boundaries import SIDES, TIDE_MDT_DEFAULT, format_boundary, normalize_boundary
+from . import bathymetry as seabed
+from . import tides
 from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
@@ -82,6 +92,15 @@ HYSOGS_ATTRIBUTION = ('HYSOGs250m: Ross, C.W. et al. 2018, Global Hydrologic Soi
                       'Runoff Modeling, ORNL DAAC, doi:10.3334/ORNLDAAC/1566')
 _CONFIG = {'executable', 'binary_sha256', 'dem_executable', 'dem_sha256', 'timeout_s',
            'preparation_timeout_s', 'max_cells', 'max_rain_values', 'max_frames', 'max_tiles', 'code_version'}
+_OPTIONAL_CONFIG = {'lakes_path', 'geoid_dir', 'pxr_path', 'eot20_dir', 'mdt_path'}
+BATHYMETRY = ('none', 'gebco')
+# Tide series step (s): at most 10 min (EOT20 tides change over hours), never longer than the run.
+TIDE_STEP_S = 600.0
+TIDE_YEARS = (1900, 2100)
+GEBCO_ATTRIBUTION = 'GEBCO Compilation Group (2026) GEBCO 2026 Grid'
+EOT20_ATTRIBUTION = 'EOT20 (Hart-Davis et al. 2021, DGFI-TUM), doi:10.17882/79489, CC BY 4.0'
+MDT_ATTRIBUTION = 'DTUUH22MDT (DTU Space 2022), doi:10.11583/DTU.26947894, CC BY 4.0'
+PYTMD_ATTRIBUTION = 'pyTMD 3.1.0 (MIT)'
 
 
 class DatasetUnavailable(Exception):
@@ -130,10 +149,12 @@ def validate_config(config):
     # geoid_dir (EGM96/EGM2008 grids) defaults to data/reference/geoid; every run needs both grids.
     # pxr_path (PXR-4 netCDF, python -m pipeline.hydrology.design_storm prepare) is optional: without the file
     # design-storm requests are refused with design_storm_unavailable.
-    if not isinstance(config, dict) or not _CONFIG <= set(config) <= _CONFIG | {'lakes_path', 'geoid_dir', 'pxr_path'}:
+    # eot20_dir (EOT20 ocean tides, python -m pipeline.hydrology.tides prepare-eot20) and mdt_path (DTUUH22MDT,
+    # prepare-mdt) are optional and default to data/reference/; tide runs fail with tide_unavailable without them.
+    if not isinstance(config, dict) or not _CONFIG <= set(config) <= _CONFIG | _OPTIONAL_CONFIG:
         raise ValueError('configuración: claves inválidas')
     result = dict(config)
-    for name in ('lakes_path', 'pxr_path'):
+    for name in ('lakes_path', 'pxr_path', 'eot20_dir', 'mdt_path'):
         if name in config:
             result[name] = str(_path(config[name]))
     geoid = _path(config.get('geoid_dir', str(DEFAULT_GRID_DIR)))
@@ -222,12 +243,15 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
     validate_roi(payload['roi']); validate_roi(payload['domain'])
     terrain_keys = {'target_crs','resolution_m','resampling'}
     if (not isinstance(payload['terrain'], dict) or not terrain_keys <= set(payload['terrain'])
-            or not set(payload['terrain']) <= terrain_keys | {'source'}):
+            or not set(payload['terrain']) <= terrain_keys | {'source', 'bathymetry'}):
         raise ValueError('terrain: claves inválidas')
     # Terrain source: 'nasadem' when absent, so earlier payloads keep their provider; heights end in EGM2008.
     source = payload['terrain'].get('source', 'nasadem')
     if not isinstance(source, str) or source not in TERRAIN_SOURCES:
         raise ValueError("terrain.source debe ser 'nasadem' o 'copernicus'")
+    bathymetry = payload['terrain'].get('bathymetry', 'none')
+    if not isinstance(bathymetry, str) or bathymetry not in BATHYMETRY:
+        raise ValueError("terrain.bathymetry debe ser 'none' o 'gebco'")
     kind = payload['rainfall_profile'].get('source') if isinstance(payload['rainfall_profile'], dict) else None
     observed, design = kind == 'observed', kind == 'design_storm'
     _keys(payload['rainfall_profile'], {'source','segments','provenance'} if observed else
@@ -241,7 +265,7 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
         raise ValueError('hydraulics: claves inválidas')
     simulation_keys = {'duration_s','save_interval_s','initial_tstep_s','dg2_depth_thresh_m'}
     if (not isinstance(payload['simulation'], dict) or not simulation_keys <= set(payload['simulation'])
-            or not set(payload['simulation']) <= simulation_keys | {'solver'}):
+            or not set(payload['simulation']) <= simulation_keys | {'solver', 'start_utc'}):
         raise ValueError('simulation: claves inválidas')
     t, h, s, rp = (payload[k] for k in ('terrain','hydraulics','simulation','rainfall_profile'))
     crs = _validate_crs(t['target_crs'])
@@ -253,10 +277,18 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
             h['infiltration'] not in INFILTRATION or not isinstance(h['domain_nonurban'], bool)):
         raise ValueError('hipótesis hidráulicas explícitas requeridas')
     sides = normalize_boundary(h['boundary'])
+    tide_sides = [side for side in SIDES if sides[side]['type'] == 'tide']
+    sea_sides = [side for side in SIDES if sides[side]['type'] in ('fixed_level', 'tide')]
     if h['initial_condition'] == 'still_water_at_fixed_level':
         levels = {spec['level_m'] for spec in sides.values() if spec['type'] == 'fixed_level'}
-        if len(levels) != 1:
+        if tide_sides:
+            # The sea starts at the tide level of t = 0, unknown until the series is computed: no fixed side beside it.
+            if levels:
+                raise ValueError('agua en reposo con marea: todos los lados de mar deben ser de marea (sin nivel fijo)')
+        elif len(levels) != 1:
             raise ValueError('agua en reposo requiere lados de nivel fijo con un único nivel')
+    if bathymetry == 'gebco' and not sea_sides:
+        raise ValueError('terrain.bathymetry gebco requiere un lado de mar (fixed_level o tide)')
     lakes = h.get('lakes', 'none')
     if lakes not in ('none', 'hydrolakes'):
         raise ValueError('lakes debe ser none o hydrolakes')
@@ -266,8 +298,8 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
     surge = 0.0
     if pressure is not None:
         surge = barometric_surge_m(pressure)
-        if not any(spec['type'] == 'fixed_level' for spec in sides.values()):
-            raise ValueError('la presión atmosférica solo eleva lados de nivel fijo (mar)')
+        if not sea_sides:
+            raise ValueError('la presión atmosférica solo eleva lados de mar (nivel fijo o marea)')
     # The sea level the solver sees: requested fixed level plus the inverse-barometer surge.
     solver_sides = {side: ({**spec, 'level_m': spec['level_m'] + surge} if spec['type'] == 'fixed_level' else spec)
                     for side, spec in sides.items()}
@@ -284,6 +316,7 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
             or not 0 <= drainage <= MAX_URBAN_DRAINAGE_MM_H):
         raise ValueError('urban_drainage_mm_h debe estar entre 0 y 200 mm/h')
     duration = _number(s['duration_s'], 86400)
+    tide_window = _tide_window(s, rp, observed, tide_sides, duration)
     save = _number(s['save_interval_s'], duration)
     _number(s['initial_tstep_s'], duration)
     # DG2 thin-depth fallback (LISFLOOD-FP `dg2depththresh`): explicit choice, null = solver default (off).
@@ -331,11 +364,60 @@ def validate_roi_run(payload, limits, *, design_storm_reader=None):
                 'width': width, 'height': height, 'frame_budget': frames,
                 'boundary': sides, 'solver_boundary': solver_sides,
                 'losses': losses, 'lakes': lakes, 'land_surface': land, 'design_storm': storm}
+    # Coast options only when requested, so earlier payloads keep their exact job and state.
+    if tide_sides:
+        computed['tide'] = {**tide_window, 'sides': tide_sides, 'mdt': sides[tide_sides[0]]['mdt'],
+                            'point': _side_midpoint(extent, crs, tide_sides)}
+    if bathymetry == 'gebco':
+        computed['bathymetry'] = {'source': 'gebco', 'sea_sides': sea_sides,
+                                  'mdt': sides[tide_sides[0]]['mdt'] if tide_sides else TIDE_MDT_DEFAULT,
+                                  'point': _side_midpoint(extent, crs, sea_sides)}
     request = {**payload, 'rainfall': rainfall, 'terrain': {**t, 'target_crs': crs.to_string(), 'source': source},
                'simulation': {**s, 'solver': solver}, 'computed': computed}
     # Construir perfil antes de cualquier escritura: evita solicitudes inconsistentes.
     _rain_profile(request, losses)
     return json.loads(json.dumps(request, allow_nan=False))
+
+
+def _tide_window(s, rp, observed, tide_sides, duration):
+    """Event window of the tide series: observed rain starts at its series start, other rain at simulation.start_utc.
+
+    ``simulation.start_utc`` is only accepted with tide sides and without observed rain (one event time)."""
+    if 'start_utc' in s and not tide_sides:
+        raise ValueError('simulation.start_utc solo aplica con lados de marea')
+    if not tide_sides:
+        return None
+    if observed:
+        if 'start_utc' in s:
+            raise ValueError('con lluvia observada la marea empieza en provenance.start_utc: no envíes simulation.start_utc')
+        raw, basis = (rp['provenance'] or {}).get('start_utc'), 'rain_series_start'
+        missing = 'marea con lluvia observada requiere provenance.start_utc'
+    else:
+        raw, basis = s.get('start_utc'), 'simulation_start'
+        missing = 'los lados de marea requieren simulation.start_utc (lluvia sintética o de diseño)'
+    if not isinstance(raw, str):
+        raise ValueError(missing)
+    try:
+        start = _parse_utc(raw)
+    except (TypeError, ValueError):
+        raise ValueError(missing + ' (ISO 8601 con zona horaria)') from None
+    if not TIDE_YEARS[0] <= start.year <= TIDE_YEARS[1]:
+        raise ValueError('inicio de marea fuera de 1900-2100')
+    step = min(TIDE_STEP_S, float(duration))
+    end = start + dt.timedelta(seconds=math.ceil(duration / step - 1e-9) * step)
+    iso = lambda moment: moment.isoformat().replace('+00:00', 'Z')
+    return {'start_utc': iso(start), 'end_utc': iso(end), 'step_s': step, 'event_time_basis': basis}
+
+
+def _side_midpoint(extent, crs, sides):
+    """Mean of the midpoints of ``sides`` of the computational rectangle, as [lon, lat] (EPSG:4326)."""
+    left, bottom, right, top = extent
+    middle = {'north': ((left + right) / 2, top), 'south': ((left + right) / 2, bottom),
+              'west': (left, (bottom + top) / 2), 'east': (right, (bottom + top) / 2)}
+    x = sum(middle[side][0] for side in sides) / len(sides)
+    y = sum(middle[side][1] for side in sides) / len(sides)
+    lon, lat = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True).transform(x, y)
+    return [float(lon), float(lat)]
 
 
 def _design_storm(domain, rp, limits, reader):
@@ -470,6 +552,7 @@ def start_roi_run(owner, payload, *, root, config, launch=True, design_storm_rea
              'terrain_attribution':(copernicus.ATTRIBUTION + '. ' + copernicus.DISCLAIMER
                                     if request['terrain']['source'] == 'copernicus' else None),
              'input_hashes':{},'binary_sha256':cfg['binary_sha256'],
+             **_coast_state(request['computed']),
              # Two solver attempts at most (requested solver, then the automatic fallback).
              'deadline_epoch_s':time.time()+cfg['preparation_timeout_s']+2*cfg['timeout_s']+30}
     _save(directory,state)
@@ -482,6 +565,24 @@ def start_roi_run(owner, payload, *, root, config, launch=True, design_storm_rea
         except OSError:
             state.update(state='failed',error='worker_launch_failed'); _save(directory,state)
     return get_roi_run(root,run_id)
+
+
+def _coast_state(computed):
+    """Requested tide / GEBCO options for the state (values found during preparation start as null); absent
+    keys when not requested, so earlier payloads keep their exact state."""
+    state = {}
+    tide = computed.get('tide')
+    if tide:
+        state['tide'] = {'model': 'EOT20', **{k: tide[k] for k in ('sides', 'mdt', 'start_utc', 'end_utc', 'step_s',
+                                                                  'event_time_basis', 'point')},
+                         'node': None, 'mdt_m': None, 'datum': None, 'barometric_surge_m': None,
+                         'start_level_m': None, 'min_m': None, 'max_m': None, 'count': None, 'attribution': None}
+    bathymetry = computed.get('bathymetry')
+    if bathymetry:
+        state['bathymetry'] = {'source': 'gebco', 'dataset': 'GEBCO_2026 Grid', 'sea_sides': bathymetry['sea_sides'],
+                               'mdt': bathymetry['mdt'], 'mdt_m': None, 'datum': None, 'replaced_cells': None,
+                               'min_elevation_m': None, 'attribution': GEBCO_ATTRIBUTION}
+    return state
 
 
 def _storm_summary(storm):
@@ -524,6 +625,8 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         if not np.isfinite(values).all():
             raise ValueError('terrain coverage missing on computational grid')
         profile = src.profile.copy()
+    if request['computed'].get('bathymetry'):
+        values = _apply_bathymetry(directory, request, cfg, values, transform, datasets or {})
     lake_depth = None
     if request['computed']['lakes'] == 'hydrolakes':
         # HydroLAKES bed dug into the aligned DEM before DG2 coefficients; recorded with the lakes used.
@@ -541,12 +644,14 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
     actual = [left,bottom,right,top]
     prepare_dg2_dem(dem, directory / 'dg2', executable=cfg['dem_executable'],vertical_datum=DATUM,
                     code_version=cfg['code_version'],timeout_s=min(cfg['preparation_timeout_s'],120),max_cells=cfg['max_cells'])
+    tide = _tide(directory, request, cfg, datasets or {}) if request['computed'].get('tide') else None
     if _has_boundary_file(request):
-        format_boundary(dem,directory/'boundary',request['computed']['solver_boundary'])
+        format_boundary(dem,directory/'boundary',request['computed']['solver_boundary'],tide=tide)
     if _still_water(request) or (lake_depth is not None and lake_depth.any()):
         write_still_water_start(directory/'dg2',directory/'initial',
                                 request['computed']['solver_boundary'] if _still_water(request) else None,
-                                max_cells=cfg['max_cells'],lake_depth=lake_depth)
+                                max_cells=cfg['max_cells'],lake_depth=lake_depth,
+                                tide_level_m=tide[0][1] if tide and _still_water(request) else None)
     land = _land_surface(directory, request, dem, datasets or {})
     profile = _rain_profile(request, request['computed']['losses'])
     if land is not None and land.get('cn') is not None:
@@ -561,6 +666,86 @@ def _prepare(directory, request, cfg, provider, stage, roads_fetcher=fetch_roads
         roads = {'roads': None, 'reason': 'unavailable'}
     (directory/'roads.json').write_text(json.dumps(roads, allow_nan=False))
     return actual
+
+
+def _mdt_reader(cfg, datasets):
+    return datasets.get('mdt_reader') or functools.partial(tides.mdt_offset_m, path=cfg.get('mdt_path', tides.DEFAULT_MDT_PATH))
+
+
+def _tide_provider(cfg, datasets):
+    """``tide_series`` injected (tests) or EOT20 + DTUUH22MDT from the server caches."""
+    if datasets.get('tide_series'):
+        return datasets['tide_series']
+    constants = functools.partial(tides.eot20_constants, directory=cfg.get('eot20_dir', tides.DEFAULT_EOT20_DIR))
+    return functools.partial(tides.tide_series, constants_reader=constants, mdt_reader=_mdt_reader(cfg, datasets))
+
+
+def _tide(directory, request, cfg, datasets):
+    """EOT20 tide at the tide sides' midpoint for the event window, plus the barometric surge: the HVAR series.
+
+    Writes tide/manifest.json ({summary, provenance}); a missing cache or a point without ocean raises
+    DatasetUnavailable('tide_unavailable')."""
+    spec = request['computed']['tide']
+    lon, lat = spec['point']
+    try:
+        found = _tide_provider(cfg, datasets)(lon, lat, spec['start_utc'], spec['end_utc'], spec['step_s'], mdt=spec['mdt'])
+        series = [(float(t), float(level)) for t, level in found['series']]
+        if not series or not all(math.isfinite(t) and math.isfinite(level) for t, level in series):
+            raise ValueError('empty tide series')
+    except Exception:
+        raise DatasetUnavailable('tide_unavailable') from None
+    provenance = dict(found.get('provenance') or {})
+    surge = request['computed']['losses']['barometric_surge_m']
+    series = [(t, level + surge) for t, level in series]
+    levels = [level for _, level in series]
+    sampling = provenance.get('sampling') or {}
+    attribution = [EOT20_ATTRIBUTION, PYTMD_ATTRIBUTION]
+    if spec['mdt'] == TIDE_MDT_DEFAULT:
+        attribution.insert(1, MDT_ATTRIBUTION)
+    summary = {'model': 'EOT20', **{k: spec[k] for k in ('sides', 'mdt', 'start_utc', 'end_utc', 'step_s',
+                                                         'event_time_basis', 'point')},
+               # Ocean node used: the point itself (bilinear) or the nearest EOT20 ocean node within 10 km.
+               'node': sampling.get('node') or spec['point'], 'sampling': sampling.get('method'),
+               'mdt_m': provenance.get('offset_m'), 'datum': provenance.get('datum'), 'barometric_surge_m': surge,
+               # Levels the solver receives (tide + MDT + surge), metres on EGM2008.
+               'start_level_m': levels[0], 'min_m': min(levels), 'max_m': max(levels), 'count': len(series),
+               'attribution': attribution}
+    out = directory / 'tide'
+    out.mkdir(mode=0o700)
+    (out / 'manifest.json').write_text(json.dumps({'summary': summary, 'provenance': provenance},
+                                                  allow_nan=False, default=_json_default))
+    return series
+
+
+def _apply_bathymetry(directory, request, cfg, values, transform, datasets):
+    """GEBCO_2026 sea floor (MSL + MDT = EGM2008) on the sea cells of the aligned DEM; writes bathymetry/manifest.json.
+
+    Sea cells: GEBCO < 0, DEM <= 0.5 m and connected to a sea-side edge (bathymetry.sea_cell_elevations)."""
+    spec = request['computed']['bathymetry']
+    try:
+        offset, record = spec['mdt'], None
+        if spec['mdt'] == TIDE_MDT_DEFAULT:
+            offset, record = _mdt_reader(cfg, datasets)(*spec['point'])
+        reader = datasets.get('gebco_reader') or seabed.gebco_on_grid
+        found = seabed.sea_cell_elevations(values, transform, request['terrain']['target_crs'], msl_offset_m=offset,
+                                           gebco_reader=reader, sea_edges=spec['sea_sides'])
+    except Exception:
+        raise DatasetUnavailable('bathymetry_unavailable') from None
+    replaced = found['sea'] & np.isfinite(found['elevation'])
+    values = np.where(replaced, found['elevation'], values).astype('float32')
+    datum = found['provenance']['datum']
+    if spec['mdt'] == TIDE_MDT_DEFAULT:
+        datum = 'EGM2008 (approx.: GEBCO on MSL + DTUUH22MDT on XGM2019e; XGM2019e - EGM2008 not applied)'
+    summary = {'source': 'gebco', 'dataset': 'GEBCO_2026 Grid', 'sea_sides': spec['sea_sides'], 'mdt': spec['mdt'],
+               'mdt_m': offset, 'datum': datum, 'replaced_cells': int(replaced.sum()),
+               'min_elevation_m': float(values[replaced].min()) if replaced.any() else None,
+               'attribution': GEBCO_ATTRIBUTION}
+    out = directory / 'bathymetry'
+    out.mkdir(mode=0o700)
+    provenance = {**found['provenance'], 'mdt': record}
+    (out / 'manifest.json').write_text(json.dumps({'summary': summary, 'provenance': provenance},
+                                                  allow_nan=False, default=_json_default))
+    return values
 
 
 def _land_surface(directory, request, dem, datasets):
@@ -741,6 +926,9 @@ def solver_parameter_file(request, start=None, solver=None, fpfric=None):
         parameter += 'manningfile manning.n\n'
     if _has_boundary_file(request):
         parameter += 'bcifile boundary.bci\n'
+    if request['computed'].get('tide'):
+        # HVAR series of the tide sides (LISFLOOD-FP `bdyfile`, input.cpp:1949).
+        parameter += 'bdyfile boundary.bdy\n'
     if _still_water(request) if start is None else start:
         # Sea and/or lakes full at start. DG2 also reads initial.wd1x / initial.wd1y (depth slope coefficients); FV1 only initial.wd.
         parameter += 'startfile initial.wd\n'
@@ -787,6 +975,8 @@ def _solver_inputs(directory, request, solver, started):
         sources.append(('manning.n',directory/'landcover/manning.n'))
     if _has_boundary_file(request):
         sources.append(('boundary.bci',directory/'boundary/boundary.bci'))
+    if request['computed'].get('tide'):
+        sources.append(('boundary.bdy',directory/'boundary/boundary.bdy'))
     if started:
         sources += [(name,directory/'initial'/name) for name in
                     (('initial.wd','initial.wd1x','initial.wd1y') if solver == 'dg2' else ('initial.wd',))]
@@ -868,12 +1058,15 @@ def _record_land_surface(state, manifest):
 
 
 def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, summarizer=summarize_results,
-                   landcover_reader=None, soil_reader=None, antecedent=None):
+                   landcover_reader=None, soil_reader=None, antecedent=None, tide_series=None, gebco_reader=None,
+                   mdt_reader=None):
     """Claim exclusivo; preparación en grupo de proceso con deadline; estado terminal.
 
-    ``landcover_reader`` (WorldCover tile window), ``soil_reader`` (HYSOGs window) and ``antecedent``
-    (soil_moisture.antecedent_condition) replace the network readers in tests."""
-    datasets = {'landcover_reader': landcover_reader, 'soil_reader': soil_reader, 'antecedent': antecedent}
+    ``landcover_reader`` (WorldCover tile window), ``soil_reader`` (HYSOGs window), ``antecedent``
+    (soil_moisture.antecedent_condition), ``tide_series`` (tides.tide_series), ``gebco_reader``
+    (bathymetry.gebco_on_grid) and ``mdt_reader`` (tides.mdt_offset_m) replace the data readers in tests."""
+    datasets = {'landcover_reader': landcover_reader, 'soil_reader': soil_reader, 'antecedent': antecedent,
+                'tide_series': tide_series, 'gebco_reader': gebco_reader, 'mdt_reader': mdt_reader}
     directory = _directory(root,run_id)
     try:
         fd = os.open(directory/'worker.claim',os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
@@ -917,6 +1110,12 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads, su
         land_manifest = directory/'landcover/manifest.json'
         if land_manifest.is_file():
             _record_land_surface(state, json.loads(land_manifest.read_text()))
+        for name in ('tide', 'bathymetry'):
+            manifest = directory/name/'manifest.json'
+            if manifest.is_file():
+                # Public summary in the state; the full provenance (EOT20 sampling, MDT record, GEBCO rule) stays private.
+                found = json.loads(manifest.read_text())
+                state[name] = found['summary']; state['provenance'][name] = found
         # Requested solver first; if its attempt fails after preparation, the other solver runs once on the same
         # prepared inputs in its own directory. Preparation failures never reach here (both would fail alike).
         failure = None

@@ -24,11 +24,15 @@ class ServiceSetupTests(SimpleTestCase):
         self.assertEqual(config['geoid_dir'], str(PROJECT / 'data/reference/geoid'))
         # PXR-4 design-storm data (python -m pipeline.hydrology.design_storm prepare); optional per request.
         self.assertEqual(config['pxr_path'], str(PROJECT / 'data/reference/pxr/pxr4-2.1.0.nc'))
+        # EOT20 tides and the DTU MDT for tide sides (python -m pipeline.hydrology.tides prepare-eot20 | prepare-mdt).
+        self.assertEqual(config['eot20_dir'], str(PROJECT / 'data/reference/eot20'))
+        self.assertEqual(config['mdt_path'], str(PROJECT / 'data/reference/dtu22mdt/dtuuh22mdt.grd.gz'))
         self.assertEqual(config['binary_sha256'], '777d50f8d6a926260baa31b4c8ca3ecc0b3ae710494bebb2d4699ccf8c39775c')
         self.assertEqual(build_flood_service_settings(PROJECT, {'FLOOD_ROI_DG2_ENABLED': 'false'})[2], None)
         for name, value in [('FLOOD_ROI_DG2_MAX_CELLS', '-1'), ('FLOOD_ROI_DG2_MAX_TILES', '999999999'),
                             ('FLOOD_ROI_DG2_ENABLED', 'secret-value'), ('FLOOD_ROI_DG2_EXECUTABLE', '/tmp/executable'),
-                            ('FLOOD_ROI_DG2_GEOID_DIR', '/tmp/geoid'), ('FLOOD_ROI_DG2_PXR_PATH', '/tmp/pxr.nc')]:
+                            ('FLOOD_ROI_DG2_GEOID_DIR', '/tmp/geoid'), ('FLOOD_ROI_DG2_PXR_PATH', '/tmp/pxr.nc'),
+                            ('FLOOD_ROI_DG2_EOT20_DIR', '/tmp/eot20'), ('FLOOD_ROI_DG2_MDT_PATH', '/tmp/mdt.grd.gz')]:
             with self.subTest(name=name), self.assertRaises(ValueError) as error:
                 build_flood_service_settings(PROJECT, {name: value})
             self.assertNotIn(value, str(error.exception))

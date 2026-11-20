@@ -58,6 +58,11 @@ def build_flood_service_settings(project_root, environ):
         # PXR-4 v2.1.0 return levels (python -m pipeline.hydrology.design_storm prepare); design-storm requests
         # are answered 503 design_storm_unavailable while this file does not exist.
         'pxr_path': path('PXR_PATH', 'reference/pxr/pxr4-2.1.0.nc'),
+        # EOT20 ocean tides (python -m pipeline.hydrology.tides prepare-eot20) and DTUUH22MDT (prepare-mdt) for tide
+        # sides; runs with a tide side (or GEBCO with the DTU MDT) fail with tide_unavailable / bathymetry_unavailable
+        # while they are missing. GEBCO_2026 itself is read from the public COG on Source Cooperative.
+        'eot20_dir': path('EOT20_DIR', 'reference/eot20'),
+        'mdt_path': path('MDT_PATH', 'reference/dtu22mdt/dtuuh22mdt.grd.gz'),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):
         supplied = environ.get(prefix + key, pinned)

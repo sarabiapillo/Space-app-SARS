@@ -418,6 +418,18 @@ export interface FloodDesignStorm {
   extrapolated: boolean; within_stated_accuracy: boolean; point?: [number, number]
   method?: string; dataset?: string; version?: string; doi?: string; licence?: string; attribution?: string
 }
+/** EOT20 tide of the tide sides: requested window and point; levels (m EGM2008, incl. MDT and surge) after preparation. */
+export interface FloodRoiTide {
+  model: string; sides: string[]; mdt: string | number | null; start_utc: string; end_utc: string; step_s: number
+  event_time_basis: string; point: [number, number]; node: [number, number] | null; mdt_m: number | null; datum: string | null
+  barometric_surge_m: number | null; start_level_m: number | null; min_m: number | null; max_m: number | null
+  count: number | null; attribution: string[] | null; sampling?: string | null
+}
+/** GEBCO_2026 sea floor on the sea cells (replaced_cells null until preparation). */
+export interface FloodRoiBathymetry {
+  source: string; dataset: string; sea_sides: string[]; mdt: string | number | null; mdt_m: number | null; datum: string | null
+  replaced_cells: number | null; min_elevation_m: number | null; attribution: string
+}
 export interface FloodRoiRun {
   id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null
   losses?: {infiltration: string; runoff_coefficient: number | null; atmospheric_pressure_hpa: number | null; barometric_surge_m: number} | null
@@ -431,6 +443,8 @@ export interface FloodRoiRun {
   terrain_attribution?: string | null
   /** Land surface (null in older runs), rain source ('synthetic', 'observed' or 'design_storm') and design storm. */
   land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
+  /** Tide (HVAR) and GEBCO sea-floor summaries; null when not requested and in older runs. */
+  tide?: FloodRoiTide | null; bathymetry?: FloodRoiBathymetry | null
 }
 export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
 export interface FloodRoiResult {
@@ -441,6 +455,7 @@ export interface FloodRoiResult {
   requested_solver?: string; solver?: string; solver_fallback?: FloodSolverFallback | null
   terrain_source?: string; vertical_datum?: string; terrain_attribution?: string | null
   land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
+  tide?: FloodRoiTide | null; bathymetry?: FloodRoiBathymetry | null
   /** Negative depths set to 0 and the volume they add relative to the water of each frame (null in older runs). */
   negative_depth?: {status?: 'none' | 'minor' | 'artifacts'; clipped_cell_frames?: number; frames?: Array<number | 'maximum'>; min_m?: number | null; max_added_volume_ratio?: number | null; thresholds?: {warning: number; fail: number}} | null
   /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
