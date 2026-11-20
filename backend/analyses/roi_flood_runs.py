@@ -115,6 +115,9 @@ class RoiRunResultsView(APIView):
             result['mass_balance'] = run['result'].get('mass_balance')
             # Solver-velocity flow arrows (lon, lat, m/s, bearing); null for runs without voutput.
             result['flow'] = run['result'].get('flow')
+            # Hydraulic indicators (null in older runs): Froude per frame and Kirpich time of concentration.
+            result['froude'] = run['result'].get('froude')
+            result['time_of_concentration'] = run['result'].get('time_of_concentration')
             # Chart inputs; null for runs summarized before depth classes existed.
             result['depth_classes_m'] = run['result'].get('depth_classes_m')
             result['rainfall_segments'] = _rainfall_segments(run)

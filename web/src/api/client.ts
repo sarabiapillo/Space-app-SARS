@@ -404,6 +404,9 @@ export interface FloodRoiResult {
   depth_classes_m?: number[] | null
   rainfall_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
   mass_balance?: {series?: Array<[number, number, number]>; [key: string]: unknown} | null
+  /** Hydraulic indicators (null in older runs). */
+  froude?: {min_depth_m: number; frames: Array<{frame_index: number; cells: number; max: number | null; mean: number | null; supercritical_cells: number}>} | null
+  time_of_concentration?: {minutes: number; flow_length_m: number; slope_m_m: number; upslope_area_km2: number; outlet: [number, number]} | null
 }
 /** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
 export interface FloodRoiFlow {

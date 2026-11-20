@@ -83,7 +83,8 @@ test('curated backend messages and risk labels translate only known display text
 test('DG2 panel does not reuse the terrapulseai_v2 simulator state or its unsupported equations', () => {
   // Pressure and infiltration now reach DG2 through the ROI API (atmospheric_pressure_hpa, infiltration), not old state fields.
   const source = readFileSync(new URL('../src/components/RainDg2Panel.tsx', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /FloodCharts|pressureHpa|Q_bank|Kirpich|Froude|baroSurge/)
+  // Froude and Kirpich are shown from DG2 results (froude, time_of_concentration), never from the old simulator state.
+  assert.doesNotMatch(source, /FloodCharts|pressureHpa|Q_bank|baroSurge|flood\.stats\.(froude|tc)/)
   assert.match(translate('Infiltración no modelada','Infiltration not modeled'), /Infiltración|Infiltration/)
 })
 

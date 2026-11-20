@@ -1,5 +1,6 @@
 """Contrato público de lectura y exportación de profundidades DG2 offline."""
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -181,6 +182,29 @@ def test_flow_arrows_skip_the_initial_sea(tmp_path):
     initial = channel_outputs(outputs, initial='0 0 0\n0 0 0\n1 0 1\n')
     arrows = summarize_results(outputs, save_interval_s=1, crs='EPSG:32615', initial_depth=initial)['flow']['frames'][1]['arrows']
     assert arrow_cells(arrows) == {(0, 0), (0, 1), (0, 2), (1, 0), (1, 2)}
+
+
+def test_froude_number_per_frame_from_solver_velocity_and_depth(tmp_path):
+    velocity_outputs(tmp_path, '.5 .5\n.5 .5\n', '3 3\n1 1\n', '0 0\n0 0\n')
+    froude = summarize_results(tmp_path, save_interval_s=1, crs='EPSG:32615')['froude']
+    assert froude['min_depth_m'] == .15
+    assert froude['frames'][0] == {'frame_index': 0, 'cells': 0, 'max': None, 'mean': None, 'supercritical_cells': 0}
+    fast, slow = 3 / math.sqrt(9.81 * .5), 1 / math.sqrt(9.81 * .5)
+    assert froude['frames'][1] == {'frame_index': 1, 'cells': 4, 'max': pytest.approx(fast),
+                                   'mean': pytest.approx((fast + slow) / 2), 'supercritical_cells': 2}
+
+
+def test_kirpich_time_of_concentration_on_the_longest_flow_path_to_the_main_outlet(tmp_path):
+    outputs = tmp_path / 'outputs'; outputs.mkdir()
+    channel_outputs(outputs)
+    tc = summarize_results(outputs, save_interval_s=1, crs='EPSG:32615')['time_of_concentration']
+    # Main outlet: bottom-centre (2 m, drains all 9 cells). Longest path: a 9 m corner, diagonal to the
+    # 5 m centre, then down to the outlet: 200*sqrt(2) + 200 m.
+    length = 200 * math.sqrt(2) + 200
+    slope = (9 - 2) / length
+    assert tc['flow_length_m'] == pytest.approx(length) and tc['slope_m_m'] == pytest.approx(slope)
+    assert tc['minutes'] == pytest.approx(.0195 * length ** .77 * slope ** -.385)
+    assert tc['upslope_area_km2'] == pytest.approx(.36)
 
 
 def test_flow_is_null_without_velocity_files_or_crs(tmp_path):

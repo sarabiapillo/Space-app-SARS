@@ -13,6 +13,10 @@ Delivery: work-unit commits on the feature branch (ask-on-risk). Runners: `pytes
 - **S6** Charts. Physicist (verbatim): "has que meutesre graficas adecudas". DG2 charts: rainfall hyetograph, wet area and maximum depth over scheduled time, domain volume vs cumulative rain (mass balance), depth distribution of the selected frame.
 - **S7** Infiltration as in the terrapulseai_v2.1 simulator (user: "agrega Infiltración y Presión atmosférica, como lo hace ese simulador"): runoff coefficient C = min(0.92, 0.65 + 0.27 (1 - exp(-D/24 h))), D = rain duration clamped to >= 0.5 h; DG2 receives rain x C. Optional, explicit (`infiltration: "runoff_coefficient"`).
 - **S8** Atmospheric pressure as in that simulator: inverse-barometer surge = max(0, 1013.25 - p) x 100 / (1000 x 9.81) m, p in 950-1040 hPa, added to the fixed sea level (HFIX and still-water start). Deviation: not added to inland ponding (inverse barometer acts on open water); rejected without a fixed-level side.
+- **S9** Froude number from solver velocity and depth (Fr = |v| / sqrt(g h)), per frame, over cells at least 0.15 m deep.
+- **S10** Time of concentration, Kirpich (1940): tc [min] = 0.0195 L^0.77 S^-0.385 on the longest D8 flow path to the main outlet of the pit-filled solver DEM (the v2.1 simulator uses the domain diagonal).
+- **S11** Lakes anywhere in the world from HydroLAKES (global, open, CC BY 4.0) with its mean depth: lake cells start with water at the lake surface and a burned bed (recorded terrain change).
+- **S12** Road cuts on real OpenStreetMap roads (global, ODbL, attribution): road length with water >= 0.35 m (cut) and 0.15-0.35 m (caution), the v2.1 simulator thresholds; it assumed 2.2 km of road per km2 instead of real roads.
 
 ## Tasks
 
@@ -26,6 +30,9 @@ Delivery: work-unit commits on the feature branch (ask-on-risk). Runners: `pytes
 | T6 | S5 | inline | done | `c554030`; preview test 5 class colours; web/backend palette sync test |
 | T7 | S6 | inline | done | `0bd1535`; RED -> GREEN; browser flow-check 23/23, compact 5/5; node 104/104 |
 | T8 | S7, S8 | inline | done | commit below; RED -> GREEN (losses 15, runner); pipeline 488 pass (4 solar_api base); backend 14/14; node 106/106; browser 24/24; real coastal run dfaef3bb |
+| T9 | S9, S10 | inline | in progress | |
+| T10 | S12 | inline | pending | |
+| T11 | S11 | inline | pending | |
 
 Route evidence: no Writer trigger (units depend on each other or are under ~100 lines; no parallel batch). Risk: T2 adds an optional result field and a solver keyword (`voutput` does not change `.wd`/`.max`: byte-identical in a real rerun).
 
@@ -46,3 +53,4 @@ Route evidence: no Writer trigger (units depend on each other or are under ~100 
 - **L13** (2026-11-19) User: "Haz la corrida real en la costa con Earthdata y la validación hidráulica". Coastal runs on n15w093 (La Encrucijada, nonurban mangrove coast): NASADEM ocean = 0 m (no voids); eta 0 run 3b547b35 succeeded (sea start depth 0, mass error 0.7 m3); eta 1 run fd0eee2f succeeded (977 sea cells, ~57,000 m3 left through free N/E sides the sea touches: setup issue). Validation not started: needs an event decision and components that do not exist.
 - **L14** (2026-11-19) User: "lo que hace la simulacion de inundacion en terrapulseai_v2.1 lo hace tambien nuestro simulador? Por cierto, agrega Infiltración y Presión atmosférica, como lo hace ese simulador." v2.1 simulate.py identical to ours; its panel still calls it. T8 opened.
 - **L15** T8 real coastal run dfaef3bb (n15w093, eta 0 + 990 hPa -> +0.237 m, N/E closed): sea started full in 971 cells and held; solver rain 18,412 m3 = 0.656 x 28,073 m3; mass error 5.6 m3. i18n test renamed: the panel now offers pressure through the ROI API, not the old simulator state.
+- **L16** (2026-11-19) User: "Si, hazlo." to HydroLAKES for lakes and OpenStreetMap for roads, plus Froude and time of concentration. HydroLAKES zip reachable (820,295,132 bytes); Overpass reachable (~35 s per query).

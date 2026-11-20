@@ -176,14 +176,17 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
         raise ValueError('frames and maximum must share a prefix')
     velocity = {index: (path.with_suffix('.Vx'), path.with_suffix('.Vy')) for index, path in frame_paths}
     present = [vx.is_file() and vy.is_file() for vx, vy in velocity.values()]
-    flow = None
+    flow = froude = concentration = None
     dem_path = directory / (prefix + '.dem')
     if crs is not None and any(present) and dem_path.is_file():
         if not all(present):
             raise ValueError('incomplete velocity frames')
         flow = {'units': 'm/s', 'min_depth_m': FLOW_MIN_DEPTH_M, 'channel_min_upslope_km2': CHANNEL_MIN_UPSLOPE_KM2,
                 'max_arrows': FLOW_MAX_ARROWS, 'method': FLOW_METHOD, 'frames': []}
+        froude = {'min_depth_m': FLOW_MIN_DEPTH_M, 'method': 'Fr = |v| / sqrt(g h), g = 9.81 m/s2, solver HU/H velocity',
+                  'frames': []}
         dem = read_signed_ascii(dem_path, max_cells=max_cells)
+        concentration = time_of_concentration(dem, crs)
         eligible = (dem['values'] != dem['nodata']) & ~channel_network(dem)
         grids = [dem]
         if initial_depth is not None:
@@ -218,6 +221,7 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                 arrows = flow_arrows(data, vx['values'], vy['values'], crs=crs, eligible=eligible)
                 flow['frames'].append({'frame_index': index, 'arrows': arrows,
                                        'max_speed_m_s': max((a[2] for a in arrows), default=0)})
+                froude['frames'].append({'frame_index': index, **froude_frame(data, vx['values'], vy['values'])})
     mass = directory / (prefix + '.mass')
     balance = None
     if not mass.is_file():
@@ -233,7 +237,7 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
-            'mass_balance': balance, 'flow': flow, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
+            'mass_balance': balance, 'flow': flow, 'froude': froude, 'time_of_concentration': concentration, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
 
 
@@ -244,6 +248,13 @@ def channel_network(dem, min_upslope_km2=CHANNEL_MIN_UPSLOPE_KM2):
     unfilled, a 30 m NASADEM network breaks at every small pit (1 channel cell of 1680 in a real run,
     59 after filling), and water ponded in a filled pit counts as outside the channel.
     """
+    d8 = _d8(dem)
+    return d8['valid'] & (d8['area_km2'] >= min_upslope_km2)
+
+
+def _d8(dem):
+    """Pit-filled D8 routing: receiver and step length per cell, upslope area and the longest
+    upstream flow path (length and the original elevation of its head) for every cell."""
     nodata = dem['nodata']
     rows, cols = dem['values'].shape
     cell = dem['grid']['cellsize_m']
@@ -256,12 +267,54 @@ def channel_network(dem, min_upslope_km2=CHANNEL_MIN_UPSLOPE_KM2):
     drains = valid & (slopes.max(axis=0) > 0)
     index = np.arange(rows * cols).reshape(rows, cols)
     shift = np.array([dr * cols + dc for dr, dc in _D8])
+    distance = np.array([cell * math.hypot(dr, dc) for dr, dc in _D8])
     receiver = np.where(drains, index + shift[best], -1).ravel()
+    step = distance[best].ravel()
     area = np.where(valid, 1.0, 0.0).ravel()
+    longest = np.zeros(rows * cols)
+    head = np.where(valid, dem['values'], np.nan).astype('float64').ravel()
     for i in np.argsort(np.where(valid, z, -np.inf).ravel(), kind='stable')[::-1]:
-        if receiver[i] >= 0:
-            area[receiver[i]] += area[i]
-    return valid & (area.reshape(rows, cols) * cell * cell / 1e6 >= min_upslope_km2)
+        r = receiver[i]
+        if r >= 0:
+            area[r] += area[i]
+            if longest[i] + step[i] > longest[r]:
+                longest[r], head[r] = longest[i] + step[i], head[i]
+    return {'valid': valid, 'area_km2': area.reshape(rows, cols) * cell * cell / 1e6,
+            'longest_m': longest.reshape(rows, cols), 'head_z': head.reshape(rows, cols)}
+
+
+def time_of_concentration(dem, crs):
+    """Kirpich (1940) on the longest D8 flow path to the main outlet (largest upslope area).
+
+    tc [min] = 0.0195 L^0.77 S^-0.385, L in m and S = (head - outlet elevation) / L. Kirpich derived it
+    for small rural basins; here it is an indicator for the computational domain, not a calibrated value.
+    """
+    d8 = _d8(dem)
+    area = np.where(d8['valid'], d8['area_km2'], -1)
+    r, c = np.unravel_index(int(area.argmax()), area.shape)
+    length = float(d8['longest_m'][r, c])
+    drop = float(d8['head_z'][r, c] - dem['values'][r, c])
+    if length <= 0 or drop <= 0:
+        return None
+    slope = drop / length
+    grid = dem['grid']
+    x = grid['xllcorner'] + (c + .5) * grid['cellsize_m']
+    y = grid['yllcorner'] + (area.shape[0] - r - .5) * grid['cellsize_m']
+    lon, lat = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True).transform(x, y)
+    return {'method': 'Kirpich (1940): tc_min = 0.0195 L^0.77 S^-0.385 on the longest pit-filled D8 path to the main outlet',
+            'minutes': .0195 * length ** .77 * slope ** -.385, 'flow_length_m': length, 'slope_m_m': slope,
+            'upslope_area_km2': float(d8['area_km2'][r, c]), 'outlet': [round(lon, 6), round(lat, 6)]}
+
+
+def froude_frame(depth, vx, vy, *, min_depth_m=FLOW_MIN_DEPTH_M):
+    """Froude number |v| / sqrt(g h) over cells at least ``min_depth_m`` deep (thin films are spurious)."""
+    h = depth['values']
+    keep = (h != depth['nodata']) & (h >= min_depth_m) & (vx != depth['nodata']) & (vy != depth['nodata'])
+    if not keep.any():
+        return {'cells': 0, 'max': None, 'mean': None, 'supercritical_cells': 0}
+    froude = np.hypot(vx[keep], vy[keep]) / np.sqrt(9.81 * h[keep])
+    return {'cells': int(keep.sum()), 'max': float(froude.max()), 'mean': float(froude.mean()),
+            'supercritical_cells': int((froude > 1).sum())}
 
 
 def fill_pits(z, valid, epsilon=1e-4):
