@@ -51,11 +51,18 @@ def _earthaccess_search(product, bounds, start, end):
 
 
 @contextmanager
+def read_imerg_file(source):
+    """Open an IMERG HDF5/netCDF4 file; half-hourly files keep their fields in the ``Grid`` group."""
+    import h5py
+    with h5py.File(source, 'r') as handle:
+        yield handle['Grid'] if 'Grid' in handle else handle
+
+
+@contextmanager
 def _earthaccess_open(granule):
     import earthaccess
-    import h5py
-    with h5py.File(earthaccess.open([granule], show_progress=False)[0], 'r') as handle:
-        yield handle
+    with read_imerg_file(earthaccess.open([granule], show_progress=False)[0]) as data:
+        yield data
 
 
 def imerg_rainfall(bounds, start_utc, end_utc, *, product='GPM_3IMERGHHL', search=None, open_granule=None):

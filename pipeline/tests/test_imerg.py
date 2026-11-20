@@ -56,3 +56,19 @@ def test_gaps_missing_values_duplicates_or_unaligned_times_are_rejected(granules
     search, open_granule = fake(granules)
     with pytest.raises(ValueError):
         imerg_rainfall(BOUNDS, start, '2026-10-03T01:00:00Z', search=search, open_granule=open_granule)
+
+
+def test_half_hourly_files_are_read_from_their_grid_group(tmp_path):
+    import h5py
+
+    from pipeline.hydrology.imerg import read_imerg_file
+    values = grid(4, 8)
+    with h5py.File(tmp_path / 'hh.HDF5', 'w') as handle:
+        group = handle.create_group('Grid')
+        for name, array in values.items():
+            group[name] = array
+
+    def search(product, bounds, start, end):
+        return [{'id': 'G0', 'begin': '2026-10-03T00:00:00Z', 'handle': tmp_path / 'hh.HDF5'}]
+    result = imerg_rainfall(BOUNDS, '2026-10-03T00:00:00Z', '2026-10-03T00:30:00Z', search=search, open_granule=read_imerg_file)
+    assert result['segments'][0]['mm'] == pytest.approx(3.0)
