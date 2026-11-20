@@ -31,6 +31,10 @@ FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput 
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
 # Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts.
 DEPTH_CLASS_BOUNDS_M = (.03, .15, .5, 1, 2)
+# DG2 wet/dry fronts can leave a few slightly negative cell-average depths even with dg2depththresh
+# (a real 30 mm / 900 s run left one cell at -0.033 m in one frame). Depths down to -NEGATIVE_DEPTH_TOLERANCE_M
+# are set to 0 and reported; anything more negative still fails the run.
+NEGATIVE_DEPTH_TOLERANCE_M = .05
 _D8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
@@ -39,9 +43,14 @@ def _limit(max_cells):
         raise ValueError('max_cells must be a positive integer')
 
 
-def read_depth_ascii(path, max_cells=4_000_000):
-    """Parsea seis encabezados ESRI exactos; nodata nunca representa lecho seco."""
-    return _read_ascii(path, max_cells, nonnegative=True)
+def read_depth_ascii(path, max_cells=4_000_000, *, negative_tolerance_m=0.0):
+    """Parsea seis encabezados ESRI exactos; nodata nunca representa lecho seco.
+
+    Depths in ``[-negative_tolerance_m, 0)`` become 0 and are counted in ``clipped``; below that they fail.
+    """
+    if not isinstance(negative_tolerance_m, (int, float)) or not 0 <= negative_tolerance_m < 1:
+        raise ValueError('negative_tolerance_m must be in [0, 1)')
+    return _read_ascii(path, max_cells, nonnegative=True, tolerance=float(negative_tolerance_m))
 
 
 def read_signed_ascii(path, max_cells=4_000_000):
@@ -52,7 +61,7 @@ def read_signed_ascii(path, max_cells=4_000_000):
 read_velocity_ascii = read_signed_ascii
 
 
-def _read_ascii(path, max_cells, *, nonnegative):
+def _read_ascii(path, max_cells, *, nonnegative, tolerance=0.0):
     _limit(max_cells)
     path = Path(path)
     with path.open(encoding='ascii') as stream:
@@ -83,7 +92,7 @@ def _read_ascii(path, max_cells, *, nonnegative):
                 row = [float(part) for part in parts]
             except ValueError as exc:
                 raise ValueError('invalid depth value' if nonnegative else 'invalid grid value') from exc
-            if any(not math.isfinite(v) or (nonnegative and v != nodata and v < 0) for v in row):
+            if any(not math.isfinite(v) or (nonnegative and v != nodata and v < -tolerance) for v in row):
                 raise ValueError('depth must be finite and nonnegative outside nodata' if nonnegative
                                  else 'values must be finite')
             rows.append(row)
@@ -91,6 +100,10 @@ def _read_ascii(path, max_cells, *, nonnegative):
             raise ValueError('extra ESRI ASCII data')
     values = np.asarray(rows, dtype='float64')
     mask = values == nodata
+    clipped = nonnegative and (values < 0) & ~mask
+    worst = float(values[clipped].min()) if nonnegative and clipped.any() else None
+    if nonnegative:
+        values[clipped] = 0.0
     valid = values[~mask]
     if not all(math.isfinite(v) for v in (
             fields['xllcorner'] + width * fields['cellsize'],
@@ -107,6 +120,7 @@ def _read_ascii(path, max_cells, *, nonnegative):
                   'wet_cells': int(np.count_nonzero(valid > 0)),
                   'min_m': float(valid.min()) if valid.size else None,
                   'max_m': float(valid.max()) if valid.size else None},
+        **({'clipped': {'cells': int(clipped.sum()), 'min_m': worst}} if nonnegative else {}),
     }
 
 
@@ -125,7 +139,7 @@ def _metric_crs(crs):
         raise ValueError('explicit valid metric projected CRS required') from exc
 
 
-def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_000):
+def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_000, negative_tolerance_m=0.0):
     """Exporta COG sin reproyección ni sobrescritura; devuelve SHA256 de origen/destino."""
     target = Path(output_path)
     if target.exists():
@@ -134,7 +148,7 @@ def export_depth_cog(path, output_path, *, crs, code_version, max_cells=4_000_00
     if not isinstance(code_version, str) or not code_version.strip():
         raise ValueError('code_version must be explicit')
     source = Path(path)
-    grid = read_depth_ascii(source, max_cells=max_cells)
+    grid = read_depth_ascii(source, max_cells=max_cells, negative_tolerance_m=negative_tolerance_m)
     if source.resolve() == target.resolve():
         raise ValueError('output cannot be source')
     values = grid['values'].astype('float32')
@@ -208,8 +222,13 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                            'total_km': None, 'frames': [], 'maximum': None}
     frames = []
     reference = None
+    negative = {'tolerance_m': NEGATIVE_DEPTH_TOLERANCE_M, 'clipped_cell_frames': 0, 'frames': [], 'min_m': None}
     for index, path in frame_paths + [(None, maxima[0])]:
-        data = read_depth_ascii(path, max_cells=max_cells)
+        data = read_depth_ascii(path, max_cells=max_cells, negative_tolerance_m=NEGATIVE_DEPTH_TOLERANCE_M)
+        if data['clipped']['cells']:
+            negative['clipped_cell_frames'] += data['clipped']['cells']
+            negative['frames'].append('maximum' if index is None else index)
+            negative['min_m'] = min(data['clipped']['min_m'], negative['min_m'] if negative['min_m'] is not None else 0.0)
         signature = (data['grid'], data['nodata'])
         if reference is None:
             reference = signature
@@ -255,11 +274,14 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
                         f"mide conservación numérica, no exactitud hidráulica."]
         except (ValueError, OSError, IndexError):
             warnings = ['Archivo .mass ilegible; balance de masa no disponible.']
+    if negative['clipped_cell_frames']:
+        warnings = [*warnings, f"DG2 dejó {negative['clipped_cell_frames']} valores de celda ligeramente negativos "
+                               f"(mínimo {negative['min_m']:.3g} m, tolerancia {NEGATIVE_DEPTH_TOLERANCE_M} m); se pusieron en 0."]
     return {'grid': {**reference[0], 'crs': crs, 'bounds': data['bounds'], 'nodata': reference[1]},
             'units': 'm above local bed', 'frames': frames, 'maximum': maximum,
             'time_axis': {'status': 'actual_times_unavailable', 'reason': 'DG2 ASCII frames do not record actual physical timestamps; scheduled_time_s is requested, not observed.'},
             'mass_balance': balance, 'flow': flow, 'froude': froude, 'time_of_concentration': concentration,
-            'roads': road_result, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M),
+            'roads': road_result, 'depth_classes_m': list(DEPTH_CLASS_BOUNDS_M), 'negative_depth': negative,
             'synthetic': True, 'hydraulic_accuracy_validated': False, 'warnings': warnings}
 
 

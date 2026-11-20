@@ -110,6 +110,7 @@ class RoiHttpTests(SimpleTestCase):
         self.assertIsNone(body['depth_classes_m'])  # seeded run predates depth classes
         self.assertIsNone(body['froude'])
         self.assertIsNone(body['time_of_concentration'])
+        self.assertIsNone(body['negative_depth'])
         self.assertIsNone(body['roads'])
         self.assertIsNone(body['lakes'])
         self.assertEqual(len(body['artifacts']), 4)

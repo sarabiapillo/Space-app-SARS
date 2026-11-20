@@ -310,3 +310,36 @@ def test_refuse_nonmetric_crs_and_preserve_source(tmp_path):
         with pytest.raises(ValueError):
             export_depth_cog(source, tmp_path / 'out.tif', crs=crs, code_version='v1')
     assert not (tmp_path / 'out.tif').exists() and source.read_bytes() == before
+
+
+def test_small_negative_dg2_depths_are_set_to_zero_and_reported(tmp_path):
+    # DG2 wet/dry fronts can leave a few slightly negative cell-average depths even with dg2depththresh.
+    ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.2 .3\n')
+    ascii_grid(tmp_path / 'a-0001.wd', '-.033 .1\n-.01 .3\n')
+    ascii_grid(tmp_path / 'a.max', '.05 .1\n.2 .3\n')
+    result = summarize_results(tmp_path, save_interval_s=1)
+    assert result['negative_depth'] == {'tolerance_m': .05, 'clipped_cell_frames': 2, 'frames': [1], 'min_m': -.033}
+    assert result['frames'][1]['stats']['min_m'] == 0
+    clean = tmp_path / 'clean'
+    clean.mkdir()
+    minimal_outputs(clean)
+    assert summarize_results(clean, save_interval_s=1)['negative_depth'] == {
+        'tolerance_m': .05, 'clipped_cell_frames': 0, 'frames': [], 'min_m': None}
+
+
+def test_negative_depths_beyond_the_tolerance_still_fail_the_run(tmp_path):
+    ascii_grid(tmp_path / 'a-0000.wd', '-.06 .1\n.2 .3\n')
+    ascii_grid(tmp_path / 'a.max', '.05 .1\n.2 .3\n')
+    with pytest.raises(ValueError, match='nonnegative'):
+        summarize_results(tmp_path, save_interval_s=1)
+
+
+def test_strict_reader_and_cog_export_follow_the_tolerance(tmp_path):
+    path = ascii_grid(tmp_path / 'a-0000.wd', '-.03 .1\n.2 .3\n')
+    with pytest.raises(ValueError, match='nonnegative'):
+        read_depth_ascii(path)  # default stays strict
+    grid = read_depth_ascii(path, negative_tolerance_m=.05)
+    assert grid['values'][0, 0] == 0 and grid['clipped'] == {'cells': 1, 'min_m': -.03}
+    export_depth_cog(path, tmp_path / 'a.tif', crs='EPSG:32615', code_version='test', negative_tolerance_m=.05)
+    with rasterio.open(tmp_path / 'a.tif') as cog:
+        assert cog.read(1)[0, 0] == 0

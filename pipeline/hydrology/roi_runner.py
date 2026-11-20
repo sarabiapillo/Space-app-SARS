@@ -45,7 +45,7 @@ from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
 from .lakes import CITATION as LAKES_CITATION, burn_lakes, lakes_in_bounds
-from .results import summarize_results, export_depth_cog
+from .results import NEGATIVE_DEPTH_TOLERANCE_M, summarize_results, export_depth_cog
 
 PROJECT = Path(__file__).resolve().parents[2]
 _KEYS = {'roi', 'domain', 'rainfall', 'rainfall_profile', 'terrain', 'hydraulics', 'simulation'}
@@ -516,7 +516,8 @@ def run_roi_worker(root, run_id, *, provider=None, roads_fetcher=fetch_roads):
             if source.is_symlink():
                 raise ValueError('invalid output symlink')
             target=directory/'cogs'/(item['file']+'.tif')
-            info=export_depth_cog(source,target,crs=request['terrain']['target_crs'],code_version=cfg['code_version'],max_cells=cfg['max_cells'])
+            info=export_depth_cog(source,target,crs=request['terrain']['target_crs'],code_version=cfg['code_version'],max_cells=cfg['max_cells'],
+                                  negative_tolerance_m=NEGATIVE_DEPTH_TOLERANCE_M)
             with rasterio.open(target) as cog:
                 geographic=transform_bounds(cog.crs,'EPSG:4326',*cog.bounds,densify_pts=21)
             artifacts.append({'file':'cogs/'+target.name,'sha256':info['output_sha256'],

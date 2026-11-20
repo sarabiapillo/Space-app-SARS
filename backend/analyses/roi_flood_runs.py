@@ -125,6 +125,8 @@ class RoiRunResultsView(APIView):
             result['lakes'] = run['result'].get('lakes')
             # Chart inputs; null for runs summarized before depth classes existed.
             result['depth_classes_m'] = run['result'].get('depth_classes_m')
+            # DG2 depths slightly below 0 set to 0 (tolerance, count, frames, minimum); null in older runs.
+            result['negative_depth'] = run['result'].get('negative_depth')
             result['rainfall_segments'] = _rainfall_segments(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
