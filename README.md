@@ -117,6 +117,8 @@ python manage.py runserver
 
 Abre http://127.0.0.1:8000/admin/ para comprobar que el servidor responde.
 
+Para usar la web (`npm run dev`, puerto 5173), inicia sesión en http://localhost:5173/admin/login/: Vite reenvía `/admin` y `/api` a Django y así la cookie de sesión queda en el mismo origen que la app. Con `DJANGO_DEBUG=true`, Django acepta como origen de confianza CSRF `http://localhost:5173` y `http://127.0.0.1:5173`. En otro despliegue, define `DJANGO_CSRF_TRUSTED_ORIGINS` con los orígenes separados por comas (por ejemplo `https://app.ejemplo.org`); sin DEBUG y sin esa variable no se agrega ningún origen.
+
 ## 7. Cuentas y acceso a datos (Earthdata)
 
 Una sola cuenta **NASA Earthdata Login** da acceso a todo lo que usa el proyecto: NISAR (ASF) y las fuentes auxiliares candidatas (precipitación, óptico, OPERA). Algunos archivos (DAAC) piden además autorizarlos una vez en tu perfil.
