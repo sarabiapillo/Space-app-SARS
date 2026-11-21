@@ -1,0 +1,128 @@
+% TerraPulse AI -- Simulación de inundación DG2: estado actual, avances y propuesta de fronteras
+% Compilar con: pdflatex propuesta_fronteras_dg2.tex
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+
+\title{\textbf{TerraPulse AI}\\[6pt]\Large Simulación de inundación: estado actual, avances y propuesta de condiciones de frontera}
+\author{Equipo TerraPulse AI}
+\date{19 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\section{Los dos simuladores del proyecto}
+
+\subsection*{Simulador de inundación de la rama \texttt{terrapulseai\_v2}}
+
+Código: \nolinkurl{backend/analyses/simulate.py}.\\
+Endpoint: \nolinkurl{/api/flood-scenarios/simulate/}.
+
+Calcula, en un solo paso, un mapa de profundidad final sobre NASADEM a 30\,m:
+
+\begin{itemize}
+  \item Coeficiente de escorrentía de 0.65 a 0.92, creciente con la duración de la lluvia (saturación tipo Horton, $\tau = 24$\,h).
+  \item Enrutamiento D8 del volumen acumulado y caudal $Q = V/\text{duración}$.
+  \item Geometría de cauce por Leopold--Maddock según el área drenada, capacidad de banca por Manning y desbordamiento lateral hacia la llanura.
+  \item Detección de cuerpos de agua por planitud del terreno (pendiente $< 0.0045$ y desviación local $< 0.6$\,m), con una profundidad base asignada de 1.8 a 4.2\,m según su extensión.
+  \item Encharcamiento en zonas bajas y sobreelevación barométrica.
+  \item La profundidad final de cada celda es el máximo de esos componentes.
+\end{itemize}
+
+Actualmente el panel de la aplicación ya no lo invoca: el endpoint sigue disponible, pero la interfaz usa DG2.
+
+\subsection*{Simulación DG2 (LISFLOOD-FP 8.0.3)}
+
+Resuelve las ecuaciones de aguas someras bidimensionales completas (masa y momento) con Galerkin discontinuo de segundo orden. Usa NASADEM reproyectado a una malla métrica, lluvia mediante NetCDF y rugosidad de Manning. Entrega cuadros en el tiempo y la profundidad máxima.
+
+\section{Comparación}
+
+\begin{center}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}p{5.3cm} >{\raggedright\arraybackslash}p{5.3cm}}
+\toprule
+\textbf{Aspecto} & \textbf{Simulador de \texttt{terrapulseai\_v2}} & \textbf{DG2} \\
+\midrule
+Ecuaciones & D8 + Manning en régimen uniforme & Aguas someras 2D: masa y momento \\
+Evolución temporal & Un solo estado final & Cuadros en el tiempo y máximo \\
+Velocidad & Manning local con $n$ de cauce & Calculada por el solver ($HU/H$) \\
+Cuerpos de agua existentes & Detectados por planitud, con profundidad asignada & Dominio seco al inicio (ver propuesta) \\
+Fronteras del dominio & No se modelan & Cerrada o libre en los cuatro bordes (ver propuesta) \\
+Conservación de masa & No se verifica & Medida en cada corrida \\
+Infiltración & Coeficiente de escorrentía & No modelada \\
+Presión atmosférica & Sobreelevación barométrica & No incluida \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Qué se resolvió y cómo}
+
+\subsection*{Descarga de imagen}
+\begin{itemize}
+  \item El panel ofrece ``Descargar imagen PNG'' para cada cuadro.
+  \item La herramienta \emph{Capturar Región} exporta el mapa base junto con la profundidad y las flechas.
+  \item Verificado en navegador: el archivo descargado es un PNG válido con el nombre del cuadro.
+\end{itemize}
+
+\subsection*{Flechas de flujo}
+\begin{itemize}
+  \item Provienen de las velocidades que calcula el propio solver (\texttt{voutput}, $HU/H$); no se estiman por separado.
+  \item La convención de signos se validó con una corrida real sobre NASADEM: la velocidad se correlaciona con la bajada de la superficie libre (0.81 y 0.54 en $x$; 0.65 y 0.64 en $y$).
+  \item Activar \texttt{voutput} no altera la solución: la profundidad resultó idéntica byte a byte con y sin esa opción.
+  \item Solo se dibujan donde hay al menos 0.03\,m de agua. En láminas más delgadas, $HU/H$ produce rapideces espurias (hasta 11\,m/s en la corrida real).
+  \item Se agrupan en a lo sumo 400 flechas por cuadro, ponderadas por profundidad:
+  \[
+    \mathbf{v}_{\text{bloque}} = \frac{\sum_i h_i\,\mathbf{v}_i}{\sum_i h_i}.
+  \]
+  El tamaño de cada flecha depende de la rapidez.
+\end{itemize}
+
+\subsection*{Profundidades negativas}
+\begin{itemize}
+  \item Sin umbral, DG2 producía profundidades medias negativas en láminas finas sobre pendiente: el solver solo garantiza positividad en las interfaces, y la corrida se rechazaba.
+  \item El umbral \texttt{dg2depththresh} es ahora un parámetro explícito que queda registrado en cada corrida.
+  \item Con 0.02\,m desaparecen los negativos. La profundidad máxima pasa de 1.14 a 1.21\,m, por lo que se trata de una elección numérica y no de un valor físico.
+\end{itemize}
+
+\subsection*{Balance de masa}
+\begin{itemize}
+  \item El término \texttt{Verror} del solver no incluye la lluvia, por eso parecía que se perdía agua.
+  \item Corregido sumando la lluvia de cada intervalo, el error máximo es de 0.9\,m$^3$ sobre 23\,947\,m$^3$ de lluvia ($3.8\times10^{-5}$), que corresponde al límite de precisión del archivo de salida.
+\end{itemize}
+
+\subsection*{Corrida real}
+NASADEM más DG2 sobre 1680 celdas de 30\,m, con 20\,mm de lluvia en 600\,s y 900\,s simulados. La corrida terminó correctamente.
+
+\section{Propuesta de condiciones de frontera}
+
+Hoy existe una sola condición para los cuatro bordes:
+\begin{itemize}
+  \item \texttt{closed}: pared reflejante.
+  \item \texttt{free}: transmisiva. En DG2 la pendiente asociada a \texttt{FREE} se ignora.
+\end{itemize}
+
+Esto deja la salida del agua en ``todo o nada'' e impide fijar el nivel del mar en la costa. El solver acepta, por tramo de borde, nivel fijo (\texttt{HFIX}) y nivel variable (\texttt{HVAR}, serie $\eta(t)$). Con nivel fijo, en el borde se impone
+\[
+  h = \max(0,\ \eta - z),
+\]
+con $\eta$ en metros sobre EGM96, el datum de NASADEM. Las condiciones de caudal de entrada quedan fuera, porque no se modelarán entradas de ríos.
+
+\begin{enumerate}
+  \item \textbf{Condición por cada lado (N, E, S, O):} cerrado, libre o nivel fijo (\texttt{HFIX}). Un dominio costero puede tener el mar con nivel fijo y los bordes de tierra cerrados o libres, según la ubicación de los parteaguas.
+  \item \textbf{Mar lleno desde el inicio:} si el dominio incluye mar, esas celdas arrancan llenas al mismo nivel $\eta$, con la profundidad inicial que acepta el solver (\texttt{startfile}). Sin esto, DG2 parte seco y el borde \texttt{HFIX} tendría que llenar el mar durante la simulación, lo que genera un transitorio artificial. Es la misma idea del simulador de \texttt{terrapulseai\_v2} de arrancar con el agua ya puesta, pero con un nivel físico explícito en lugar de una profundidad asignada.
+  \item \textbf{Después, si hace falta:} nivel variable en el tiempo (\texttt{HVAR}) para marea o marea de tormenta, y tramos parciales de un lado.
+\end{enumerate}
+
+\begin{nota}
+Antes de usarlo en costa hay que verificar cómo viene NASADEM sobre el mar, porque actualmente el sistema rechaza mallas con huecos.
+\end{nota}
+
+\section{Decisiones pendientes}
+
+\begin{enumerate}
+  \item ¿Qué problema concreto se observó en la simulación? Por ejemplo: agua acumulada en los bordes, agua que se pierde por donde no debería, o la costa.
+  \item Para la costa, ¿basta un nivel fijo o se necesita marea o marea de tormenta en el tiempo? ¿Con qué valores y en qué datum?
+  \item ¿Alcanza con condiciones por lado completo, o se necesitan tramos parciales de un lado?
+  \item Validación hidráulica: con lluvia hipotética ninguna métrica es válida. Hace falta elegir un evento real con lluvia observada (GPM IMERG) y una escena NISAR de la misma fecha para comparar.
+\end{enumerate}
+
+\end{document}
