@@ -192,16 +192,28 @@ test('map legend depth classes match the backend preview palette exactly', async
   const python = readFileSync(new URL('../../backend/analyses/roi_flood_runs.py', import.meta.url), 'utf8')
   const block = python.match(/_DEPTH_CLASSES = \[([\s\S]*?)\]\n/)[1]
   const backend = [...block.matchAll(/\(([\d.]+), \((\d+), (\d+), (\d+)\)\)/g)].map(m => [Number(m[1]), [Number(m[2]), Number(m[3]), Number(m[4])]])
-  assert.equal(backend.length, 6)
+  assert.equal(backend.length, 7)
   assert.deepEqual(DEPTH_CLASSES.map(c => [c.min, c.rgb]), backend)
-  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.03, .15, .5, 1, 2, null])
-  // The 0.01-0.03 m thin-sheet class is the lightest blue of the sequence.
-  assert.deepEqual(DEPTH_CLASSES[0], {min:.01, max:.03, rgb:[222,235,247]})
+  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.01, .03, .15, .5, 1, 2, null])
+  // The 0.002-0.01 m runoff-sheet class is the lightest and the only semi-transparent one (same alpha as the PNG).
+  const alpha = Object.fromEntries([...python.match(/_DEPTH_CLASS_ALPHA = \{([^}]*)\}/)[1].matchAll(/([\d.]+): (\d+)/g)].map(m => [Number(m[1]), Number(m[2])]))
+  assert.deepEqual(DEPTH_CLASSES.map(c => Math.round((c.alpha ?? 1) * 255)), DEPTH_CLASSES.map(c => alpha[c.min] ?? 255))
+  assert.deepEqual({...DEPTH_CLASSES[0], alpha: Math.round(DEPTH_CLASSES[0].alpha * 255)}, {min:.002, max:.01, rgb:[236,245,253], alpha:140})
+  assert.deepEqual(DEPTH_CLASSES[1], {min:.01, max:.03, rgb:[222,235,247]})
 })
 
-test('depth classes of a run: new runs chart the 1-3 cm class, older five-class runs keep their own bounds', async () => {
+test('depth classes of a run: new runs chart the 2-10 mm sheet class, older six- and five-class runs keep their own bounds', async () => {
   const { dg2ChartData, dg2Summary } = await import('../src/utils/floodDg2.ts')
   const base = { grid: { cellsize_m: 30 }, rainfall_segments: null, mass_balance: null }
+  const seven = { ...base, depth_classes_m: [.002, .01, .03, .15, .5, 1, 2],
+    frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 100, depth_class_cells: [30, 40, 6, 3, 0, 0, 0] } }],
+    maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [20, 50, 8, 4, 0, 0, 0] } } }
+  const sevenChart = dg2ChartData(seven, null)
+  assert.deepEqual(sevenChart.distribution.labels, ['0.002–0.01', '0.01–0.03', '0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
+  assert.equal(sevenChart.distribution.colors[0], 'rgba(236,245,253,0.55)')
+  // Flooded area still counts from 0.03 m; both sheet classes (2 mm to 3 cm) are reported apart, also over time.
+  assert.deepEqual([dg2Summary(seven, null).floodedHa, dg2Summary(seven, null).thinSheetHa], [12 * 900 / 1e4, 70 * 900 / 1e4])
+  assert.deepEqual([sevenChart.evolution.wetAreaHa, sevenChart.evolution.sheetAreaHa], [[9 * 900 / 1e4], [70 * 900 / 1e4]])
   const fresh = { ...base, depth_classes_m: [.01, .03, .15, .5, 1, 2],
     frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 100, depth_class_cells: [40, 6, 3, 0, 0, 0] } }],
     maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [50, 8, 4, 0, 0, 0] } } }
@@ -219,6 +231,7 @@ test('depth classes of a run: new runs chart the 1-3 cm class, older five-class 
   assert.deepEqual(dg2ChartData(old, null).distribution.colors, ['rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
   assert.deepEqual([dg2Summary(old, null).floodedHa, dg2Summary(old, null).thinSheetHa], [12 * 900 / 1e4, null])
   assert.deepEqual(dg2ChartData(old, null).evolution.wetAreaHa, [9 * 900 / 1e4])
+  assert.equal(dg2ChartData(old, null).evolution.sheetAreaHa, null)  // five-class runs have no sheet classes
 })
 
 test('DG2 chart data: hyetograph, wet area and maximum depth over time, volume balance and depth distribution', async () => {
@@ -235,7 +248,10 @@ test('DG2 chart data: hyetograph, wet area and maximum depth over time, volume b
   }
   const data = dg2ChartData(result, 1)
   assert.deepEqual(data.hyetograph, { labels: ['0–5', '5–10'], mmPerHour: [113, 127] })
-  assert.deepEqual(data.evolution, { minutes: [0, 5], wetAreaHa: [0, 115 * 900 / 1e4], maxDepthM: [0, .8] })
+  assert.deepEqual(data.evolution, { minutes: [0, 5], wetAreaHa: [0, 115 * 900 / 1e4], sheetAreaHa: null, maxDepthM: [0, .8] })
+  // Without the gross series (older runs) the hyetograph has the net bars only; frames without volumes give no volume chart.
+  assert.equal(data.hyetographGross, null)
+  assert.equal(data.frameVolumes, null)
   assert.deepEqual(data.volume, { minutes: [100 / 60, 10], domainM3: [1000, 20000], rainM3: [1200, 24000] })
   assert.deepEqual(data.distribution.labels, ['0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
   assert.deepEqual(data.distribution.areaHa, [9, .9, .45, 0, 0])
@@ -266,11 +282,11 @@ const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling
 test('example values fill the illustrative numbers and land-surface choices, never the user declarations', async () => {
   const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
-  // A 100-year, 3-hour design storm, simulated one hour longer (14400 s) with a frame every 1200 s (14 frames),
-  // no DG2 thin-depth threshold: enough water to see where it accumulates on a ~1 km² hillside.
+  // A 100-year, 3-hour design storm, simulated one hour longer (14400 s) with a frame every 300 s (49 frames, enough
+  // for a fluid animation), no DG2 thin-depth threshold: enough water to see where it accumulates on a ~1 km² hillside.
   assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'1200', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
+    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'300', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
     rainKind:'design_storm', returnPeriod:'100', stormHours:'3', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false})
   // Lakes, the domain, the urban declaration and the confirmation stay the user's explicit choice.
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
@@ -278,25 +294,29 @@ test('example values fill the illustrative numbers and land-surface choices, nev
   const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr)
   assert.deepEqual(body.rainfall, null)
   assert.deepEqual(body.rainfall_profile, {source:'design_storm', return_period_years:100, duration_h:3, step_s:600})
-  assert.deepEqual(body.simulation, {duration_s:14400, save_interval_s:1200, initial_tstep_s:1, dg2_depth_thresh_m:null, solver:'dg2'})
+  assert.deepEqual(body.simulation, {duration_s:14400, save_interval_s:300, initial_tstep_s:1, dg2_depth_thresh_m:null, solver:'dg2'})
   assert.deepEqual([body.terrain.source, body.terrain.resolution_m, body.hydraulics.manning, body.hydraulics.infiltration, body.hydraulics.antecedent_moisture],
     ['copernicus', 30, 'worldcover', 'curve_number', 'auto'])
   assert.deepEqual(Object.values(body.hydraulics.boundary), [{type:'free'}, {type:'free'}, {type:'free'}, {type:'free'}])
-  // Server limits: floor(14400 / 1200) + 2 = 14 frames <= 20 and the 3 h storm fits in the 4 h simulation.
-  assert.ok(Math.floor(14400 / 1200) + 2 <= 20 && 3 * 3600 <= 14400)
+  // Server limits: floor(14400 / 300) + 2 = 50 frames <= 121 and the 3 h storm fits in the 4 h simulation.
+  const { DG2_DEFAULT_MAX_FRAMES } = await import('../src/utils/floodDg2.ts')
+  assert.equal(DG2_DEFAULT_MAX_FRAMES, 121)
+  assert.ok(Math.floor(14400 / 300) + 2 <= DG2_DEFAULT_MAX_FRAMES && 3 * 3600 <= 14400)
   // Switching the example to synthetic rain keeps a consistent 60 mm in 3 h.
   const synthetic = buildRoiFloodRequest({...filled, rainKind:'synthetic', useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr)
   assert.deepEqual(synthetic.rainfall, {amount:60, unit:'mm', duration:10800, duration_unit:'s'})
 })
 
-test('pre-send checks: rain longer than the simulation and more than 20 frames are refused with a clear message', () => {
+test('pre-send checks: rain longer than the simulation and more than 121 frames are refused with a clear message', () => {
   assert.throws(() => buildRoiFloodRequest(filledForm({rainDuration:'3600', duration:'1800', save:'600'}), square, tr),
     /La lluvia \(3600 s\) dura más que la simulación \(1800 s\)/)
-  assert.throws(() => buildRoiFloodRequest(filledForm({duration:'7200', save:'300'}), square, tr),
-    /26 cuadros.*máximo 20.*intervalo de guardado de al menos 400 s/)
-  // At the limit: floor(5400 / 300) + 2 = 20 frames, rain as long as the simulation.
-  const body = buildRoiFloodRequest(filledForm({rainDuration:'5400', duration:'5400', save:'300'}), square, tr)
-  assert.deepEqual([body.simulation.duration_s, body.simulation.save_interval_s, body.rainfall.duration], [5400, 300, 5400])
+  assert.throws(() => buildRoiFloodRequest(filledForm({duration:'7200', save:'50'}), square, tr),
+    /146 cuadros.*máximo 121.*intervalo de guardado de al menos 61 s/)
+  // At the limit: floor(5950 / 50) + 2 = 121 frames, rain as long as the simulation.
+  const body = buildRoiFloodRequest(filledForm({rainDuration:'5950', duration:'5950', save:'50'}), square, tr)
+  assert.deepEqual([body.simulation.duration_s, body.simulation.save_interval_s, body.rainfall.duration], [5950, 50, 5950])
+  // The previous limit (20 frames) no longer refuses a 14400 s run saved every 300 s.
+  assert.equal(buildRoiFloodRequest(filledForm({rainDuration:'10800', duration:'14400', save:'300'}), square, tr).simulation.save_interval_s, 300)
   assert.throws(() => buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod:'100', stormHours:'3', duration:'7200', save:'1200'}), square, tr),
     /debe cubrir toda la tormenta/)
   assert.equal(tr('x','y'), 'x')
@@ -569,4 +589,137 @@ test('a run where both solvers left negative-depth artifacts is explained in pla
   const message = runErrorMessage('negative_depth_artifacts', t)
   assert.notEqual(message, 'negative_depth_artifacts')
   assert.match(message, /Ni DG2 ni FV1/)
+})
+
+test('animation time labels show the simulated time as hh:mm (seconds only when not a whole minute)', async () => {
+  const { simulatedTimeLabel } = await import('../src/utils/floodDg2.ts')
+  assert.deepEqual([0, 300, 3900, 14400, 86400, 90].map(simulatedTimeLabel), ['00:00', '00:05', '01:05', '04:00', '24:00', '00:01:30'])
+  assert.equal(simulatedTimeLabel(null), '—')
+})
+
+test('playback: next frame, stop at the end or loop, speed sets the frame interval and the fade', async () => {
+  const { playbackStep, playbackIntervalMs, playbackFadeMs, PLAYBACK_SPEEDS } = await import('../src/utils/floodDg2.ts')
+  assert.deepEqual(PLAYBACK_SPEEDS, [.5, 1, 2, 4])
+  assert.deepEqual(playbackStep({index: 0, playing: true, loop: false}, 3), {index: 1, playing: true, loop: false})
+  assert.deepEqual(playbackStep({index: 2, playing: true, loop: false}, 3), {index: 2, playing: false, loop: false})
+  assert.deepEqual(playbackStep({index: 2, playing: true, loop: true}, 3), {index: 0, playing: true, loop: true})
+  assert.deepEqual(playbackStep({index: 1, playing: false, loop: true}, 3), {index: 1, playing: false, loop: true})  // paused
+  assert.deepEqual(playbackStep({index: 0, playing: true, loop: true}, 1), {index: 0, playing: false, loop: true})  // one frame
+  // 1x = 2 frames per second; the cross-fade takes 80 % of the interval (at most 600 ms), none with reduced motion.
+  assert.deepEqual(PLAYBACK_SPEEDS.map(playbackIntervalMs), [1000, 500, 250, 125])
+  assert.deepEqual([playbackFadeMs(.5, false), playbackFadeMs(1, false), playbackFadeMs(4, false), playbackFadeMs(1, true)], [600, 400, 100, 0])
+})
+
+test('rain effect: gross intensity at a simulated time from the segments, strength grows with mm/h', async () => {
+  const { rainIntensityAt, rainEffect } = await import('../src/utils/floodDg2.ts')
+  const segments = [{start_s: 0, end_s: 600, intensity_mm_h: 10}, {start_s: 600, end_s: 1200, intensity_mm_h: 60}]
+  assert.deepEqual([0, 599, 600, 1199, 1200, 5000].map(t => rainIntensityAt(segments, t)), [10, 10, 60, 60, 0, 0])
+  assert.equal(rainIntensityAt(null, 0), null)  // runs without a recorded hyetograph
+  assert.equal(rainEffect(0), null)
+  assert.equal(rainEffect(null), null)
+  const light = rainEffect(1), heavy = rainEffect(25), violent = rainEffect(100)
+  assert.deepEqual([light.drops, heavy.drops, violent.drops, rainEffect(400).drops], [66, 170, 300, 300])
+  assert.ok(light.speed < heavy.speed && heavy.speed < violent.speed && violent.speed === rainEffect(400).speed)
+})
+
+test('water budget view: parts of the bar and their shares; older runs show the final water unsplit', async () => {
+  const { waterBudgetView } = await import('../src/utils/floodDg2.ts')
+  const budget = {gross_rain_m3: 10, infiltrated_m3: 6, net_rain_m3: 4, final_water_m3: 3, boundary_outflow_m3: 1, boundary_inflow_m3: 0,
+    initial_water_m3: 0, sheet_m3: 1, ponded_m3: 2, last_frame_water_m3: 3}
+  const view = waterBudgetView(budget)
+  assert.deepEqual(view.parts.map(p => [p.key, p.m3, p.pct]), [['infiltrated', 6, 60], ['sheet', 1, 10], ['ponded', 2, 20], ['left', 1, 10]])
+  assert.equal(view.split, true)
+  const older = waterBudgetView({...budget, sheet_m3: null, ponded_m3: null})
+  assert.deepEqual(older.parts.map(p => [p.key, p.m3, p.pct]), [['infiltrated', 6, 60], ['final', 3, 30], ['left', 1, 10]])
+  assert.equal(older.split, false)
+  assert.equal(waterBudgetView(null), null)
+  assert.equal(waterBudgetView({...budget, gross_rain_m3: 0, infiltrated_m3: 0, net_rain_m3: 0, final_water_m3: 0, boundary_outflow_m3: 0, sheet_m3: 0, ponded_m3: 0}), null)
+})
+
+test('chart data: gross and net hyetograph, sheet area and per-frame volumes, and the time cursor positions', async () => {
+  const { dg2ChartData, chartCursor } = await import('../src/utils/floodDg2.ts')
+  const result = {
+    grid: {cellsize_m: 10}, depth_classes_m: [.002, .01, .03, .15, .5, 1, 2],
+    rainfall_segments: [{start_s: 0, end_s: 600, intensity_mm_h: 1}, {start_s: 600, end_s: 1200, intensity_mm_h: 20}],
+    rainfall_gross_segments: [{start_s: 0, end_s: 600, intensity_mm_h: 10}, {start_s: 600, end_s: 1200, intensity_mm_h: 40}],
+    frames: [0, 1, 2].map(i => ({frame_index: i, scheduled_time_s: i * 900, stats: {max_m: i, depth_class_cells: [i, 0, i, 0, 0, 0, 0], volume_m3: 3 * i, sheet_volume_m3: i, ponded_volume_m3: 2 * i}})),
+    maximum: {stats: {max_m: 2, depth_class_cells: [2, 0, 2, 0, 0, 0, 0]}},
+    mass_balance: {series: [[0, 0, 0], [600, 1, 2], [1200, 2, 3], [1800, 2, 3]]},
+  }
+  const data = dg2ChartData(result, 1)
+  assert.deepEqual([data.hyetograph.mmPerHour, data.hyetographGross], [[1, 20], [10, 40]])
+  assert.deepEqual(data.frameVolumes, {minutes: [0, 15, 30], sheetM3: [0, 1, 2], pondedM3: [0, 2, 4]})
+  assert.deepEqual(data.evolution.sheetAreaHa, [0, .01, .02])
+  // Same gross and net (no losses): only the net bars are drawn.
+  assert.equal(dg2ChartData({...result, rainfall_gross_segments: result.rainfall_segments}, 1).hyetographGross, null)
+  // Cursor at 900 s: half way through the hyetograph, the second frame, the mass-balance row nearest in time.
+  assert.deepEqual(chartCursor(result, 900), {hyetographFraction: .75, frameIndex: 1, volumeIndex: 2})
+  assert.deepEqual(chartCursor(result, 1800), {hyetographFraction: null, frameIndex: 2, volumeIndex: 3})  // after the rain
+  assert.deepEqual(chartCursor(result, null), {hyetographFraction: null, frameIndex: null, volumeIndex: null})
+})
+
+test('animation preloads one preview per frame in frame order, reports progress and revokes everything on abort', async () => {
+  const { preloadFramePreviews, animationFrames, animationAvailable } = await import('../src/utils/floodDg2.ts')
+  const result = {grid: {shape: [10, 10]}, frames: [], artifacts: [{name: 'roi.max.tif', frame_index: null}, {name: 'roi-0001.wd.tif', frame_index: 1, scheduled_time_s: 300},
+    {name: 'roi-0000.wd.tif', frame_index: 0, scheduled_time_s: 0}]}
+  assert.deepEqual(animationFrames(result).map(a => a.name), ['roi-0000.wd.tif', 'roi-0001.wd.tif'])
+  assert.equal(animationAvailable(result), true)
+  assert.equal(animationAvailable({...result, grid: {shape: [3000, 3000]}}), false)  // 2 frames x 9e6 cells: too much memory
+  assert.equal(animationAvailable({...result, artifacts: result.artifacts.slice(0, 2)}), false)  // a single frame is no animation
+  let serial = 0; const revoked = [], progress = [], created = []
+  const urls = {createObjectURL: () => { const u = `blob:${++serial}`; created.push(u); return u }, revokeObjectURL: u => revoked.push(u)}
+  const api = async (_id, name) => ({blob: new Blob([name]), bounds: [-93, 16, -92, 17]})
+  const frames = await preloadFramePreviews(api, 'run', animationFrames(result), {signal: new AbortController().signal, urls, onProgress: n => progress.push(n), concurrency: 2})
+  assert.deepEqual(frames.map(f => [f.name, f.frameIndex, f.scheduledTimeS, f.bounds]), [['roi-0000.wd.tif', 0, 0, [-93, 16, -92, 17]], ['roi-0001.wd.tif', 1, 300, [-93, 16, -92, 17]]])
+  assert.deepEqual(frames.map(f => f.url).sort(), ['blob:1', 'blob:2'])
+  assert.deepEqual(progress, [1, 2]); assert.deepEqual(revoked, [])
+  // Aborted half way: the call rejects and revokes every object URL it created.
+  const controller = new AbortController(); let release
+  const slow = async (_id, name) => { if (name === 'roi-0001.wd.tif') { await new Promise(r => { release = r }); controller.abort() } return {blob: new Blob([name]), bounds: [-93, 16, -92, 17]} }
+  created.length = 0
+  const pending = preloadFramePreviews(slow, 'run', animationFrames(result), {signal: controller.signal, urls, concurrency: 1})
+  await new Promise(r => setTimeout(r, 0)); release()
+  await assert.rejects(pending, /abort/i)
+  assert.ok(created.length >= 1)
+  assert.deepEqual(revoked, created)
+  // A failed preview also rejects and leaves nothing behind.
+  created.length = 0; revoked.length = 0
+  const failing = async (_id, name) => { if (name === 'roi-0001.wd.tif') throw Error('HTTP 404'); return {blob: new Blob([name]), bounds: [-93, 16, -92, 17]} }
+  await assert.rejects(preloadFramePreviews(failing, 'run', animationFrames(result), {signal: new AbortController().signal, urls, concurrency: 1}), /404/)
+  assert.deepEqual(revoked, created)
+})
+
+test('run progress: simulated time reached of the total, frames so far and the restart after a solver switch', async () => {
+  const { runProgressView } = await import('../src/utils/floodDg2.ts')
+  const progress = {stage: 'running', solver: 'fv1', attempt: 2, restarted_from: 'dg2', simulated_s: 3600, duration_s: 14400, fraction: .25,
+    source: 'mass', frames_available: 13, latest_frame_index: 12, latest_frame_time_s: 3600, latest_frame_url: '/x', rain_mm_h: 27}
+  assert.deepEqual(runProgressView({state: 'running', progress}), {pct: 25, simulated: '01:00', total: '04:00', frames: 13, solver: 'fv1',
+    restartedFrom: 'dg2', rainMmH: 27, latestFrameIndex: 12, latestFrameTimeS: 3600})
+  assert.equal(runProgressView({state: 'running', progress: {...progress, simulated_s: 20000}}).pct, 100)  // never past the end
+  assert.equal(runProgressView({state: 'running', progress: null}), null)  // preparing: indeterminate bar
+  assert.equal(runProgressView({state: 'succeeded'}), null)  // older servers send no progress
+  assert.equal(runProgressView({state: 'running', progress: {...progress, duration_s: 0}}), null)
+})
+
+test('live frames: fetch only the newest complete frame not fetched yet', async () => {
+  const { liveFrameToFetch } = await import('../src/utils/floodDg2.ts')
+  const progress = {latest_frame_index: 4}
+  assert.equal(liveFrameToFetch(progress, []), 4)
+  assert.equal(liveFrameToFetch(progress, [0, 2, 4]), null)
+  assert.equal(liveFrameToFetch(progress, [0, 2, 5]), null)  // a later frame is already shown (an older poll answered late)
+  assert.equal(liveFrameToFetch({latest_frame_index: null}, []), null)
+  assert.equal(liveFrameToFetch(null, []), null)
+})
+
+test('live preview: owned live route, no-store image with validated bounds', async () => {
+  const { getRoiFloodLivePreview } = await import('../src/api/client.ts')
+  const calls = []
+  globalThis.fetch = async (path, init) => { calls.push([path, init]); return new Response(new Blob(['png'], {type: 'image/png'}), {headers: {'content-type': 'image/png', 'X-Preview-CRS': 'EPSG:3857', 'X-Preview-Bounds': '-93,16,-92,17', 'X-Preview-Units': 'm'}}) }
+  const preview = await getRoiFloodLivePreview(id, 7)
+  assert.deepEqual(preview.bounds, [-93, 16, -92, 17])
+  assert.equal(calls[0][0], base + 'live/7/preview/')
+  assert.equal(calls[0][1].credentials, 'same-origin')
+  assert.equal(calls[0][1].cache, 'no-store')
+  assert.throws(() => getRoiFloodLivePreview(id, -1), /cuadro|frame/i)
+  assert.throws(() => getRoiFloodLivePreview('../x', 1), /ID/)
 })

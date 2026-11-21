@@ -5,12 +5,12 @@ import {
 } from 'lucide-react'
 import type { FloodSimulationState, LngLat } from '../types/workspace'
 import { floodRoiPolygon } from '../utils/floodRoi'
-import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
+import { startRoiFlood, getRoiFloodStatus, getRoiFloodResults, getRoiFloodPreview, getRoiFloodLivePreview, roiFloodArtifactUrl, type FloodRoiRun, type FloodRoiResult } from '../api/client'
 import {
   buildRoiFloodRequest, coastPreset, createFloodRunController, DG2_DEFAULT_MAX_CELLS, DG2_DEFAULT_MAX_FRAMES, designStormNote, estimateDomainCells, exampleFormValues,
   failedAttemptsNotice, flowArrowFeatures, formStepStatus, inlandPreset, landSurfaceNotes, NEGATIVE_DEPTH_WARNING, negativeDepthWarning, pngDownloadName,
   RETURN_PERIODS, runErrorMessage, solverFallbackNotice, solverLabel, terrainLabel, URBAN_WARNING, urbanWarning, withFormChange, type FloodDg2Form,
-  bathymetryNote, tideNote,
+  bathymetryNote, simulatedTimeLabel, tideNote, type FloodMapAnimation,
 } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 import { FloodDg2Charts } from './FloodDg2Charts'
@@ -18,6 +18,11 @@ import { PRESET_ROI_CATALOG, type CatalogRoiPreset } from '../utils/roiCatalog'
 import { FloodCheck, FloodCollapsible, FloodField, FloodStep } from './flood/FloodFormParts'
 import { FloodResultSummary } from './flood/FloodResultSummary'
 import { FloodHowItWorks } from './flood/FloodHowItWorks'
+import { FloodPlaybackControls } from './flood/FloodPlayback'
+import { useFloodPlayback } from './flood/useFloodPlayback'
+import { useLiveRunFrames } from './flood/useLiveRunFrames'
+import { FloodRunProgress } from './flood/FloodRunProgress'
+import { FloodWaterBudget } from './flood/FloodWaterBudget'
 
 interface Props {
   flood: FloodSimulationState
@@ -26,6 +31,8 @@ interface Props {
   onFlyToZone?: (center: LngLat, zoom?: number) => void
   onSelectPresetROI?: (preset: CatalogRoiPreset) => void
   onClose?: () => void
+  /** Receives what the map draws while the run is animated (preloaded frames, frame shown, rain), null otherwise. */
+  onAnimationChange?: (animation: FloodMapAnimation | null) => void
 }
 /** Every value starts empty: nothing reaches the server unless the user types it or loads the example values.
  * Choices that are not physical values start at their previous behaviour: DG2, synthetic rain, uniform Manning.
@@ -35,7 +42,7 @@ type Form = FloodDg2Form
 const TERMINAL = ['succeeded','failed','timed_out']
 const STATES = [...new Set(PRESET_ROI_CATALOG.map(p => p.state))]
 
-export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSelectPresetROI,onClose}:Props) {
+export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSelectPresetROI,onClose,onAnimationChange}:Props) {
   const {t,localizeText,locale} = useTranslation()
   const [collapsed,setCollapsed]=useState(false)
   const [form,setForm]=useState<Form>(initial)
@@ -73,11 +80,31 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
   const busy=Boolean(current?.run&&!TERMINAL.includes(current.run.state))
   const failed=Boolean(current?.run&&['failed','timed_out'].includes(current.run.state))
   const mapActive=Boolean(flood.rasterUrl&&flood.resultRoiKey===roiKey)
-  const selected=current?.artifactName??''
   const artifacts=current?.result?.artifacts??[]
+  // Animation of the frames (play/pause, time slider, speed, loop, rain); while it is on, the frame it shows is the
+  // one every card, chart and download below describes.
+  const playback=useFloodPlayback({runId:current?.run?.id,result:current?.result,preview:getRoiFloodPreview})
+  // While the run is in progress the map shows the newest frame the solver has written (S5); on success the full
+  // playback takes over and starts once, on failure the last frame stays with the error.
+  const live=useLiveRunFrames({run:current?.run,preview:getRoiFloodLivePreview,showRain:playback.showRain})
+  const mapAnimation=playback.animation??live.animation
+  const notifyAnimation=useRef(onAnimationChange)
+  useEffect(()=>{notifyAnimation.current=onAnimationChange},[onAnimationChange])
+  useEffect(()=>{notifyAnimation.current?.(mapAnimation)},[mapAnimation])
+  useEffect(()=>()=>notifyAnimation.current?.(null),[])
+  const autoPlayed=useRef<string|null>(null)
+  useEffect(()=>{
+    const run=current?.run
+    if(run?.state==='succeeded'&&current?.result&&live.seen&&playback.available&&autoPlayed.current!==run.id){autoPlayed.current=run.id;playback.play(0)}
+  },[current?.run,current?.result,live.seen,playback])
+  const selected=playback.current?.name??current?.artifactName??''
   const selectedArtifact=artifacts.find(a=>a.name===selected)
   const frame=current?.result?.frames.find(f=>f.frame_index===selectedArtifact?.frame_index)
   const stats=frame?.stats??(selectedArtifact?.frame_index==null?current?.result?.maximum.stats:undefined)
+  const shownUrl=playback.current?.url??flood.rasterUrl
+  // The selector shows a frame of the animation (paused there) or leaves it for a static frame or the maximum.
+  const chooseView=(name:string)=>{const i=playback.frames?.findIndex(f=>f.name===name)??-1;if(playback.active&&i>=0){playback.seek(i);return}playback.stop();void choose(name)}
+  const showMaximum=()=>{const max=artifacts.find(a=>a.frame_index==null);if(max)void choose(max.name)}
   const steps=formStepStatus(form,roi)
   // Until a custom domain is typed, the estimate assumes the ROI as domain (the usual choice).
   const cells=estimateDomainCells(form.domain.trim()?form:{...form,useRoi:true},roi)
@@ -142,7 +169,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
 
       <section className="ws-rain-card ws-rain-quick">
         <button type="button" className="ws-rain-secondary-btn" onClick={()=>setForm(f=>exampleFormValues(f,roi))}><Wand2 size={13} aria-hidden="true"/>{t('Cargar valores de ejemplo','Load example values')}</button>
-        <small className="ws-rain-field__hint">{t('Rellena lluvia, terreno y solver con valores ilustrativos para ver dónde se acumula el agua (no son recomendaciones físicas): tormenta de diseño de 100 años y 3 h (PXR-4), simulación de 4 h (14400 s) con un cuadro cada 1200 s, sin umbral de lámina delgada, Copernicus a 30 m, Manning según cobertura (WorldCover), número de curva con humedad previa automática, todos los lados libres, DG2 (si falla, el servidor pasa a FV1). Lagos, dominio y declaraciones quedan a tu elección.','Fills rain, terrain and solver with illustrative values to see where water accumulates (not physical recommendations): 100-year, 3 h design storm (PXR-4), 4 h simulation (14400 s) with a frame every 1200 s, no thin-depth threshold, Copernicus at 30 m, Manning from land cover (WorldCover), Curve Number with automatic antecedent moisture, all sides free, DG2 (if it fails, the server switches to FV1). Lakes, domain and declarations remain your choice.')}</small>
+        <small className="ws-rain-field__hint">{t('Rellena lluvia, terreno y solver con valores ilustrativos para ver dónde se acumula el agua (no son recomendaciones físicas): tormenta de diseño de 100 años y 3 h (PXR-4), simulación de 4 h (14400 s) con un cuadro cada 300 s (49 cuadros para la animación), sin umbral de lámina delgada, Copernicus a 30 m, Manning según cobertura (WorldCover), número de curva con humedad previa automática, todos los lados libres, DG2 (si falla, el servidor pasa a FV1). Lagos, dominio y declaraciones quedan a tu elección.','Fills rain, terrain and solver with illustrative values to see where water accumulates (not physical recommendations): 100-year, 3 h design storm (PXR-4), 4 h simulation (14400 s) with a frame every 300 s (49 frames for the animation), no thin-depth threshold, Copernicus at 30 m, Manning from land cover (WorldCover), Curve Number with automatic antecedent moisture, all sides free, DG2 (if it fails, the server switches to FV1). Lakes, domain and declarations remain your choice.')}</small>
       </section>
 
       <FloodStep step={2} icon={<CloudRain size={13} aria-hidden="true"/>} title={t('Lluvia','Rain')} done={steps.rain}>
@@ -215,7 +242,8 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
 
       {current?.run&&<section className={`ws-rain-card ws-rain-run ${failed?'is-error':''}`} aria-live="polite">
         <div className="ws-rain-card__head">{busy?<Loader2 size={13} className="spin" aria-hidden="true"/>:failed?<AlertCircle size={13} aria-hidden="true"/>:<CheckCircle2 size={13} aria-hidden="true"/>}<h3>{t('Corrida','Run')}: {runLabel(current.run.state)}</h3></div>
-        {busy&&<div className="ws-rain-progressbar" role="progressbar" aria-label={t('Corrida en curso','Run in progress')}><span/></div>}
+        {busy&&<FloodRunProgress run={current.run} showRain={playback.showRain} onShowRainChange={playback.setShowRain}/>}
+        {!busy&&failed&&live.current&&<p className="ws-rain-help">{t(`El mapa conserva el último cuadro calculado (${simulatedTimeLabel(live.current.scheduledTimeS)}) antes del fallo.`,`The map keeps the last computed frame (${simulatedTimeLabel(live.current.scheduledTimeS)}) before the failure.`)}</p>}
         <p className="ws-rain-help">{t('Etapa','Stage')}: {current.run.stage} · <code>{current.run.id}</code></p>
         <p className="ws-rain-help">{t('Método:','Method:')} {solverLabel(current.run.requested_solver??'dg2')}{current.run.solver&&current.run.solver!==(current.run.requested_solver??'dg2')?t(` → ${solverLabel(current.run.solver)} (cambio automático)`,` → ${solverLabel(current.run.solver)} (automatic switch)`):''}</p>
         <p className="ws-rain-help">{t('Terreno:','Terrain:')} {terrainLabel(current.run.terrain_source)} · {t('alturas','heights')} {current.run.vertical_datum??'EGM96'}</p>
@@ -233,8 +261,10 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         {urbanWarning(current.result,t)&&<p role="alert" className="ws-rain-help ws-rain-warn"><AlertCircle size={13} aria-hidden="true"/> {urbanWarning(current.result,t)}</p>}
         {solverFallbackNotice(current.result.solver_fallback,t)&&<p role="status" className="ws-rain-banner ws-rain-fallback"><Settings2 size={13} aria-hidden="true"/><span>{solverFallbackNotice(current.result.solver_fallback,t)}</span></p>}
         {negativeDepthWarning(current.result,t)&&<p role="alert" className="ws-rain-help ws-rain-warn"><AlertCircle size={13} aria-hidden="true"/> {negativeDepthWarning(current.result,t)}</p>}
-        <FloodField label={t('Cuadro / máximo','Frame / maximum')} hint={t('Los cuadros se ordenan por índice; el tiempo programado no es tiempo físico observado.','Frames ordered by index; scheduled time is not observed physical time.')} control={aria=><select className="ws-rain-input-field" value={selected} onChange={e=>choose(e.target.value)} {...aria}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s)`}</option>)}</select>}/>
+        <FloodField label={t('Cuadro / máximo','Frame / maximum')} hint={t('Los cuadros se ordenan por índice; el tiempo programado no es tiempo físico observado.','Frames ordered by index; scheduled time is not observed physical time.')} control={aria=><select className="ws-rain-input-field" value={selected} onChange={e=>chooseView(e.target.value)} {...aria}><option value="">{t('Selecciona cuadro','Select frame')}</option>{artifacts.map(a=><option key={a.name} value={a.name}>{a.frame_index==null?t('Máximo','Maximum'):`#${a.frame_index} (${t('programado','scheduled')} ${a.scheduled_time_s??'—'} s · ${simulatedTimeLabel(a.scheduled_time_s)})`}</option>)}</select>}/>
+        <FloodPlaybackControls playback={playback} onShowMaximum={showMaximum}/>
         <FloodResultSummary result={current.result} frameIndex={selectedArtifact?.frame_index}/>
+        <FloodWaterBudget result={current.result}/>
 
         {mapActive&&<div className="ws-rain-map-controls">
           <div className="ws-rain-btn-row">
@@ -242,7 +272,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
             {onFlyToZone&&flood.rasterBounds&&<button type="button" className="ws-rain-secondary-btn" onClick={focusResult}><Layers size={12} aria-hidden="true"/>{t('Enfocar resultado','Focus result')}</button>}
           </div>
           <FloodField label={`${t('Opacidad','Opacity')}: ${flood.waterOpacity??85} %`} control={aria=><input type="range" min="10" max="100" value={flood.waterOpacity??85} onChange={e=>latest.current.onFloodChange({...latest.current.flood,waterOpacity:Number(e.target.value)})} {...aria}/>}/>
-          <small className="ws-rain-field__hint">{t('Escala por clases de profundidad (leyenda en el mapa): azul muy claro 0.01–0.03 m (lámina delgada) a azul oscuro ≥ 2 m; menos de 0.01 m y sin dato transparentes.','Depth-class scale (legend on the map): very light blue 0.01–0.03 m (thin sheet) to dark blue ≥ 2 m; below 0.01 m and nodata transparent.')}</small>
+          <small className="ws-rain-field__hint">{t('Escala por clases de profundidad (leyenda en el mapa): casi blanco semitransparente 0.002–0.01 m (escurrimiento en láminas durante la lluvia), azul muy claro 0.01–0.03 m (lámina delgada) a azul oscuro ≥ 2 m; menos de 0.002 m y sin dato transparentes.','Depth-class scale (legend on the map): semi-transparent near-white 0.002–0.01 m (runoff sheets during the rain), very light blue 0.01–0.03 m (thin sheet) to dark blue ≥ 2 m; below 0.002 m and nodata transparent.')}</small>
         </div>}
 
         {current.result.flow&&flood.resultRoiKey===roiKey&&<div className="ws-rain-map-controls">
@@ -251,7 +281,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         </div>}
 
         <div className="ws-rain-downloads">
-          {selectedArtifact&&mapActive&&<p className="ws-rain-help"><a className="solar-api-link" href={flood.rasterUrl!} download={pngDownloadName(selectedArtifact.name)}><Download size={12} aria-hidden="true"/>{t('Descargar imagen PNG del cuadro','Download frame PNG image')}</a> {t('Para una imagen con mapa base y flechas usa la herramienta Capturar.','For an image with basemap and arrows use the Capture tool.')}</p>}
+          {selectedArtifact&&mapActive&&<p className="ws-rain-help"><a className="solar-api-link" href={shownUrl!} download={pngDownloadName(selectedArtifact.name)}><Download size={12} aria-hidden="true"/>{t('Descargar imagen PNG del cuadro','Download frame PNG image')}</a> {t('Para una imagen con mapa base y flechas usa la herramienta Capturar.','For an image with basemap and arrows use the Capture tool.')}</p>}
           {selectedArtifact&&<a className="solar-api-link" href={roiFloodArtifactUrl(current.run!.id,selectedArtifact.name)} download><Download size={12} aria-hidden="true"/>{t('Descargar COG original (requiere sesión)','Download original COG (session required)')}</a>}
         </div>
 
@@ -268,7 +298,7 @@ export function RainDg2Panel({flood,onFloodChange,croppedRegion,onFlyToZone,onSe
         </FloodCollapsible>
 
         <FloodCollapsible defaultOpen icon={<BarChart3 size={12} aria-hidden="true"/>} title={t('Gráficas','Charts')}>
-          <FloodDg2Charts result={current.result} frameIndex={selectedArtifact?.frame_index}/>
+          <FloodDg2Charts result={current.result} frameIndex={selectedArtifact?.frame_index} cursorS={playback.current?.scheduledTimeS??null}/>
         </FloodCollapsible>
         {current.result.warnings?.filter(w=>w!==NEGATIVE_DEPTH_WARNING&&w!==URBAN_WARNING).map((w,i)=><p key={i} className="ws-rain-help ws-rain-warn">{localizeText(w)}</p>)}
       </section>}

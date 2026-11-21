@@ -63,15 +63,65 @@ def test_mass_balance_adds_back_rain_missing_from_swe_verror(tmp_path):
 
 
 def test_frames_count_cells_per_depth_class_for_charts(tmp_path):
-    # A 1-3 cm class makes thin sheets of water visible: [0.01, 0.03), [0.03, 0.15), ... and >= 2 m.
+    # A 2-10 mm class shows the runoff sheets during the rain and a 1-3 cm class the thin sheets of water:
+    # [0.002, 0.01), [0.01, 0.03), [0.03, 0.15), ... and >= 2 m.
     ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.6 2.5\n')
     ascii_grid(tmp_path / 'a.max', '.02 .15\n1 2\n')
     result = summarize_results(tmp_path, save_interval_s=1)
-    assert result['depth_classes_m'] == [.01, .03, .15, .5, 1, 2]
-    assert result['frames'][0]['stats']['depth_class_cells'] == [0, 1, 0, 1, 0, 1]
-    assert result['maximum']['stats']['depth_class_cells'] == [1, 0, 1, 0, 1, 1]
+    assert result['depth_classes_m'] == [.002, .01, .03, .15, .5, 1, 2]
+    assert result['frames'][0]['stats']['depth_class_cells'] == [0, 0, 1, 0, 1, 0, 1]
+    assert result['maximum']['stats']['depth_class_cells'] == [0, 1, 0, 1, 0, 1, 1]
     ascii_grid(tmp_path / 'a-0000.wd', '.009 .01\n.0299 .03\n')  # bounds are inclusive below, exclusive above
-    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [2, 1, 0, 0, 0, 0]
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [1, 2, 1, 0, 0, 0, 0]
+    ascii_grid(tmp_path / 'a-0000.wd', '.0019 .002\n.005 0\n')  # a sheet of 2 mm or more is counted, thinner is not
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [2, 0, 0, 0, 0, 0, 0]
+
+
+def test_frames_split_their_water_into_sheets_and_ponded_volume(tmp_path):
+    # Cells of 5 m (25 m2): sheets are thinner than 0.03 m (the flooded-area threshold), ponded water is 0.03 m or more.
+    ascii_grid(tmp_path / 'a-0000.wd', '.002 .02\n.03 1\n')
+    ascii_grid(tmp_path / 'a-0001.wd', '-9999 0\n0 0\n')
+    ascii_grid(tmp_path / 'a.max', '.002 .02\n.03 1\n')
+    result = summarize_results(tmp_path, save_interval_s=1)
+    first, dry = result['frames'][0]['stats'], result['frames'][1]['stats']
+    assert first['sheet_volume_m3'] == pytest.approx((.002 + .02) * 25)
+    assert first['ponded_volume_m3'] == pytest.approx((.03 + 1) * 25)
+    assert first['volume_m3'] == pytest.approx((.002 + .02 + .03 + 1) * 25)
+    assert [dry['volume_m3'], dry['sheet_volume_m3'], dry['ponded_volume_m3']] == [0, 0, 0]  # nodata is never water
+    assert 'volume_m3' not in result['maximum']['stats']  # the maximum is not one instant, its sum is no volume
+
+
+def test_water_budget_says_where_the_rain_went(tmp_path):
+    from pipeline.hydrology.results import water_budget
+    # Hand-computed: 10 ROI cells of 5 m (250 m2) receive 40 mm of gross rain = 10 m3; the Curve Number leaves
+    # 16 mm net = 4 m3 (the solver's .mass); 3 m3 stay in the domain and 1 m3 leaves through the boundaries.
+    ascii_grid(tmp_path / 'a-0000.wd', '0 0\n0 0\n')
+    ascii_grid(tmp_path / 'a-0001.wd', '.02 .02\n.04 .04\n')  # last frame: 1 m3 of sheets, 2 m3 ponded (cells of 25 m2)
+    ascii_grid(tmp_path / 'a.max', '.02 .02\n.04 .04\n')
+    (tmp_path / 'a.mass').write_text(MASS_HEADER + mass_row(0, 0, 0, 0) + mass_row(100, 3.5, -4, 4) + mass_row(200, 3, 0, 4))
+    summary = summarize_results(tmp_path, save_interval_s=1)
+    rain = {'method': {'method': 'scs_curve_number_incremental', 'gross_total_mm': 40, 'roi_cells': 10, 'roi_mean_net_total_mm': 16}}
+    budget = water_budget(summary, rain=rain)
+    assert budget == {'units': 'm3', 'gross_source': 'curve_number', 'gross_rain_m3': pytest.approx(10),
+                      'infiltrated_m3': pytest.approx(6), 'net_rain_m3': pytest.approx(4), 'initial_water_m3': 0,
+                      'final_water_m3': pytest.approx(3), 'boundary_outflow_m3': pytest.approx(1), 'boundary_inflow_m3': 0,
+                      'last_frame_water_m3': pytest.approx(3), 'sheet_m3': pytest.approx(1), 'ponded_m3': pytest.approx(2),
+                      'ponded_min_depth_m': .03, 'last_frame_time_s': 1,
+                      'method': budget['method']}
+    assert 'gross - net' in budget['method']
+    json.dumps(budget, allow_nan=False)
+    # Runoff coefficient C = 0.4: the solver got rain x C, so the gross rain is net / C. Without losses gross = net.
+    assert water_budget(summary, runoff_coefficient=.4)['gross_rain_m3'] == pytest.approx(10)
+    plain = water_budget(summary)
+    assert [plain['gross_source'], plain['gross_rain_m3'], plain['infiltrated_m3']] == ['no_losses', pytest.approx(4), 0]
+    # A sea or a lake full at the start is initial water; more water at the end than rain plus start = inflow.
+    (tmp_path / 'a.mass').write_text(MASS_HEADER + mass_row(0, 50, 0, 0) + mass_row(200, 60, 0, 4))
+    sea = water_budget(summarize_results(tmp_path, save_interval_s=1))
+    assert [sea['initial_water_m3'], sea['boundary_outflow_m3'], sea['boundary_inflow_m3']] == [50, 0, pytest.approx(6)]
+    # Older summaries (no per-frame volumes) keep the totals without the split; no .mass gives no budget.
+    older = {**summary, 'frames': [{**f, 'stats': {k: v for k, v in f['stats'].items() if 'volume' not in k}} for f in summary['frames']]}
+    assert [water_budget(older)['sheet_m3'], water_budget(older)['ponded_m3']] == [None, None]
+    assert water_budget({**summary, 'mass_balance': None}) is None
 
 
 def test_missing_mass_file_keeps_explicit_warning(tmp_path):
@@ -375,3 +425,32 @@ def test_strict_reader_by_default_and_clipping_reader_measures_the_added_volume(
     export_depth_cog(path, tmp_path / 'a.tif', crs='EPSG:32615', code_version='test', clip_negative=True)
     with rasterio.open(tmp_path / 'a.tif') as cog:
         assert cog.read(1)[0, 0] == 0
+
+
+def test_complete_frames_never_include_a_frame_still_being_written(tmp_path):
+    from pipeline.hydrology.results import complete_depth_frames
+    assert complete_depth_frames(tmp_path) == []
+    ascii_grid(tmp_path / 'roi-0000.wd', '0 0\n0 0\n')
+    # Newest frame half written (one of two rows): incomplete until it has nrows + 6 newline-terminated lines.
+    (tmp_path / 'roi-0001.wd').write_text('ncols 2\nnrows 2\nxllcorner 100\nyllcorner 200\ncellsize 5\nNODATA_value -9999\n.1 .2\n.3')
+    assert [index for index, _ in complete_depth_frames(tmp_path)] == [0]
+    (tmp_path / 'roi-0001.wd').write_text('ncols 2\nnrows 2\nxllcorner 100\nyllcorner 200\ncellsize 5\nNODATA_value -9999\n.1 .2\n.3 .4\n')
+    assert [index for index, _ in complete_depth_frames(tmp_path)] == [0, 1]
+    # A frame followed by a later one is complete; symlinks, other names and the maximum are ignored.
+    (tmp_path / 'roi-0002.wd').write_text('ncols 2\nnrows 2\n')
+    (tmp_path / 'roi-0003.wd').symlink_to(tmp_path / 'roi-0000.wd')
+    ascii_grid(tmp_path / 'roi.max', '0 0\n0 0\n')
+    (tmp_path / 'roi-0001.Vx').write_text('x')
+    assert [index for index, _ in complete_depth_frames(tmp_path)] == [0, 1]
+    assert complete_depth_frames(tmp_path / 'missing') == []
+
+
+def test_depth_text_reader_matches_the_file_reader(tmp_path):
+    from pipeline.hydrology.results import read_depth_ascii_text
+    text = 'ncols 2\nnrows 2\nxllcorner 100\nyllcorner 200\ncellsize 5\nNODATA_value -9999\n.1 -9999\n-.002 .3\n'
+    path = ascii_grid(tmp_path / 'a.wd', '', header=text)
+    by_text, by_file = read_depth_ascii_text(text, clip_negative=True), read_depth_ascii(path, clip_negative=True)
+    assert by_text['grid'] == by_file['grid'] and by_text['stats'] == by_file['stats']
+    assert np.array_equal(by_text['values'], by_file['values'])
+    with pytest.raises(ValueError):
+        read_depth_ascii_text(text.rsplit('\n', 2)[0])  # a missing row is refused

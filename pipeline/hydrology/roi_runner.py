@@ -75,7 +75,7 @@ from .initial_state import write_still_water_start
 from .losses import barometric_surge_m, effective_rainfall, runoff_coefficient
 from .roads import fetch_roads
 from .lakes import CITATION as LAKES_CITATION, burn_lakes, lakes_in_bounds
-from .results import URBAN_WARNING, NegativeDepthArtifacts, summarize_results, export_depth_cog
+from .results import URBAN_WARNING, NegativeDepthArtifacts, complete_depth_frames, summarize_results, export_depth_cog, water_budget
 
 PROJECT = Path(__file__).resolve().parents[2]
 _KEYS = {'roi', 'domain', 'rainfall', 'rainfall_profile', 'terrain', 'hydraulics', 'simulation'}
@@ -1031,6 +1031,9 @@ def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
                              max_cells=cfg['max_cells'],initial_depth=work/'initial.wd' if started else None,
                              roads=json.loads((directory/'roads.json').read_text()) if (directory/'roads.json').is_file() else None)
         summary['lakes'] = state['provenance']['lakes']['lakes'] if state['provenance']['lakes'] else None
+        # Where the rain went (gross, infiltrated, net, final sheets/ponded, boundaries), from the run's own numbers.
+        summary['water_budget'] = water_budget(summary, rain=state['provenance'].get('rain'),
+                                               runoff_coefficient=request['computed']['losses']['runoff_coefficient'])
         if ((state.get('land_surface') or {}).get('urban') or {}).get('warning'):
             summary['warnings'] = [*summary.get('warnings', []), URBAN_WARNING]
         if len(summary['frames'])>cfg['max_frames'] or len(summary['frames'])*request['computed']['width']*request['computed']['height']>cfg['max_rain_values']:
@@ -1056,6 +1059,64 @@ def _attempt(directory, request, cfg, state, solver, name, started, summarizer):
         if cogs.is_dir() and not cogs.is_symlink():
             shutil.rmtree(cogs)
         raise _AttemptFailed('negative_depth_artifacts' if isinstance(exc, NegativeDepthArtifacts) else 'output_invalid') from None
+
+
+def attempt_directory(directory, state):
+    """Working directory of the solver attempt that runs (or ran last): ``work``, or ``work-fallback`` after a switch."""
+    return Path(directory) / ('work-fallback' if state.get('solver_fallback') else 'work')
+
+
+def _mass_time(path, tail_bytes=4096):
+    """Simulated time of the last complete row of a growing .mass file (None without one); reads only its tail."""
+    try:
+        with path.open('rb') as stream:
+            size = stream.seek(0, 2)
+            stream.seek(max(0, size - tail_bytes))
+            lines = stream.read().decode('ascii', 'replace').split('\n')[:-1]  # the text after the last newline is partial
+    except OSError:
+        return None
+    for line in reversed(lines):
+        fields = line.split()
+        if len(fields) == 12 and fields[0] != 'Time':
+            try:
+                value = float(fields[0])
+            except ValueError:
+                continue
+            if math.isfinite(value) and value >= 0:
+                return value
+    return None
+
+
+def solver_progress(directory, state):
+    """How far the solver attempt has got while the run is ``running`` (or its outputs are summarized); None otherwise.
+
+    Simulated time from the last complete .mass row, or from the newest complete frame (index x save interval) when
+    that is later; only frames the solver finished writing count. A DG2 -> FV1 switch restarts from zero in
+    ``work-fallback`` and reports ``restarted_from``. Symlinked attempt or output directories are never read.
+    """
+    if state.get('state') not in ('running', 'results'):
+        return None
+    fallback = state.get('solver_fallback')
+    work = attempt_directory(directory, state)
+    outputs = work / 'outputs'
+    readable = not work.is_symlink() and not outputs.is_symlink()
+    frames = complete_depth_frames(outputs) if readable else []
+    save = float(state.get('save_interval_s') or 0)
+    latest = frames[-1][0] if frames else None
+    frame_time = latest * save if latest is not None else None
+    mass = _mass_time(outputs / 'roi.mass') if readable and (outputs / 'roi.mass').is_file() and not (outputs / 'roi.mass').is_symlink() else None
+    duration = float(state.get('simulation_duration_s') or 0)
+    if mass is not None and mass >= (frame_time or 0):
+        simulated, source = mass, 'mass'
+    elif frame_time is not None:
+        simulated, source = frame_time, 'frames'
+    else:
+        simulated, source = 0, None
+    simulated = min(simulated, duration) if duration > 0 else simulated
+    return {'stage': state['state'], 'solver': state.get('solver'), 'attempt': 2 if fallback else 1,
+            'restarted_from': fallback['from'] if fallback else None, 'simulated_s': simulated, 'duration_s': duration,
+            'fraction': simulated / duration if duration > 0 else 0, 'source': source, 'frames_available': len(frames),
+            'latest_frame_index': latest, 'latest_frame_time_s': frame_time}
 
 
 def _record_land_surface(state, manifest):

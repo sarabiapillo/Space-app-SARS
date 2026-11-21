@@ -437,6 +437,8 @@ export interface FloodRoiRun {
   requested_solver?: string; solver?: string
   solver_fallback?: FloodSolverFallback | null
   solver_attempts?: FloodSolverAttempt[] | null
+  /** Solver progress while running (null otherwise; absent in older servers). */
+  progress?: FloodRunProgress | null
   /** Terrain source and vertical datum of every height; older runs report NASADEM and EGM96. */
   terrain_source?: string; vertical_datum?: string
   /** Licence notice the terrain source requires (Copernicus GLO-30); null for NASADEM. */
@@ -465,7 +467,11 @@ export interface FloodRoiResult {
    * modelled; ROI mean for the Curve Number) and the volume series. */
   depth_classes_m?: number[] | null
   rainfall_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
+  /** Gross rain (before losses) per interval, mm/h; equals rainfall_segments without losses; null in older runs. */
+  rainfall_gross_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
   mass_balance?: {series?: Array<[number, number, number]>; [key: string]: unknown} | null
+  /** Where the rain went (m³); null without a mass balance. sheet/ponded are null for runs without per-frame volumes. */
+  water_budget?: FloodWaterBudget | null
   /** Hydraulic indicators (null in older runs). */
   froude?: {min_depth_m: number; frames: Array<{frame_index: number; cells: number; max: number | null; mean: number | null; supercritical_cells: number}>} | null
   time_of_concentration?: {minutes: number; flow_length_m: number; slope_m_m: number; upslope_area_km2: number; outlet: [number, number]} | null
@@ -473,6 +479,24 @@ export interface FloodRoiResult {
   /** Lakes used, or skipped with a reason (e.g. cut by the domain edge). */
   lakes?: Array<{hylak_id: number; name: string | null; skipped?: string; depth_avg_m?: number; cells?: number; surface_m?: number; volume_m3?: number}> | null
   roads?: {available: boolean; reason?: string; attribution?: string; osm_timestamp?: string; total_km?: number | null; thresholds_m?: {caution: number; cut: number}; frames?: Array<{frame_index: number; caution_km: number; cut_km: number}>; maximum?: {caution_km: number; cut_km: number} | null} | null
+}
+/** Solver progress of a run in progress (null otherwise and in older servers): simulated time reached of the total,
+ * complete frames so far and the newest one's live preview, the attempt's solver (a DG2 → FV1 switch restarts from
+ * zero: `restarted_from`) and the gross rain (mm/h) at the simulated time. */
+export interface FloodRunProgress {
+  stage: string; solver: string | null; attempt: number; restarted_from: string | null
+  simulated_s: number; duration_s: number; fraction: number; source: 'mass' | 'frames' | null
+  frames_available: number; latest_frame_index: number | null; latest_frame_time_s: number | null
+  latest_frame_url: string | null; rain_mm_h: number | null
+}
+/** Water budget of a run (m³): gross rain, infiltrated (gross − net), net rain the solver received, water at the
+ * start and at the end, the last frame's sheets (< ponded_min_depth_m) and ponded water, and the boundaries. */
+export interface FloodWaterBudget {
+  units?: 'm3'; gross_source?: 'curve_number' | 'runoff_coefficient' | 'no_losses'
+  gross_rain_m3: number; infiltrated_m3: number; net_rain_m3: number; initial_water_m3?: number; final_water_m3: number
+  boundary_outflow_m3: number; boundary_inflow_m3?: number
+  last_frame_water_m3?: number | null; sheet_m3: number | null; ponded_m3: number | null
+  ponded_min_depth_m?: number; last_frame_time_s?: number | null; method?: string
 }
 /** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
 export interface FloodRoiFlow {
@@ -515,7 +539,15 @@ export async function getRoiFloodResults(id: string, signal?: AbortSignal): Prom
   return (await roiResponse(`${roiRunPath(id)}results/`,{signal,headers:{Accept:'application/json'}})).json()
 }
 export async function getRoiFloodPreview(id: string, name: string, signal?: AbortSignal) {
-  const res = await roiResponse(`${roiFloodArtifactUrl(id,name)}preview/`,{signal})
+  return previewImage(await roiResponse(`${roiFloodArtifactUrl(id,name)}preview/`,{signal}))
+}
+/** Preview of a frame the solver has already written while the run is in progress (never cached). */
+export function getRoiFloodLivePreview(id: string, frameIndex: number, signal?: AbortSignal) {
+  if (!Number.isSafeInteger(frameIndex) || frameIndex < 0) throw new Error('Índice de cuadro inválido')
+  const path = `${roiRunPath(id)}live/${frameIndex}/preview/`
+  return roiResponse(path,{signal,cache:'no-store'}).then(previewImage)
+}
+async function previewImage(res: Response) {
   const raw=res.headers.get('X-Preview-Bounds')?.split(',').map(Number)
   if (res.headers.get('X-Preview-CRS')!=='EPSG:3857' || res.headers.get('X-Preview-Units')!=='m' || !res.headers.get('content-type')?.startsWith('image/png') || raw?.length!==4 || !raw.every(Number.isFinite) || raw[0]<-180 || raw[2]>180 || raw[1]<-90 || raw[3]>90 || raw[0]>=raw[2] || raw[1]>=raw[3]) throw new Error('Metadatos de preview inválidos')
   return {blob:await res.blob(),bounds:raw as [number,number,number,number]}

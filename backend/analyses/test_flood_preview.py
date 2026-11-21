@@ -54,10 +54,10 @@ class RoiPreviewTests(SimpleTestCase):
             bounds = src.bounds
         values = np.full((profile['height'], profile['width']), 1.0, dtype='float32')
         values[0, 0] = -9999
-        values[0, 1] = 0.005  # below the first class (0.01 m)
+        values[0, 1] = 0.005  # runoff sheet: the semi-transparent 0.002-0.01 m class
         values[0, 2] = 0.02
         values[0, 3] = 3.5
-        values[1, :4] = [.1, .3, .7, 1.5]
+        values[1, :5] = [.1, .3, .7, 1.5, .001]  # 0.001 m: below the first class (0.002 m), transparent
         with rasterio.open(self.path, 'w', **profile) as dst:
             dst.write(values, 1)
         raw = self.path.read_bytes()
@@ -69,7 +69,7 @@ class RoiPreviewTests(SimpleTestCase):
         self.assertEqual(response['Content-Type'], 'image/png')
         self.assertEqual(response['X-Preview-CRS'], 'EPSG:3857')
         self.assertEqual(response['X-Preview-Units'], 'm')
-        self.assertEqual(response['X-Preview-Classes'], '0.01,0.03,0.15,0.5,1,2')
+        self.assertEqual(response['X-Preview-Classes'], '0.002,0.01,0.03,0.15,0.5,1,2')
         self.assertNotIn('X-Preview-Value-Range', response)
         self.assertEqual(response['Cache-Control'], 'private, max-age=3600')
         self.assertTrue(response['ETag'].startswith('"') and response['ETag'].endswith('"'))
@@ -80,7 +80,8 @@ class RoiPreviewTests(SimpleTestCase):
         image = Image.open(io.BytesIO(response.content))
         self.assertEqual(image.mode, 'RGBA')
         self.assertEqual(image.getpixel((0, 0))[3], 0)  # nodata
-        self.assertEqual(image.getpixel((1, 0))[3], 0)  # 0.005 m: below 0.01 m, transparent
+        self.assertEqual(image.getpixel((1, 0)), (236, 245, 253, 140))  # 0.005 m: runoff sheet, semi-transparent
+        self.assertEqual(image.getpixel((4, 1))[3], 0)  # 0.001 m: below 0.002 m, transparent
         self.assertEqual(image.getpixel((2, 0)), (222, 235, 247, 255))  # 0.02 m: thin-sheet class 0.01-0.03 m
         self.assertEqual(image.getpixel((3, 0))[3], 255)  # saturado
         self.assertGreater(image.width, 0)
@@ -88,7 +89,7 @@ class RoiPreviewTests(SimpleTestCase):
         pixels = list(image.getdata())
         self.assertIn(0, [pixel[3] for pixel in pixels])
         self.assertTrue(any(pixel[3] == 255 for pixel in pixels))
-        # One sequential blue per depth class: 0.01-0.03, 0.03-0.15, 0.15-0.5, 0.5-1, 1-2 and >= 2 m.
+        # One sequential blue per opaque depth class: 0.01-0.03, 0.03-0.15, 0.15-0.5, 0.5-1, 1-2 and >= 2 m.
         colours = {pixel[:3] for pixel in pixels if pixel[3] == 255}
         self.assertEqual(colours, {(222, 235, 247), (198, 219, 239), (107, 174, 214), (33, 113, 181), (8, 81, 156),
                                    (8, 48, 107)})

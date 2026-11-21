@@ -53,6 +53,8 @@ import {
 import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
 import { FloodDepthLegend } from './FloodDepthLegend'
+import { RainOverlay } from './flood/RainOverlay'
+import type { FloodMapAnimation } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation.ts'
 import { translate as tr, localizeText as localizeMapText, getLanguage } from '../i18n/core.ts'
 import { geometryBounds, rectangleFromCorners, type AdministrativeGeometry } from '../utils/roi'
@@ -161,6 +163,8 @@ const CROP_MASK_LINE_LAYER = 'crop-mask-line'
 const FLOOD_FLOW_SOURCE = 'flood-flow-arrows-source'
 const FLOOD_FLOW_LAYER = 'flood-flow-arrows-layer'
 const FLOOD_FLOW_ICON = 'flood-flow-arrow'
+// One image source + raster layer per preloaded animation frame: changing frame only changes opacities.
+const FLOOD_ANIM_PREFIX = 'flood-anim-frame-'
 
 /** North-pointing arrow icon (white with dark outline); the layer rotates it by each arrow's bearing. */
 function flowArrowIcon(): { width: number; height: number; data: Uint8ClampedArray } {
@@ -407,6 +411,11 @@ export function MapCanvas({
   const [swipePct, setSwipePct] = useState<number>(50)
   const [isDraggingSwipe, setIsDraggingSwipe] = useState(false)
   const [isDraggingFloodSwipe, setIsDraggingFloodSwipe] = useState(false)
+  // DG2 animation (set by the panel): preloaded frames, frame shown, cross-fade, its arrows and the rain at that time.
+  const [floodAnimation, setFloodAnimation] = useState<FloodMapAnimation | null>(null)
+  // Live frames of a run in progress are shown before any result exists for the ROI (the panel scopes them to it).
+  const floodAnimating = Boolean(floodAnimation && (hasCurrentFloodResult || floodAnimation.live))
+  const floodAnimationLayers = useRef<{ layers: Array<{ id: string; url: string }>; shown: number | null; opacity: number; visible: boolean } | null>(null)
   const [sceneManifestT1, setSceneManifestT1] = useState<ExploreWebManifest | null>(null)
   const [sceneManifestT2, setSceneManifestT2] = useState<ExploreWebManifest | null>(null)
 
@@ -1408,6 +1417,7 @@ export function MapCanvas({
       Array.isArray(activeFlood.rasterBounds) &&
       activeFlood.rasterBounds.length === 4 &&
       activeFlood.showRasterOnMap !== false &&
+      !floodAnimating &&
       activeDockWindow?.kind !== 'sismo'
 
     if (!shouldShow) {
@@ -1471,14 +1481,76 @@ export function MapCanvas({
     activeFlood.waterOpacity,
     activeFlood.compareMode,
     hasCurrentFloodResult,
+    floodAnimating,
     activeDockWindow?.kind,
   ])
 
-  // DG2 flow arrows (solver velocities of the selected frame), drawn above the depth raster.
+  // DG2 animation (playback or live frames): every frame is its own image layer, added once (frames only ever get
+  // appended or replaced as a whole), so changing frame never reloads an image. Moving forward the new layer, which is
+  // above, fades in and the previous one disappears when the fade ends; moving back both cross-fade.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-    const data = activeFlood.flowArrows
+    const animation = floodAnimating ? floodAnimation : null
+    const frames = animation?.frames ?? []
+    const state = floodAnimationLayers.current ?? { layers: [], shown: null, opacity: -1, visible: true }
+    floodAnimationLayers.current = state
+    try {
+      let keep = 0
+      while (keep < state.layers.length && keep < frames.length && state.layers[keep].url === frames[keep].url) keep++
+      for (const { id } of state.layers.splice(keep)) {
+        if (map.getLayer(id)) map.removeLayer(id)
+        if (map.getSource(id)) map.removeSource(id)
+      }
+      if (state.shown != null && state.shown >= keep) state.shown = null
+      if (!animation) { state.opacity = -1; return }
+      const before = map.getLayer(FLOOD_FLOW_LAYER) ? FLOOD_FLOW_LAYER : map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined
+      const visible = activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo'
+      for (let i = keep; i < frames.length; i++) {
+        const id = `${FLOOD_ANIM_PREFIX}${i}`
+        const [w, s, e, n] = frames[i].bounds
+        map.addSource(id, { type: 'image', url: frames[i].url, coordinates: [[w, n], [e, n], [e, s], [w, s]] })
+        map.addLayer({ id, type: 'raster', source: id, layout: { visibility: visible ? 'visible' : 'none' },
+          paint: { 'raster-opacity': 0, 'raster-fade-duration': 0, 'raster-resampling': 'linear' } }, before)
+        state.layers.push({ id, url: frames[i].url })
+      }
+      if (state.visible !== visible) {
+        for (const { id } of state.layers) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
+        state.visible = visible
+      }
+      const opacity = ((activeFlood.waterOpacity ?? 85) / 100) * 0.9
+      const next = animation.index, fade = animation.fadeMs
+      if (state.layers[next] && (state.shown !== next || state.opacity !== opacity)) {
+        const previous = state.shown
+        if (previous != null && previous !== next && state.layers[previous]) {
+          const forward = next > previous
+          map.setPaintProperty(state.layers[previous].id, 'raster-opacity-transition', { duration: forward ? 0 : fade, delay: forward ? fade : 0 })
+          map.setPaintProperty(state.layers[previous].id, 'raster-opacity', 0)
+        }
+        map.setPaintProperty(state.layers[next].id, 'raster-opacity-transition', { duration: fade, delay: 0 })
+        map.setPaintProperty(state.layers[next].id, 'raster-opacity', opacity)
+        state.shown = next
+        state.opacity = opacity
+      }
+    } catch (err) {
+      console.warn('No se pudo dibujar la animación de inundación:', err)
+    }
+  }, [
+    floodAnimating,
+    mapReady,
+    floodAnimation,
+    hasCurrentFloodResult,
+    activeFlood.showRasterOnMap,
+    activeFlood.compareMode,
+    activeFlood.waterOpacity,
+    activeDockWindow?.kind,
+  ])
+
+  // DG2 flow arrows (solver velocities of the selected frame, or of the animation frame), drawn above the depth raster.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const data = floodAnimating ? floodAnimation!.flowArrows : activeFlood.flowArrows
     const shouldShow =
       hasCurrentFloodResult &&
       Boolean(data) &&
@@ -1520,6 +1592,8 @@ export function MapCanvas({
   }, [
     mapReady,
     activeFlood.flowArrows,
+    floodAnimating,
+    floodAnimation,
     activeFlood.showFlowArrows,
     activeFlood.compareMode,
     hasCurrentFloodResult,
@@ -2753,8 +2827,13 @@ export function MapCanvas({
           </div>
         )}
 
+        {/* Lluvia animada (o insignia estática con movimiento reducido) mientras la animación DG2 muestra un instante con lluvia */}
+        {floodAnimating && floodAnimation!.showRain && activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo' && (
+          <RainOverlay mmPerHour={floodAnimation!.rainMmH} />
+        )}
+
         {/* Leyenda de profundidad DG2: las mismas clases que el PNG de vista previa */}
-        {hasCurrentFloodResult && activeFlood.rasterUrl && activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo' && (
+        {(floodAnimating || (hasCurrentFloodResult && activeFlood.rasterUrl)) && activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo' && (
           <FloodDepthLegend />
         )}
 
@@ -3330,6 +3409,7 @@ export function MapCanvas({
             croppedRegion={croppedRegion}
             onFlyToZone={handleFlyToZone}
             onSelectPresetROI={onSelectPresetROI}
+            onAnimationChange={setFloodAnimation}
             onClose={() => {
               const mapTab = dockWindows.find((w) => w.kind === 'map')
               if (mapTab) onActivateDockWindow(mapTab.id)

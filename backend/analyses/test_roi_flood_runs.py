@@ -1,5 +1,6 @@
 """Contrato HTTP ROI: sin red ni nueva ejecución nativa."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -8,12 +9,13 @@ from unittest.mock import patch
 import uuid
 
 from django.test import SimpleTestCase, override_settings
+from PIL import Image
 from rest_framework.test import APIClient
 
 from pipeline.tests.test_roi_runner import payload, config
 
 BASE = Path(__file__).resolve().parents[2] / 'data/test-runs'
-STATUS_KEYS = {'id','state','stage','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','land_surface','rainfall_source','design_storm','terrain_source','vertical_datum','terrain_attribution','tide','bathymetry','synthetic','hydraulic_accuracy_validated','status_url','results_url'}
+STATUS_KEYS = {'id','state','stage','progress','simulation_duration_s','save_interval_s','dg2_depth_thresh_m','requested_solver','solver','solver_fallback','solver_attempts','boundary','initial_condition','losses','lakes','land_surface','rainfall_source','design_storm','terrain_source','vertical_datum','terrain_attribution','tide','bathymetry','synthetic','hydraulic_accuracy_validated','status_url','results_url'}
 PROOF = BASE / 'roi-dg2-136934da-7370-4113-b337-36ebc0bcafcc/6c5b38f4-9d14-4c71-912b-04ed7629d94a'
 
 
@@ -221,11 +223,108 @@ class RoiHttpTests(SimpleTestCase):
                          ['copernicus', 'EGM2008', 'produced using Copernicus WorldDEM-30'])
 
     def test_preview_palette_uses_the_pipeline_depth_classes(self):
-        from analyses.roi_flood_runs import _DEPTH_CLASSES
+        from analyses.roi_flood_runs import _DEPTH_CLASSES, _DEPTH_CLASS_ALPHA
         from pipeline.hydrology.results import DEPTH_CLASS_BOUNDS_M
         self.assertEqual(tuple(lower for lower, _ in _DEPTH_CLASSES), DEPTH_CLASS_BOUNDS_M)
-        # The 0.01-0.03 m thin-sheet class is the lightest blue of the sequence.
-        self.assertEqual(_DEPTH_CLASSES[0], (.01, (222, 235, 247)))
+        # The 0.002-0.01 m runoff-sheet class is the lightest and the only semi-transparent one; 0.01-0.03 m follows.
+        self.assertEqual(_DEPTH_CLASSES[:2], [(.002, (236, 245, 253)), (.01, (222, 235, 247))])
+        self.assertEqual(_DEPTH_CLASS_ALPHA, {.002: 140})
+
+    def running(self, frames=(), fallback=True):
+        """Seeded run put back to `running` in its FV1 fallback attempt, with the given frame files written so far."""
+        import time
+        run_id, state, directory = self.seed()
+        state.update(state='running', stage='running', solver='fv1', simulation_duration_s=1200, save_interval_s=300,
+                     deadline_epoch_s=time.time() + 3600,
+                     solver_fallback={'from': 'dg2', 'to': 'fv1', 'reason': 'negative_depth_artifacts'} if fallback else None)
+        state.pop('result'); state.pop('artifacts')
+        (directory / 'state.json').write_text(json.dumps(state))
+        outputs = directory / ('work-fallback' if fallback else 'work') / 'outputs'
+        outputs.mkdir(parents=True)
+        header = 'ncols 2\nnrows 2\nxllcorner 499960\nyllcorner 1857360\ncellsize 20\nNODATA_value -9999\n'
+        for name, body in frames:
+            (outputs / name).write_text(header + body)
+        return run_id, state, directory, outputs
+
+    def test_status_reports_the_solver_progress_while_running(self):
+        run_id, state, directory, outputs = self.running(frames=[('roi-0000.wd', '.005 .02\n-9999 1.5\n'), ('roi-0001.wd', '.1 .2\n.3')])
+        progress = self.alice.get(f'/api/flood-roi-runs/{run_id}/').json()['progress']
+        # Only the complete frame counts; the FV1 fallback restarted from zero and says so.
+        self.assertEqual({k: progress[k] for k in ('stage', 'solver', 'attempt', 'restarted_from', 'simulated_s', 'duration_s', 'fraction',
+                                                   'frames_available', 'latest_frame_index', 'latest_frame_time_s')},
+                         {'stage': 'running', 'solver': 'fv1', 'attempt': 2, 'restarted_from': 'dg2', 'simulated_s': 0, 'duration_s': 1200,
+                          'fraction': 0, 'frames_available': 1, 'latest_frame_index': 0, 'latest_frame_time_s': 0})
+        self.assertEqual(progress['latest_frame_url'], f'/api/flood-roi-runs/{run_id}/live/0/preview/')
+        # Gross rain at the simulated time (the seeded synthetic profile has no losses: 0.002 m/s in its first half second).
+        self.assertAlmostEqual(progress['rain_mm_h'], 0.002000978706862038 * 3.6e6)
+        # Terminal runs and runs not yet started carry no progress.
+        state.update(state='failed', stage='failed', error='solver_timeout')
+        (directory / 'state.json').write_text(json.dumps(state))
+        self.assertIsNone(self.alice.get(f'/api/flood-roi-runs/{run_id}/').json()['progress'])
+
+    def test_live_preview_serves_only_complete_frames_of_the_owner(self):
+        run_id, state, directory, outputs = self.running()
+        url = f'/api/flood-roi-runs/{run_id}/live/0/preview/'
+        self.assertEqual(self.alice.get(url).status_code, 404)  # before the first frame
+        header = 'ncols 2\nnrows 2\nxllcorner 499960\nyllcorner 1857360\ncellsize 20\nNODATA_value -9999\n'
+        (outputs / 'roi-0000.wd').write_text(header + '.005 .02\n-9999')  # being written
+        self.assertEqual(self.alice.get(url).status_code, 404)
+        (outputs / 'roi-0000.wd').write_text(header + '.005 .02\n-9999 1.5\n')
+        self.assertIn(self.anon.get(url).status_code, (401, 403))
+        self.assertEqual(self.bob.get(url).status_code, 404)
+        response = self.alice.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([response['Content-Type'], response['X-Preview-CRS'], response['X-Preview-Units'], response['Cache-Control']],
+                         ['image/png', 'EPSG:3857', 'm', 'no-store'])
+        self.assertEqual(response['X-Preview-Classes'], '0.002,0.01,0.03,0.15,0.5,1,2')
+        bounds = [float(v) for v in response['X-Preview-Bounds'].split(',')]
+        self.assertTrue(-93.1 < bounds[0] < bounds[2] < -92.9 and 16.7 < bounds[1] < bounds[3] < 16.9)
+        image = Image.open(io.BytesIO(response.content))
+        alphas = sorted({pixel[3] for pixel in image.convert('RGBA').getdata()})
+        self.assertEqual(alphas, [0, 140, 255])  # nodata, the 2-10 mm sheet, deeper water
+        self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{run_id}/live/7/preview/').status_code, 404)
+        # A symlinked output directory is never followed; a finished run uses the stored previews instead.
+        shutil.move(outputs, directory / 'elsewhere'); outputs.symlink_to(directory / 'elsewhere')
+        self.assertEqual(self.alice.get(url).status_code, 404)
+        outputs.unlink(); shutil.move(directory / 'elsewhere', outputs)
+        self.assertEqual(self.alice.get(url).status_code, 200)
+        state.update(state='succeeded', stage='succeeded')
+        (directory / 'state.json').write_text(json.dumps(state))
+        self.assertEqual(self.alice.get(url).status_code, 404)
+
+    def test_results_carry_the_gross_rain_and_where_the_rain_went(self):
+        run_id, state, directory = self.seed()
+        url = f'/api/flood-roi-runs/{run_id}/results/'
+        # Seeded run: no losses and no .mass, so the gross hyetograph is the net one and there is no budget.
+        body = self.alice.get(url).json()
+        self.assertEqual(body['rainfall_gross_segments'], body['rainfall_segments'])
+        self.assertIsNone(body['water_budget'])
+        # Curve Number: the gross ROI-mean rain per interval as mm/h, beside the net one the solver received.
+        state['provenance']['rain'] = {'method': {'method': 'scs_curve_number_incremental', 'roi_mean_net_mm': [1.0, 3.0],
+                                                  'roi_gross_mm': [2.0, 6.0], 'gross_total_mm': 8.0, 'roi_cells': 10,
+                                                  'curve_number': {'interval_edges_s': [0, 600, 1200]}}}
+        # An older summary with a .mass but no stored budget: computed on the fly, without the last-frame split.
+        state['result']['mass_balance'] = {'rain_m3': 1.6, 'final_volume_m3': 1.2, 'series': [[0, 0, 0], [1200, 1.2, 1.6]]}
+        (directory / 'state.json').write_text(json.dumps(state))
+        body = self.alice.get(url).json()
+        self.assertEqual(body['rainfall_gross_segments'], [{'start_s': 0.0, 'end_s': 600.0, 'intensity_mm_h': 12.0},
+                                                           {'start_s': 600.0, 'end_s': 1200.0, 'intensity_mm_h': 36.0}])
+        budget = body['water_budget']
+        cell = state['result']['grid']['cellsize_m']
+        self.assertAlmostEqual(budget['gross_rain_m3'], 8.0 / 1000 * 10 * cell ** 2)
+        self.assertAlmostEqual(budget['infiltrated_m3'], 8.0 / 1000 * 10 * cell ** 2 - 1.6)
+        self.assertEqual([budget['net_rain_m3'], budget['final_water_m3'], budget['gross_source'], budget['sheet_m3']],
+                         [1.6, 1.2, 'curve_number', None])
+        self.assertAlmostEqual(budget['boundary_outflow_m3'], .4)
+        # Runoff coefficient: the uniform profile is net rain, gross = net / C. A stored budget is echoed as it is.
+        state['provenance']['rain'] = json.loads((PROOF / 'state.json').read_text())['provenance']['rain']
+        state['losses'] = {'infiltration': 'runoff_coefficient', 'runoff_coefficient': .5}
+        state['result']['water_budget'] = {'units': 'm3', 'gross_rain_m3': 3.2}
+        (directory / 'state.json').write_text(json.dumps(state))
+        body = self.alice.get(url).json()
+        self.assertEqual([round(s['intensity_mm_h'], 6) for s in body['rainfall_gross_segments']],
+                         [round(s['intensity_mm_h'] * 2, 6) for s in body['rainfall_segments']])
+        self.assertEqual(body['water_budget'], {'units': 'm3', 'gross_rain_m3': 3.2})
 
     def test_results_echo_each_run_own_depth_classes(self):
         # Runs made before the 0.01 m class keep their five bounds; the UI reads them from the run.

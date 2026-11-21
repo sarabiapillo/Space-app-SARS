@@ -43,7 +43,20 @@ class ServiceSetupTests(SimpleTestCase):
         self.assertEqual({key: config[key] for key in ('timeout_s', 'preparation_timeout_s', 'max_cells',
                                                       'max_rain_values', 'max_frames', 'max_tiles')},
                          {'timeout_s': 120.0, 'preparation_timeout_s': 600.0, 'max_cells': 3000,
-                          'max_rain_values': 100_000, 'max_frames': 20, 'max_tiles': 2})
+                          'max_rain_values': 1_000_000, 'max_frames': 121, 'max_tiles': 2})
+
+    def test_default_frame_budget_allows_a_fluid_animation_of_the_default_domain(self):
+        # The animation needs ~60-120 frames: the 14400 s example saved every 300 s counts floor(14400/300) + 2 = 50
+        # frames and the runner also caps frames x cells (and rain intervals x cells) by max_rain_values.
+        config = build_flood_service_settings(PROJECT, {})[2]
+        self.assertLessEqual(14400 // 300 + 2, config['max_frames'])
+        self.assertLessEqual(config['max_frames'] * config['max_cells'], config['max_rain_values'])
+        override = build_flood_service_settings(PROJECT, {'FLOOD_ROI_DG2_MAX_FRAMES': '20', 'FLOOD_ROI_DG2_MAX_RAIN_VALUES': '100000'})[2]
+        self.assertEqual((override['max_frames'], override['max_rain_values']), (20, 100_000))
+        for name in ('FLOOD_ROI_DG2_MAX_FRAMES', 'FLOOD_ROI_DG2_MAX_RAIN_VALUES'):
+            for value in ('0', '50000001', '1.5'):
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    build_flood_service_settings(PROJECT, {name: value})
 
     def test_environment_still_overrides_default_budgets(self):
         config = build_flood_service_settings(PROJECT, {'FLOOD_ROI_DG2_MAX_CELLS': '1000', 'FLOOD_ROI_DG2_TIMEOUT_S': '15'})[2]

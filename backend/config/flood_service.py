@@ -46,8 +46,10 @@ def build_flood_service_settings(project_root, environ):
         'timeout_s': positive('TIMEOUT_S', 120, 120),
         'preparation_timeout_s': positive('PREPARATION_TIMEOUT_S', 600, 600),
         'max_cells': positive('MAX_CELLS', 3000, 50_000_000, integer=True),
-        'max_rain_values': positive('MAX_RAIN_VALUES', 100_000, 50_000_000, integer=True),
-        'max_frames': positive('MAX_FRAMES', 20, 50_000_000, integer=True),
+        # Up to 121 frames (floor(duration / save) + 2) so the panel can animate the run, e.g. 14400 s every 300 s = 50;
+        # max_rain_values also caps frames x cells (121 x 3000 = 363 000) and rain intervals x cells.
+        'max_rain_values': positive('MAX_RAIN_VALUES', 1_000_000, 50_000_000, integer=True),
+        'max_frames': positive('MAX_FRAMES', 121, 50_000_000, integer=True),
         'max_tiles': positive('MAX_TILES', 2, 50_000_000, integer=True),
         # HydroLAKES GeoPackage (python -m pipeline.hydrology.lakes prepare ...); the lakes option is
         # refused per request while this file does not exist.

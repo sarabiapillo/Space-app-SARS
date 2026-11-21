@@ -174,3 +174,50 @@ test('relative time uses selected display locale without changing input signatur
   assert.match(formatRelative('2026-11-04T12:00:00Z', now), /Nov/)
   setLanguage('es')
 })
+
+test('animation controls, rain badge and water budget are shown in the selected language only', async () => {
+  const { FloodPlaybackControls } = await import('../src/components/flood/FloodPlayback.tsx')
+  const { FloodWaterBudget } = await import('../src/components/flood/FloodWaterBudget.tsx')
+  const { RainOverlay } = await import('../src/components/flood/RainOverlay.tsx')
+  const frames = [{ name: 'roi-0000.wd.tif', frameIndex: 0, scheduledTimeS: 0, url: 'blob:a', bounds: [0, 0, 1, 1] },
+    { name: 'roi-0001.wd.tif', frameIndex: 1, scheduledTimeS: 3900, url: 'blob:b', bounds: [0, 0, 1, 1] }]
+  const noop = () => {}
+  const playback = { available: true, status: 'ready', progress: 2, total: 2, frames, current: frames[1], active: true, error: null, speed: 1,
+    showRain: true, reducedMotion: false, rainMmH: 36, index: 1, playing: true, loop: false,
+    play: noop, pause: noop, seek: noop, setSpeed: noop, setShowRain: noop, setLoop: noop, stop: noop }
+  const budget = { water_budget: { gross_source: 'curve_number', gross_rain_m3: 9078, infiltrated_m3: 6285, net_rain_m3: 2793, final_water_m3: 2792,
+    boundary_outflow_m3: 1, boundary_inflow_m3: 0, initial_water_m3: 0, sheet_m3: 300, ponded_m3: 2492, last_frame_time_s: 14400 } }
+  setLanguage('es')
+  const es = render(FloodPlaybackControls, { playback, onShowMaximum: noop })
+  for (const text of [/Pausar/, /01:05<\/strong> \/ 01:05/, /Velocidad/, /4×/, /Repetir/, /Mostrar lluvia/, /Ver máximo/, /Lluvia bruta en este instante: 36 mm\/h/, /tiempo programado/]) assert.match(es, text)
+  const esBudget = render(FloodWaterBudget, { result: budget })
+  for (const text of [/¿A dónde fue la lluvia\?/, /Infiltrada o retenida/, /Láminas &lt; 3 cm/, /Encharcada ≥ 3 cm/, /Salió por las fronteras/, /número de curva/, /04:00/, /no validado/]) assert.match(esBudget, text)
+  assert.match(render(RainOverlay, { mmPerHour: 36 }), /Lloviendo 36 mm\/h/)
+  assert.equal(render(RainOverlay, { mmPerHour: 0 }), '')
+  assert.match(render(FloodPlaybackControls, { playback: { ...playback, available: false, total: 1 }, onShowMaximum: noop }), /menos de dos cuadros/)
+  setLanguage('en')
+  const en = render(FloodPlaybackControls, { playback: { ...playback, playing: false }, onShowMaximum: noop })
+  for (const text of [/Play/, /Speed/, /Loop/, /Show rain/, /Show maximum/, /Gross rain at this instant: 36 mm\/h/, /scheduled save time/]) assert.match(en, text)
+  assert.doesNotMatch(en, /Reproducir|Velocidad|Repetir|Mostrar lluvia|Ver máximo|Lluvia bruta/)
+  const enBudget = render(FloodWaterBudget, { result: budget })
+  for (const text of [/Where did the rain go\?/, /Infiltrated or retained/, /Sheets &lt; 3 cm/, /Ponded ≥ 3 cm/, /Left through the boundaries/, /Curve Number/, /not validated/]) assert.match(enBudget, text)
+  assert.doesNotMatch(enBudget, /lluvia|Infiltrada|Encharcada|fronteras/)
+  assert.match(render(RainOverlay, { mmPerHour: 36 }), /Raining 36 mm\/h/)
+  setLanguage('es')
+})
+
+test('run progress card shows the simulated time, the frames and a solver restart in the selected language only', async () => {
+  const { FloodRunProgress } = await import('../src/components/flood/FloodRunProgress.tsx')
+  const progress = { stage: 'running', solver: 'fv1', attempt: 2, restarted_from: 'dg2', simulated_s: 3600, duration_s: 14400, fraction: .25,
+    source: 'mass', frames_available: 13, latest_frame_index: 12, latest_frame_time_s: 3600, latest_frame_url: '/x', rain_mm_h: 27.04 }
+  const run = { id: 'r', state: 'running', stage: 'running', progress }
+  setLanguage('es')
+  const es = render(FloodRunProgress, { run, showRain: true, onShowRainChange() {} })
+  for (const text of [/aria-valuenow="25"/, /Tiempo simulado 01:00 de 04:00 \(25 %\) · FV1 · 13 cuadros listos en el mapa · lluvia bruta 27 mm\/h/, /DG2 falló; el cálculo se reinició desde el principio con FV1/, /Mostrar lluvia/]) assert.match(es, text)
+  assert.match(render(FloodRunProgress, { run: { ...run, progress: null } }), /Corrida en curso/)  // preparing: indeterminate bar
+  setLanguage('en')
+  const en = render(FloodRunProgress, { run, showRain: true, onShowRainChange() {} })
+  for (const text of [/Simulated time 01:00 of 04:00 \(25 %\) · FV1 · 13 frames ready on the map · gross rain 27 mm\/h/, /DG2 failed; the computation restarted from the beginning with FV1/, /Show rain/]) assert.match(en, text)
+  assert.doesNotMatch(en, /Tiempo simulado|falló|Mostrar lluvia/)
+  setLanguage('es')
+})

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import io
 import math
 from pathlib import Path
 import re
@@ -29,10 +30,13 @@ CHANNEL_MIN_UPSLOPE_KM2 = .12
 FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H) over cells at '
                'least min_depth_m deep, outside the D8 channel network of the solver DEM (upslope area >= '
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
-# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts. The 0.01-0.03 m
-# class shows thin sheets of water; the flooded area of the panel still counts from 0.03 m. Runs store their own
-# list (depth_classes_m), so results made with the earlier (.03, .15, .5, 1, 2) stay readable.
-DEPTH_CLASS_BOUNDS_M = (.01, .03, .15, .5, 1, 2)
+# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts. The 0.002-0.01 m
+# class shows the runoff sheets during the rain (a few mm on the slopes) and 0.01-0.03 m the thin sheets; the
+# flooded area of the panel still counts from 0.03 m. Runs store their own list (depth_classes_m), so results made
+# with the earlier (.03, .15, .5, 1, 2) or (.01, .03, ...) bounds stay readable.
+DEPTH_CLASS_BOUNDS_M = (.002, .01, .03, .15, .5, 1, 2)
+# Water at least this deep is ponded (the panel's flooded area); thinner water is a runoff sheet on the slopes.
+PONDED_MIN_DEPTH_M = .03
 # DG2 wet/dry fronts on steep terrain can leave negative cell-average depths even with dg2depththresh.
 # Every negative depth of a solver output is set to 0; the water volume this adds, sum(-h_neg) * cell^2, is
 # compared per frame (and on the maximum grid) with the water left in that frame after clipping, sum(h) * cell^2.
@@ -82,43 +86,84 @@ def read_signed_ascii(path, max_cells=4_000_000):
 read_velocity_ascii = read_signed_ascii
 
 
+def read_depth_ascii_text(text, max_cells=4_000_000, *, clip_negative=False):
+    """``read_depth_ascii`` on the text of a frame already read (e.g. through a no-follow file descriptor)."""
+    if not isinstance(clip_negative, bool):
+        raise ValueError('clip_negative must be a boolean')
+    _limit(max_cells)
+    return _parse_ascii(io.StringIO(text), max_cells, nonnegative=True, tolerance=math.inf if clip_negative else 0.0)
+
+
+def complete_depth_frames(directory, *, max_bytes=64 * 1024 * 1024):
+    """Indexed ``.wd`` frames the solver has finished writing, in index order, as (index, path).
+
+    A frame is complete when a later frame exists, or when it has exactly nrows + 6 newline-terminated lines (the
+    newest frame while the solver runs). Symlinks, other files and frames larger than ``max_bytes`` are skipped.
+    """
+    directory = Path(directory)
+    if not directory.is_dir() or directory.is_symlink():
+        return []
+    frames = sorted((int(match.group(2)), path) for path in directory.iterdir()
+                    if (match := _FRAME.fullmatch(path.name)) and not path.is_symlink() and path.is_file())
+    complete = frames[:-1]
+    if frames and _ascii_finished(frames[-1][1], max_bytes):
+        complete.append(frames[-1])
+    return complete
+
+
+def _ascii_finished(path, max_bytes):
+    try:
+        if path.stat().st_size > max_bytes:
+            return False
+        data = path.read_bytes()
+        lines = data.split(b'\n', 2)
+        parts = lines[1].split() if len(lines) > 2 else []
+        return (len(parts) == 2 and parts[0].lower() == b'nrows' and parts[1].isdigit() and data.endswith(b'\n')
+                and data.count(b'\n') == int(parts[1]) + len(_HEADERS))
+    except OSError:
+        return False
+
+
 def _read_ascii(path, max_cells, *, nonnegative, tolerance=0.0):
     _limit(max_cells)
-    path = Path(path)
-    with path.open(encoding='ascii') as stream:
-        fields = {}
-        for expected in _HEADERS:
-            parts = stream.readline().split()
-            if len(parts) != 2 or parts[0].lower() != expected:
-                raise ValueError('invalid ESRI ASCII header')
-            try:
-                value = float(parts[1])
-            except ValueError as exc:
-                raise ValueError('invalid ESRI ASCII header value') from exc
-            if not math.isfinite(value):
-                raise ValueError('nonfinite ESRI ASCII header')
-            fields[expected] = value
-        width, height = fields['ncols'], fields['nrows']
-        if (not width.is_integer() or not height.is_integer() or width < 1 or height < 1 or
-                width * height > max_cells or fields['cellsize'] <= 0):
-            raise ValueError('invalid or oversized ESRI ASCII grid')
-        width, height = int(width), int(height)
-        rows = []
-        nodata = fields['nodata_value']
-        for _ in range(height):
-            parts = stream.readline().split()
-            if len(parts) != width:
-                raise ValueError('incorrect ESRI ASCII shape')
-            try:
-                row = [float(part) for part in parts]
-            except ValueError as exc:
-                raise ValueError('invalid depth value' if nonnegative else 'invalid grid value') from exc
-            if any(not math.isfinite(v) or (nonnegative and v != nodata and v < -tolerance) for v in row):
-                raise ValueError('depth must be finite and nonnegative outside nodata' if nonnegative
-                                 else 'values must be finite')
-            rows.append(row)
-        if stream.read(1):
-            raise ValueError('extra ESRI ASCII data')
+    with Path(path).open(encoding='ascii') as stream:
+        return _parse_ascii(stream, max_cells, nonnegative=nonnegative, tolerance=tolerance)
+
+
+def _parse_ascii(stream, max_cells, *, nonnegative, tolerance=0.0):
+    fields = {}
+    for expected in _HEADERS:
+        parts = stream.readline().split()
+        if len(parts) != 2 or parts[0].lower() != expected:
+            raise ValueError('invalid ESRI ASCII header')
+        try:
+            value = float(parts[1])
+        except ValueError as exc:
+            raise ValueError('invalid ESRI ASCII header value') from exc
+        if not math.isfinite(value):
+            raise ValueError('nonfinite ESRI ASCII header')
+        fields[expected] = value
+    width, height = fields['ncols'], fields['nrows']
+    if (not width.is_integer() or not height.is_integer() or width < 1 or height < 1 or
+            width * height > max_cells or fields['cellsize'] <= 0):
+        raise ValueError('invalid or oversized ESRI ASCII grid')
+    width, height = int(width), int(height)
+    rows = []
+    nodata = fields['nodata_value']
+    for _ in range(height):
+        parts = stream.readline().split()
+        if len(parts) != width:
+            raise ValueError('incorrect ESRI ASCII shape')
+        try:
+            row = [float(part) for part in parts]
+        except ValueError as exc:
+            raise ValueError('invalid depth value' if nonnegative else 'invalid grid value') from exc
+        if any(not math.isfinite(v) or (nonnegative and v != nodata and v < -tolerance) for v in row):
+            raise ValueError('depth must be finite and nonnegative outside nodata' if nonnegative
+                             else 'values must be finite')
+        rows.append(row)
+    if stream.read(1):
+        raise ValueError('extra ESRI ASCII data')
     values = np.asarray(rows, dtype='float64')
     mask = values == nodata
     clipped = nonnegative and (values < 0) & ~mask
@@ -264,7 +309,9 @@ def summarize_results(directory, *, save_interval_s, crs=None, max_cells=4_000_0
         elif signature != reference:
             raise ValueError('mixed grids across frames/max')
         record = {'file': path.name, 'source_sha256': _sha(path),
-                  'stats': {**data['stats'], 'depth_class_cells': _depth_class_cells(data)}}
+                  'stats': {**data['stats'], 'depth_class_cells': _depth_class_cells(data),
+                            # Volumes per instant only: the maximum grid mixes times, its sum is no volume.
+                            **(_frame_volumes(data) if index is not None else {})}}
         if road_result and road_result['available']:
             exposure = road_exposure(roads['roads'], data, crs)
             road_result['total_km'] = exposure['total_km']
@@ -464,10 +511,62 @@ def flow_arrows(depth, vx, vy, *, crs, eligible=None, max_arrows=FLOW_MAX_ARROWS
 
 
 def _depth_class_cells(data):
-    """Valid cells per depth class: [0.01, 0.03), [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2) and >= 2 m."""
+    """Valid cells per depth class: [0.002, 0.01), [0.01, 0.03), [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2), >= 2 m."""
     values = data['values'][data['values'] != data['nodata']]
     edges = [*DEPTH_CLASS_BOUNDS_M, math.inf]
     return [int(np.count_nonzero((values >= low) & (values < high))) for low, high in zip(edges, edges[1:])]
+
+
+def _frame_volumes(data):
+    """Water of one frame (m3, depths after clipping): runoff sheets thinner than PONDED_MIN_DEPTH_M and ponded water."""
+    values = data['values'][data['values'] != data['nodata']]
+    area = data['grid']['cellsize_m'] ** 2
+    sheet = float(values[(values > 0) & (values < PONDED_MIN_DEPTH_M)].sum()) * area
+    ponded = float(values[values >= PONDED_MIN_DEPTH_M].sum()) * area
+    return {'volume_m3': sheet + ponded, 'sheet_volume_m3': sheet, 'ponded_volume_m3': ponded}
+
+
+WATER_BUDGET_METHOD = (
+    'gross rain: Curve Number runs, gross_total_mm on the ROI cells (rain.json); runoff coefficient C, net / C; '
+    'otherwise gross = net. net rain = cumulative solver rain (.mass). infiltrated = gross - net (losses before the '
+    'solver: infiltration, initial abstraction, urban drainage). final water = .mass volume at the end; initial water '
+    '= .mass volume of the first row minus its rain. boundaries = net + initial - final (outflow when positive, inflow '
+    'when negative). sheets (< ponded_min_depth_m) and ponded water are summed on the last frame depths.')
+
+
+def water_budget(summary, *, rain=None, runoff_coefficient=None):
+    """Where the rain went (m3), from numbers the run already has; None without a mass balance.
+
+    ``summary`` is a ``summarize_results`` result, ``rain`` the rain.json manifest (Curve Number runs carry the gross
+    rain in ``method``) and ``runoff_coefficient`` the C the solver rain was multiplied by (None when not applied).
+    The last frame's sheet/ponded split is None for summaries made before per-frame volumes existed.
+    """
+    balance = summary.get('mass_balance')
+    if not balance or not balance.get('series'):
+        return None
+    net, final = float(balance['rain_m3']), float(balance['final_volume_m3'])
+    first = balance['series'][0]
+    initial = max(float(first[1]) - float(first[2]), 0.0)
+    method = (rain or {}).get('method') or {}
+    cell = float(summary['grid']['cellsize_m'])
+    if method.get('gross_total_mm') is not None and method.get('roi_cells'):
+        gross, source = float(method['gross_total_mm']) / 1000 * int(method['roi_cells']) * cell ** 2, 'curve_number'
+    elif runoff_coefficient:
+        gross, source = net / float(runoff_coefficient), 'runoff_coefficient'
+    else:
+        gross, source = net, 'no_losses'
+    boundary = net + initial - final
+    last = summary['frames'][-1] if summary.get('frames') else {}
+    stats = last.get('stats') or {}
+    budget = {'units': 'm3', 'gross_source': source, 'gross_rain_m3': gross, 'infiltrated_m3': max(gross - net, 0.0),
+              'net_rain_m3': net, 'initial_water_m3': initial, 'final_water_m3': final,
+              'boundary_outflow_m3': max(boundary, 0.0), 'boundary_inflow_m3': max(-boundary, 0.0),
+              'last_frame_water_m3': stats.get('volume_m3'), 'sheet_m3': stats.get('sheet_volume_m3'),
+              'ponded_m3': stats.get('ponded_volume_m3'), 'ponded_min_depth_m': PONDED_MIN_DEPTH_M,
+              'last_frame_time_s': last.get('scheduled_time_s'), 'method': WATER_BUDGET_METHOD}
+    if not all(math.isfinite(v) for v in budget.values() if isinstance(v, float)):
+        return None
+    return budget
 
 
 def mass_balance(path):

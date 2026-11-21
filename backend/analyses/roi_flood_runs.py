@@ -9,7 +9,9 @@ import numpy as np
 from PIL import Image
 import rasterio
 from rasterio.errors import RasterioError
+from rasterio.crs import CRS
 from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
 from rasterio.warp import Resampling, calculate_default_transform, reproject, transform_bounds
 
 from django.conf import settings
@@ -18,7 +20,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from pipeline.hydrology.roi_runner import DatasetUnavailable, get_roi_run, start_roi_run, validate_config
+from pipeline.hydrology.roi_runner import DatasetUnavailable, attempt_directory, get_roi_run, solver_progress, start_roi_run, validate_config
+from pipeline.hydrology.results import complete_depth_frames, read_depth_ascii_text, water_budget
 from .views import UniqueFieldsJSONParser
 
 
@@ -66,9 +69,29 @@ def _public(run):
     result.update(_terrain(run))
     result.update(_coast(run))
     result.update(_urls(run['id']))
+    result['progress'] = _progress(run)
     if run['state'] in ('failed', 'timed_out'):
         result['error'] = run.get('error') if run.get('error') in _ERRORS else 'run_failed'
     return result
+
+
+def _progress(run):
+    """Solver progress while the run is `running` (or its outputs are summarized), null otherwise: simulated time
+    reached of the total, complete frames so far and the newest one's live preview URL, the solver of the attempt (a
+    DG2 -> FV1 switch restarts from zero, `restarted_from`), and the gross rain (mm/h) at the simulated time."""
+    try:
+        progress = solver_progress(Path(_root()) / str(run['id']), run)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if progress is None:
+        return None
+    index = progress['latest_frame_index']
+    progress['latest_frame_url'] = None if index is None else _urls(run['id'])['status_url'] + f'live/{index}/preview/'
+    segments = _rainfall_gross_segments(run)
+    t = progress['simulated_s']
+    progress['rain_mm_h'] = None if not segments else next(
+        (item['intensity_mm_h'] for item in segments if item['start_s'] <= t < item['end_s']), 0.0)
+    return progress
 
 
 def _terrain(run):
@@ -183,6 +206,11 @@ class RoiRunResultsView(APIView):
             result.update(_coast(run))
             result.update(_land_and_rain(run))
             result['rainfall_segments'] = _rainfall_segments(run)
+            # Gross rain (before losses) per interval for the rain animation; equals the net one without losses.
+            result['rainfall_gross_segments'] = _rainfall_gross_segments(run)
+            # Where the rain went (gross, infiltrated, net, final sheets/ponded, boundaries); computed here for runs
+            # summarized before it existed (no last-frame split), null without a mass balance.
+            result['water_budget'] = run['result'].get('water_budget') or _older_water_budget(run)
             result['artifacts'] = [_artifact_metadata(item, str(run_id), result['grid']['nodata']) for item in run['artifacts']]
             return Response(result)
         except (KeyError, TypeError, ValueError):
@@ -207,6 +235,33 @@ def _rainfall_segments(run):
         return None
 
 
+def _rainfall_gross_segments(run):
+    """Hyetograph of the gross rain (before losses), mm/h; null when it was not recorded.
+
+    Curve Number runs give the ROI-mean gross rain per interval (rain.json ``method``); uniform profiles are the
+    solver rain divided by the runoff coefficient when one was applied, and the solver rain itself otherwise."""
+    try:
+        method = run['provenance']['rain'].get('method')
+        if method is not None:
+            edges = method['curve_number']['interval_edges_s']
+            return [{'start_s': float(a), 'end_s': float(b), 'intensity_mm_h': float(mm) * 3600 / (float(b) - float(a))}
+                    for a, b, mm in zip(edges[:-1], edges[1:], method['roi_gross_mm'], strict=True)]
+        coefficient = (run.get('losses') or {}).get('runoff_coefficient') or 1.0
+        segments = run['provenance']['rain']['profile']['segments']
+        return [{'start_s': float(item['start_s']), 'end_s': float(item['end_s']),
+                 'intensity_mm_h': float(item['intensity_m_s']) * 3.6e6 / float(coefficient)} for item in segments]
+    except (KeyError, TypeError, ValueError, AttributeError, ZeroDivisionError):
+        return None
+
+
+def _older_water_budget(run):
+    try:
+        return water_budget(run['result'], rain=(run.get('provenance') or {}).get('rain'),
+                            runoff_coefficient=(run.get('losses') or {}).get('runoff_coefficient'))
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, ZeroDivisionError):
+        return None
+
+
 def _artifact_metadata(item, run_id, nodata=None):
     name = Path(item['file']).name
     if item['file'] != 'cogs/' + name or not name.endswith('.tif') or name in ('.', '..'):
@@ -223,12 +278,62 @@ _PREVIEW_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_MAX_SOURCE_CELLS = 8_000_000
 _PREVIEW_MAX_EDGE = 2048
 _PREVIEW_MAX_CELLS = 4_000_000
-_PREVIEW_PALETTE = 'depth-classes-blues-v3'
-# Lower bound (m) and colour of each depth class, light to dark blue (ColorBrewer Blues); below 0.01 m is
-# transparent. 0.01-0.03 m shows thin sheets of water. Keep in sync with DEPTH_CLASSES in
+_PREVIEW_PALETTE = 'depth-classes-blues-v4'
+# Lower bound (m) and colour of each depth class, light to dark blue (ColorBrewer Blues); below 0.002 m is
+# transparent. 0.002-0.01 m shows the runoff sheets during the rain (very light and semi-transparent, alpha in
+# _DEPTH_CLASS_ALPHA), 0.01-0.03 m the thin sheets of water. Keep in sync with DEPTH_CLASSES in
 # web/src/utils/floodDg2.ts (the map legend) and DEPTH_CLASS_BOUNDS_M in pipeline/hydrology/results.py.
-_DEPTH_CLASSES = [(.01, (222, 235, 247)), (.03, (198, 219, 239)), (.15, (107, 174, 214)), (.5, (33, 113, 181)),
-                  (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
+_DEPTH_CLASSES = [(.002, (236, 245, 253)), (.01, (222, 235, 247)), (.03, (198, 219, 239)), (.15, (107, 174, 214)),
+                  (.5, (33, 113, 181)), (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
+# PNG alpha of the classes that are not opaque (255).
+_DEPTH_CLASS_ALPHA = {.002: 140}
+
+
+def _render_preview(values, mask, src_transform, src_crs, nodata):
+    """Depth grid -> RGBA PNG in EPSG:3857 with the depth-class palette; returns (png bytes, lon/lat bounds).
+
+    Raises ValueError (or RasterioError, MemoryError) for a grid that cannot be previewed."""
+    height_in, width_in = values.shape
+    left, bottom, right, top = rasterio.transform.array_bounds(height_in, width_in, src_transform)
+    transform, source_width, source_height = calculate_default_transform(
+        src_crs, 'EPSG:3857', width_in, height_in, left, bottom, right, top)
+    if source_width < 1 or source_height < 1:
+        raise ValueError('invalid dimensions')
+    scale = min(1., _PREVIEW_MAX_EDGE / source_width, _PREVIEW_MAX_EDGE / source_height,
+                (_PREVIEW_MAX_CELLS / (source_width * source_height)) ** .5)
+    width = max(1, int(source_width * scale))
+    height = max(1, int(source_height * scale))
+    from affine import Affine
+    transform = transform * Affine.scale(source_width / width, source_height / height)
+    depth = np.full((height, width), nodata, dtype='float32')
+    reproject(values, depth, src_transform=src_transform, src_crs=src_crs, src_nodata=nodata, dst_transform=transform,
+              dst_crs='EPSG:3857', dst_nodata=nodata, resampling=Resampling.nearest)
+    valid = np.zeros((height, width), dtype='uint8')
+    reproject(mask, valid, src_transform=src_transform, src_crs=src_crs, dst_transform=transform, dst_crs='EPSG:3857',
+              resampling=Resampling.nearest)
+    left, bottom, right, top = rasterio.transform.array_bounds(height, width, transform)
+    bounds = transform_bounds('EPSG:3857', 'EPSG:4326', left, bottom, right, top)
+    if not all(np.isfinite(bounds)):
+        raise ValueError('invalid bounds')
+    rgba = np.zeros((height, width, 4), dtype='uint8')
+    for lower, colour in _DEPTH_CLASSES:
+        rgba[depth >= lower, :3] = colour
+        rgba[depth >= lower, 3] = _DEPTH_CLASS_ALPHA.get(lower, 255)
+    rgba[:, :, 3] = np.where((valid > 0) & np.isfinite(depth) &
+                              (depth >= _DEPTH_CLASSES[0][0]) & (depth != nodata), rgba[:, :, 3], 0)
+    output = io.BytesIO()
+    Image.fromarray(rgba, 'RGBA').save(output, format='PNG')
+    return output.getvalue(), bounds
+
+
+def _preview_response(png, bounds, cache_control):
+    response = HttpResponse(png, content_type='image/png')
+    response['X-Preview-CRS'] = 'EPSG:3857'
+    response['X-Preview-Bounds'] = ','.join(str(value) for value in bounds)
+    response['X-Preview-Units'] = 'm'
+    response['X-Preview-Classes'] = ','.join(format(lower, 'g') for lower, _ in _DEPTH_CLASSES)
+    response['Cache-Control'] = cache_control
+    return response
 
 
 class RoiRunPreviewView(APIView):
@@ -265,45 +370,65 @@ class RoiRunPreviewView(APIView):
                     str(src.crs) != run['result']['grid']['crs'] or
                     src.nodata != run['result']['grid']['nodata']):
                     raise ValueError('invalid raster')
-                transform, source_width, source_height = calculate_default_transform(
-                    src.crs, 'EPSG:3857', src.width, src.height, *src.bounds)
-                if source_width < 1 or source_height < 1:
-                    raise ValueError('invalid dimensions')
-                scale = min(1., _PREVIEW_MAX_EDGE / source_width, _PREVIEW_MAX_EDGE / source_height,
-                            (_PREVIEW_MAX_CELLS / (source_width * source_height)) ** .5)
-                width = max(1, int(source_width * scale))
-                height = max(1, int(source_height * scale))
-                from affine import Affine
-                transform = transform * Affine.scale(source_width / width, source_height / height)
-                depth = np.full((height, width), src.nodata, dtype='float32')
-                reproject(rasterio.band(src, 1), depth, src_transform=src.transform,
-                          src_crs=src.crs, src_nodata=src.nodata, dst_transform=transform,
-                          dst_crs='EPSG:3857', dst_nodata=src.nodata, resampling=Resampling.nearest)
-                valid = np.zeros((height, width), dtype='uint8')
-                reproject(src.read_masks(1), valid, src_transform=src.transform,
-                          src_crs=src.crs, dst_transform=transform, dst_crs='EPSG:3857',
-                          resampling=Resampling.nearest)
-                left, bottom, right, top = rasterio.transform.array_bounds(height, width, transform)
-                bounds = transform_bounds('EPSG:3857', 'EPSG:4326', left, bottom, right, top)
-                if not all(np.isfinite(bounds)):
-                    raise ValueError('invalid bounds')
-                rgba = np.zeros((height, width, 4), dtype='uint8')
-                for lower, colour in _DEPTH_CLASSES:
-                    rgba[depth >= lower, :3] = colour
-                rgba[:, :, 3] = np.where((valid > 0) & np.isfinite(depth) &
-                                          (depth >= _DEPTH_CLASSES[0][0]) & (depth != src.nodata), 255, 0)
-                output = io.BytesIO()
-                Image.fromarray(rgba, 'RGBA').save(output, format='PNG')
+                png, bounds = _render_preview(src.read(1), src.read_masks(1), src.transform, src.crs, src.nodata)
         except (RasterioError, ValueError, TypeError, KeyError, OverflowError, MemoryError):
             return Response({'errors': {'preview': ['Raster inválido para vista previa.']}}, status=400)
-        response = HttpResponse(output.getvalue(), content_type='image/png')
-        response['X-Preview-CRS'] = 'EPSG:3857'
-        response['X-Preview-Bounds'] = ','.join(str(value) for value in bounds)
-        response['X-Preview-Units'] = 'm'
-        response['X-Preview-Classes'] = ','.join(format(lower, 'g') for lower, _ in _DEPTH_CLASSES)
-        response['Cache-Control'] = 'private, max-age=3600'
+        response = _preview_response(png, bounds, 'private, max-age=3600')
         response['ETag'] = '"' + hashlib.sha256((entry['sha256'] + ':' + _PREVIEW_PALETTE).encode()).hexdigest() + '"'
         return response
+
+
+# A frame the solver is still writing may hold a run in progress; the live preview needs these states.
+_LIVE_STATES = frozenset(('running', 'results', 'failed', 'timed_out'))
+_LIVE_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _run_crs(run):
+    """Projected metric CRS of the solver grid, from the run provenance (written when preparation ends)."""
+    provenance = run['provenance']
+    crs = CRS.from_user_input((provenance.get('rain') or {}).get('dem', {}).get('crs')
+                              or provenance['terrain']['destination_horizontal_crs'])
+    if not crs.is_projected:
+        raise ValueError('projected CRS required')
+    return crs
+
+
+class RoiRunLivePreviewView(APIView):
+    """PNG of a frame the solver has already finished writing while the run is in progress (or failed): same
+    palette, owner check and bounds as the stored previews, never a partial file, never cached."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, run_id, frame):
+        run = _owned(request, run_id)
+        if run['state'] not in _LIVE_STATES:
+            raise Http404
+        try:
+            directory = Path(_root()) / str(run_id)
+            work = attempt_directory(directory, run)
+            outputs = work / 'outputs'
+            if any(item.is_symlink() for item in (directory, work, outputs)):
+                raise Http404
+            path = dict(complete_depth_frames(outputs, max_bytes=_LIVE_MAX_BYTES))[int(frame)]
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as stream:
+                details = os.fstat(stream.fileno())
+                if not stat.S_ISREG(details.st_mode) or details.st_size > _LIVE_MAX_BYTES:
+                    raise Http404
+                text = stream.read().decode('ascii')
+            grid = read_depth_ascii_text(text, _PREVIEW_MAX_SOURCE_CELLS, clip_negative=True)
+            crs = _run_crs(run)
+        except (KeyError, OSError, ValueError, TypeError, UnicodeDecodeError, AttributeError):
+            raise Http404 from None
+        try:
+            geometry = grid['grid']
+            transform = from_origin(geometry['xllcorner'], grid['bounds'][3], geometry['cellsize_m'], geometry['cellsize_m'])
+            nodata = float(np.float32(grid['nodata']))
+            values = grid['values'].astype('float32')
+            mask = np.where(grid['values'] != grid['nodata'], 255, 0).astype('uint8')
+            png, bounds = _render_preview(values, mask, transform, crs, nodata)
+        except (RasterioError, ValueError, TypeError, KeyError, OverflowError, MemoryError):
+            return Response({'errors': {'preview': ['Raster inválido para vista previa.']}}, status=400)
+        return _preview_response(png, bounds, 'no-store')
 
 
 class RoiRunArtifactView(APIView):

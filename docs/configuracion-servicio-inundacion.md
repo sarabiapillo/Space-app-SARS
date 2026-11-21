@@ -20,7 +20,7 @@ Por defecto `FLOOD_ROI_DG2_ENABLED=true`; `false` deshabilita la ejecución ROI 
 | `EXECUTABLE`, `DEM_EXECUTABLE` | `data/tools/lisflood-fp-8.0/runtime/build/lisflood`, `generateDG2DEM` |
 | `BINARY_SHA256`, `DEM_SHA256` | Hashes fijados en código (no se admiten sustituciones) |
 | `TIMEOUT_S`, `PREPARATION_TIMEOUT_S` | 120 s, 600 s |
-| `MAX_CELLS`, `MAX_RAIN_VALUES`, `MAX_FRAMES`, `MAX_TILES` | 3000, 100000, 20, 2 |
+| `MAX_CELLS`, `MAX_RAIN_VALUES`, `MAX_FRAMES`, `MAX_TILES` | 3000, 1000000, 121, 2 (121 cuadros permiten una animación fluida; `MAX_RAIN_VALUES` acota cuadros × celdas) |
 | `GEOID_DIR` | `data/reference/geoid` (rejillas EGM96/EGM2008; ver paso 2) |
 | `PXR_PATH` | `data/reference/pxr/pxr4-2.1.0.nc` (PXR-4 v2.1.0, ODbL, para tormentas de diseño; se instala con `python -m pipeline.hydrology.design_storm prepare`; sin él, una tormenta de diseño responde `503 design_storm_unavailable`) |
 | `EOT20_DIR` | `data/reference/eot20` (EOT20 para lados de marea; ver paso 4) |

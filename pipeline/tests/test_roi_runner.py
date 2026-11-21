@@ -234,6 +234,23 @@ def test_native_fv1_fixed_level_starts_and_keeps_still_water(root):
     assert state['result']['negative_depth']['status'] == 'none'
 
 
+def test_native_run_stores_where_the_rain_went(root):
+    # 2 mm on the ROI cells without losses: gross = net = the solver's rain; per-frame volumes split sheets and ponds.
+    job = start_roi_run('alice', fv1(), root=root, config=config(), launch=False)
+    state = run_roi_worker(root, job['id'], provider=flat_provider(root, job['id']), roads_fetcher=no_roads)
+    assert state['state'] == 'succeeded', state
+    result = state['result']
+    budget = result['water_budget']
+    assert budget['gross_source'] == 'no_losses' and budget['infiltrated_m3'] == 0
+    assert budget['gross_rain_m3'] == budget['net_rain_m3'] == result['mass_balance']['rain_m3'] > 0
+    assert budget['final_water_m3'] == result['mass_balance']['final_volume_m3']
+    assert budget['boundary_outflow_m3'] == pytest.approx(max(budget['net_rain_m3'] - budget['final_water_m3'], 0))
+    last = result['frames'][-1]['stats']
+    assert budget['sheet_m3'] == last['sheet_volume_m3'] and budget['ponded_m3'] == last['ponded_volume_m3']
+    assert last['sheet_volume_m3'] + last['ponded_volume_m3'] == pytest.approx(last['volume_m3'])
+    assert result['depth_classes_m'] == [.002, .01, .03, .15, .5, 1, 2] and len(last['depth_class_cells']) == 7
+
+
 def failing_on(solver, error):
     """Summarizer that fails the attempt of ``solver`` (read from its parameter file) and runs the real one otherwise."""
     def summarize(outputs, **kwargs):
@@ -1075,3 +1092,36 @@ def test_server_config_accepts_the_eot20_and_mdt_cache_paths_inside_data():
     assert checked['eot20_dir'] == str(data / 'reference/eot20')
     with pytest.raises(ValueError):
         validate_config({**config(), 'eot20_dir': '/tmp/eot20'})
+
+
+def test_solver_progress_reads_the_running_attempt_without_partial_frames(tmp_path):
+    from pipeline.hydrology.roi_runner import solver_progress
+    header = 'ncols 2\nnrows 1\nxllcorner 0\nyllcorner 0\ncellsize 30\nNODATA_value -9999\n'
+    state = {'state': 'running', 'solver': 'dg2', 'solver_fallback': None, 'simulation_duration_s': 1200, 'save_interval_s': 300}
+    zero = {'stage': 'running', 'solver': 'dg2', 'attempt': 1, 'restarted_from': None, 'simulated_s': 0, 'duration_s': 1200,
+            'fraction': 0, 'source': None, 'frames_available': 0, 'latest_frame_index': None, 'latest_frame_time_s': None}
+    assert solver_progress(tmp_path, state) == zero  # nothing written yet
+    outputs = tmp_path / 'work/outputs'; outputs.mkdir(parents=True)
+    (outputs / 'roi-0000.wd').write_text(header + '0 0\n')
+    (outputs / 'roi-0001.wd').write_text(header + '0 0\n')
+    (outputs / 'roi-0002.wd').write_text(header + '0.1')  # being written
+    progress = solver_progress(tmp_path, state)
+    assert progress == {'stage': 'running', 'solver': 'dg2', 'attempt': 1, 'restarted_from': None, 'simulated_s': 300,
+                        'duration_s': 1200, 'fraction': .25, 'source': 'frames', 'frames_available': 2,
+                        'latest_frame_index': 1, 'latest_frame_time_s': 300}
+    # The .mass rows give a finer simulated time (its last complete row); a half-written row is skipped.
+    (outputs / 'roi.mass').write_text('Time Tstep MinTstep NumTsteps Area Vol Qin Hds Qout Qerror Verror Rain-(Inf+Evap)\n'
+                                      '400 1 1 1 0 2 0 0 0 0 0 2\n500 1 1')
+    assert [solver_progress(tmp_path, state)[k] for k in ('simulated_s', 'fraction', 'source')] == [400, 400 / 1200, 'mass']
+    # After a DG2 failure the FV1 fallback restarts from zero in its own directory.
+    fallback = {**state, 'solver': 'fv1', 'solver_fallback': {'from': 'dg2', 'to': 'fv1', 'reason': 'negative_depth_artifacts'}}
+    restarted = solver_progress(tmp_path, fallback)
+    assert [restarted[k] for k in ('solver', 'attempt', 'restarted_from', 'simulated_s', 'frames_available')] == ['fv1', 2, 'dg2', 0, 0]
+    (tmp_path / 'work-fallback/outputs').mkdir(parents=True)
+    (tmp_path / 'work-fallback/outputs/roi-0000.wd').write_text(header + '0 0\n')
+    assert solver_progress(tmp_path, fallback)['frames_available'] == 1
+    # Only while the solver runs or its outputs are summarized; a symlinked attempt directory is never read.
+    assert solver_progress(tmp_path, {**state, 'state': 'succeeded'}) is None
+    (tmp_path / 'work-fallback/outputs/roi-0000.wd').unlink(); (tmp_path / 'work-fallback/outputs').rmdir(); (tmp_path / 'work-fallback').rmdir()
+    (tmp_path / 'work-fallback').symlink_to(tmp_path / 'work')
+    assert solver_progress(tmp_path, fallback)['frames_available'] == 0

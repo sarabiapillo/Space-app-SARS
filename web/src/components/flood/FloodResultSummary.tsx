@@ -27,6 +27,8 @@ export function FloodResultSummary({ result, frameIndex }: Props) {
   const atMaximum = frameIndex == null
   const thresholds = result.roads?.thresholds_m
   const fallback = result.solver_fallback
+  // Lowest sheet bound of the run's own classes: 0.002 m in new runs, 0.01 m in earlier ones.
+  const sheetFrom = result.depth_classes_m?.[0] ?? .01
   return (
     <div className="ws-rain-results-grid" role="group" aria-label={t('Resumen de resultados', 'Results summary')}>
       <Card label={t('Método de cálculo', 'Computation method')} value={solverLabel(result.solver ?? 'dg2')}
@@ -34,7 +36,7 @@ export function FloodResultSummary({ result, frameIndex }: Props) {
       <Card label={t('Área inundada (≥ 0.03 m)', 'Flooded area (≥ 0.03 m)')} value={`${fmt(s.floodedHa)} ha`}
         sub={s.floodedPct == null ? undefined : t(`${fmt(s.floodedPct, 1)} % de las celdas con dato`, `${fmt(s.floodedPct, 1)} % of cells with data`)} />
       {s.thinSheetHa != null && (
-        <Card label={t('Lámina delgada (0.01–0.03 m)', 'Thin sheet (0.01–0.03 m)')} value={`${fmt(s.thinSheetHa)} ha`}
+        <Card label={t(`Láminas (${sheetFrom}–0.03 m)`, `Sheets (${sheetFrom}–0.03 m)`)} value={`${fmt(s.thinSheetHa)} ha`}
           sub={t('agua que escurre; no cuenta como inundada', 'water running off; not counted as flooded')} />
       )}
       <Card label={t('Profundidad máxima', 'Maximum depth')} value={`${fmt(s.maxDepthM)} m`}

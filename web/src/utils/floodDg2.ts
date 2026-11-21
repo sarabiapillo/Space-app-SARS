@@ -1,4 +1,4 @@
-import type { FloodDesignStorm, FloodLandSurface, FloodRoiBathymetry, FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodRoiTide, FloodSolverAttempt, FloodSolverFallback } from '../api/client.ts'
+import type { FloodDesignStorm, FloodLandSurface, FloodRoiBathymetry, FloodRoiResult, FloodRoiRun, FloodRoiStats, FloodRoiTide, FloodRunProgress, FloodSolverAttempt, FloodSolverFallback, FloodWaterBudget } from '../api/client.ts'
 import type { FlowArrowCollection } from '../types/workspace.ts'
 
 /** Raw panel inputs; every physical and numerical value is typed by the user, with no defaults. */
@@ -130,8 +130,9 @@ export function terrainLabel(source: string | null | undefined) {
 
 /** Default `FLOOD_ROI_DG2_MAX_CELLS` of the server (configurable there); about 1 km² at 30 m. */
 export const DG2_DEFAULT_MAX_CELLS = 3000
-/** Default `FLOOD_ROI_DG2_MAX_FRAMES` of the server: frames = floor(duration / save interval) + 2. */
-export const DG2_DEFAULT_MAX_FRAMES = 20
+/** Default `FLOOD_ROI_DG2_MAX_FRAMES` of the server: frames = floor(duration / save interval) + 2; up to 121 so the run
+ * can be played as a fluid animation. */
+export const DG2_DEFAULT_MAX_FRAMES = 121
 
 type Side = 'north' | 'east' | 'south' | 'west'
 const SIDE_KEYS: Record<Side, 'boundaryNorth' | 'boundaryEast' | 'boundarySouth' | 'boundaryWest'> = {north:'boundaryNorth',east:'boundaryEast',south:'boundarySouth',west:'boundaryWest'}
@@ -165,7 +166,7 @@ export function withFormChange<F extends { confirm: boolean }>(form: F, name: ke
 
 /** Fills the form with illustrative example values (not recommendations) so the user can review and run a
  * test where water visibly accumulates: a 100-year, 3-hour PXR-4 design storm (synthetic fallback: 60 mm in 3 h),
- * simulated one hour longer (14400 s) with a frame every 1200 s (14 frames, server limit 20) and no DG2 thin-depth
+ * simulated one hour longer (14400 s) with a frame every 300 s (49 frames for the animation, server limit 121) and no DG2 thin-depth
  * threshold (the automatic FV1 fallback covers DG2 failures). The domain, lakes, the urban declaration and the
  * confirmation stay the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a
  * ROI); the terrain is Copernicus GLO-30, Manning comes from ESA WorldCover and losses from the Curve Number with
@@ -176,7 +177,7 @@ export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): Floo
   const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
   return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'1200', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
+    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'300', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
     rainKind:'design_storm', returnPeriod:'100', stormHours:'3', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false}
 }
 
@@ -231,11 +232,11 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   }
 }
 
-/** Lower bound (m) from which a cell counts as flooded; the 0.01–0.03 m class is a thin sheet of water. */
+/** Lower bound (m) from which a cell counts as flooded; the 0.002–0.01 m and 0.01–0.03 m classes are sheets of water. */
 export const FLOODED_MIN_DEPTH_M = .03
 
 /** Cells of the classes at or above FLOODED_MIN_DEPTH_M and of the thinner classes, using the run's own bounds
- * (`depth_classes_m`; runs without it predate the 0.01 m class, so every class counts as flooded). */
+ * (`depth_classes_m`; runs without it predate the sheet classes, so every class counts as flooded). */
 function splitDepthCells(stats: FloodRoiStats | undefined, bounds: number[] | null | undefined) {
   if(!Array.isArray(stats?.depth_class_cells)) return null
   const cells = stats.depth_class_cells as number[]
@@ -245,8 +246,9 @@ function splitDepthCells(stats: FloodRoiStats | undefined, bounds: number[] | nu
 }
 
 /** Headline numbers of the selected frame (or the maximum when `frameIndex` is null) for the result cards.
- * Flooded area counts the depth classes from 0.03 m, as the area chart does; `thinSheetHa` is the 0.01–0.03 m
- * class (null for runs without it); null where older runs lack inputs. */
+ * Flooded area counts the depth classes from 0.03 m, as the area chart does; `thinSheetHa` adds the classes below
+ * 0.03 m (0.002–0.03 m in new runs, 0.01–0.03 m in earlier ones; null for runs without them); null where older runs
+ * lack inputs. */
 export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'mass_balance' | 'froude' | 'time_of_concentration' | 'roads'> & Partial<Pick<FloodRoiResult, 'depth_classes_m'>>, frameIndex: number | null | undefined) {
   const stats = frameIndex == null ? result.maximum.stats : result.frames.find(f => f.frame_index === frameIndex)?.stats
   const split = splitDepthCells(stats, result.depth_classes_m)
@@ -423,9 +425,11 @@ export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameInd
   return {type:'FeatureCollection',features:frame.arrows.map(([lon,lat,speed,bearing])=>({type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{speed,bearing}}))}
 }
 
-/** Depth classes of the preview PNG, light to dark blue (ColorBrewer Blues). Kept in sync with _DEPTH_CLASSES in
- * backend/analyses/roi_flood_runs.py by a test. Below 0.01 m the image is transparent; 0.01–0.03 m is a thin sheet. */
-export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb: [number, number, number]}> = [
+/** Depth classes of the preview PNG, light to dark blue (ColorBrewer Blues). Kept in sync with _DEPTH_CLASSES and
+ * _DEPTH_CLASS_ALPHA in backend/analyses/roi_flood_runs.py by a test. Below 0.002 m the image is transparent;
+ * 0.002–0.01 m is the runoff sheet during the rain (semi-transparent, `alpha` 0–1) and 0.01–0.03 m a thin sheet. */
+export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb: [number, number, number]; alpha?: number}> = [
+  {min:.002,max:.01,rgb:[236,245,253],alpha:140/255},
   {min:.01,max:.03,rgb:[222,235,247]},
   {min:.03,max:.15,rgb:[198,219,239]},
   {min:.15,max:.5,rgb:[107,174,214]},
@@ -441,18 +445,38 @@ export function pngDownloadName(artifactName: string) {
 
 const minutesLabel = (seconds: number) => String(Math.round(seconds / 60 * 100) / 100)
 
-/** Data for the four DG2 charts; each part is null when the run lacks its inputs (older runs).
- * `frameIndex` null selects the maximum for the depth distribution. */
-export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'depth_classes_m' | 'rainfall_segments' | 'mass_balance'>, frameIndex: number | null | undefined) {
+/** CSS colour of a depth class of the palette: rgb, or rgba with two decimals for the semi-transparent ones. */
+export function depthClassColor(c: {rgb: [number, number, number]; alpha?: number}) {
+  return c.alpha == null ? `rgb(${c.rgb.join(',')})` : `rgba(${c.rgb.join(',')},${Math.round(c.alpha * 100) / 100})`
+}
+
+/** Data for the DG2 charts; each part is null when the run lacks its inputs (older runs).
+ * `frameIndex` null selects the maximum for the depth distribution. `hyetographGross` is the gross rain per interval
+ * when it differs from the net rain the solver received; `frameVolumes` the sheet (< 0.03 m) and ponded water of
+ * each frame (m³). */
+export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'depth_classes_m' | 'rainfall_segments' | 'mass_balance'> & Partial<Pick<FloodRoiResult, 'rainfall_gross_segments'>>, frameIndex: number | null | undefined) {
   const cellArea = (result.grid?.cellsize_m ?? 0) ** 2
   const classes = (stats: FloodRoiStats | undefined) => Array.isArray(stats?.depth_class_cells) ? stats.depth_class_cells as number[] : null
   const segments = result.rainfall_segments
   const hyetograph = segments?.length ? {labels: segments.map(s => `${minutesLabel(s.start_s)}–${minutesLabel(s.end_s)}`), mmPerHour: segments.map(s => s.intensity_mm_h)} : null
+  const gross = result.rainfall_gross_segments
+  const hyetographGross = segments?.length && gross?.length === segments.length
+    && gross.every((g, i) => g.start_s === segments[i].start_s && g.end_s === segments[i].end_s)
+    && gross.some((g, i) => Math.abs(g.intensity_mm_h - segments[i].intensity_mm_h) > 1e-9) ? gross.map(g => g.intensity_mm_h) : null
   const counted = result.frames.every(f => classes(f.stats))
+  const splits = counted ? result.frames.map(f => splitDepthCells(f.stats, result.depth_classes_m)!) : []
   const evolution = counted && cellArea ? {
     minutes: result.frames.map(f => (f.scheduled_time_s ?? 0) / 60),
-    wetAreaHa: result.frames.map(f => splitDepthCells(f.stats, result.depth_classes_m)!.flooded * cellArea / 1e4),
+    wetAreaHa: splits.map(split => split.flooded * cellArea / 1e4),
+    // Area of the sheet classes (below 0.03 m) over time; null for runs without them.
+    sheetAreaHa: splits.every(split => split.thin != null) && splits.length ? splits.map(split => split.thin! * cellArea / 1e4) : null,
     maxDepthM: result.frames.map(f => Number(f.stats.max_m ?? 0)),
+  } : null
+  const volumed = result.frames.length > 0 && result.frames.every(f => typeof f.stats.sheet_volume_m3 === 'number' && typeof f.stats.ponded_volume_m3 === 'number')
+  const frameVolumes = volumed ? {
+    minutes: result.frames.map(f => (f.scheduled_time_s ?? 0) / 60),
+    sheetM3: result.frames.map(f => f.stats.sheet_volume_m3 as number),
+    pondedM3: result.frames.map(f => f.stats.ponded_volume_m3 as number),
   } : null
   const series = result.mass_balance?.series
   const volume = series?.length ? {minutes: series.map(r => r[0] / 60), domainM3: series.map(r => r[1]), rainM3: series.map(r => r[2])} : null
@@ -463,9 +487,163 @@ export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' |
     labels: bounds.map((low, i) => i + 1 < bounds.length ? `${low}–${bounds[i + 1]}` : `≥ ${low}`),
     areaHa: cells.map(n => n * cellArea / 1e4),
     // Colour of each of the run's own classes (older runs start at 0.03 m); grey for a bound the palette lacks.
-    colors: bounds.map(low => {const c = DEPTH_CLASSES.find(d => d.min === low); return c ? `rgb(${c.rgb.join(',')})` : 'rgb(148,163,184)'}),
+    colors: bounds.map(low => {const c = DEPTH_CLASSES.find(d => d.min === low); return c ? depthClassColor(c) : 'rgb(148,163,184)'}),
   } : null
-  return {hyetograph, evolution, volume, distribution}
+  return {hyetograph, hyetographGross, evolution, volume, frameVolumes, distribution}
+}
+
+/** Simulated time of a frame as hh:mm (hh:mm:ss when it is not a whole minute); '—' without a time. */
+export function simulatedTimeLabel(seconds: number | null | undefined) {
+  if (seconds == null || !Number.isFinite(seconds)) return '—'
+  const total = Math.max(0, Math.round(seconds))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const rest = total % 60
+  return `${pad(Math.floor(total / 3600))}:${pad(Math.floor(total % 3600 / 60))}${rest ? `:${pad(rest)}` : ''}`
+}
+
+/** Animation speeds; 1× shows PLAYBACK_BASE_FPS frames per second whatever the save interval of the run. */
+export const PLAYBACK_SPEEDS = [.5, 1, 2, 4]
+export const PLAYBACK_BASE_FPS = 2
+/** Time on screen of each frame (ms) at a speed. */
+export function playbackIntervalMs(speed: number) { return 1000 / (PLAYBACK_BASE_FPS * speed) }
+/** Cross-fade between two frames: 80 % of the frame interval, at most 600 ms; none with reduced motion. */
+export function playbackFadeMs(speed: number, reducedMotion: boolean) { return reducedMotion ? 0 : Math.round(Math.min(600, .8 * playbackIntervalMs(speed))) }
+
+export interface PlaybackState { index: number; playing: boolean; loop: boolean }
+/** One timer tick: the next frame; at the last one, back to the first with `loop` or stop. Paused: unchanged. */
+export function playbackStep(state: PlaybackState, count: number): PlaybackState {
+  if (!state.playing) return state
+  if (state.index + 1 < count) return {...state, index: state.index + 1}
+  if (state.loop && count > 1) return {...state, index: 0}
+  return {...state, index: Math.max(0, count - 1), playing: false}
+}
+
+type Segment = {start_s: number; end_s: number; intensity_mm_h: number}
+/** Rain intensity (mm/h) of the interval containing `seconds` ([start, end)); 0 outside the rain, null without segments. */
+export function rainIntensityAt(segments: Segment[] | null | undefined, seconds: number) {
+  if (!segments?.length) return null
+  return segments.find(s => s.start_s <= seconds && seconds < s.end_s)?.intensity_mm_h ?? 0
+}
+
+/** Strength of the rain drawn on the map for a gross intensity: number of drops and a fall-speed factor, both growing
+ * with mm/h and saturating at 100 mm/h; null when it does not rain. Illustrative, not a radar picture. */
+export function rainEffect(mmPerHour: number | null | undefined) {
+  if (mmPerHour == null || !Number.isFinite(mmPerHour) || mmPerHour <= 0) return null
+  const strength = Math.min(1, Math.sqrt(mmPerHour / 100))
+  return {drops: Math.round(40 + 260 * strength), speed: .8 + .7 * Math.min(1, mmPerHour / 100)}
+}
+
+/** Identity colours of the water-budget parts (validated as a categorical set on the panel surface: CVD ΔE ≥ 9,
+ * normal-vision ΔE ≥ 24); the per-frame volume chart reuses the sheet and ponded colours. */
+export const WATER_BUDGET_COLORS = {infiltrated: '#eb6834', sheet: '#1baf7a', ponded: '#2a78d6', final: '#2a78d6', left: '#e87ba4'} as const
+
+/** Parts of the water-budget bar (m³ and % of the bar): infiltrated, sheets (< 0.03 m) and ponded water of the last
+ * frame (or the final water unsplit for older runs) and the water that left through the boundaries; null without water. */
+export function waterBudgetView(budget: FloodWaterBudget | null | undefined) {
+  if (!budget) return null
+  const split = budget.sheet_m3 != null && budget.ponded_m3 != null
+  const raw: Array<['infiltrated' | 'sheet' | 'ponded' | 'final' | 'left', number]> = [['infiltrated', budget.infiltrated_m3 ?? 0],
+    ...(split ? [['sheet', budget.sheet_m3!], ['ponded', budget.ponded_m3!]] as Array<['sheet' | 'ponded', number]> : [['final', budget.final_water_m3 ?? 0]] as Array<['final', number]>),
+    ['left', budget.boundary_outflow_m3 ?? 0]]
+  const total = raw.reduce((a, [, v]) => a + Math.max(0, v), 0)
+  if (!(total > 0)) return null
+  return {split, parts: raw.map(([key, m3]) => ({key, m3, pct: Math.max(0, m3) * 100 / total}))}
+}
+
+/** Where the time cursor of the charts goes at `seconds`: fraction of the hyetograph time span (null outside the rain),
+ * position of the frame shown (the last one at or before `seconds`) and the nearest mass-balance row (ties: later). */
+export function chartCursor(result: Pick<FloodRoiResult, 'frames' | 'rainfall_segments' | 'mass_balance'>, seconds: number | null | undefined) {
+  const none = {hyetographFraction: null, frameIndex: null, volumeIndex: null}
+  if (seconds == null || !Number.isFinite(seconds)) return none
+  const segments = result.rainfall_segments
+  const t0 = segments?.[0]?.start_s ?? 0, t1 = segments?.at(-1)?.end_s ?? 0
+  const hyetographFraction = segments?.length && t1 > t0 && seconds >= t0 && seconds < t1 ? (seconds - t0) / (t1 - t0) : null
+  let frameIndex: number | null = null
+  for (let i = 0; i < result.frames.length; i++) if ((result.frames[i].scheduled_time_s ?? 0) <= seconds) frameIndex = i
+  let volumeIndex: number | null = null, best = Infinity
+  const series = result.mass_balance?.series ?? []
+  for (let i = 0; i < series.length; i++) { const d = Math.abs(series[i][0] - seconds); if (d <= best) { best = d; volumeIndex = i } }
+  return {hyetographFraction, frameIndex, volumeIndex}
+}
+
+/** Most preview pixels the animation keeps in memory (frames x grid cells, RGBA); larger runs keep the frame selector. */
+export const ANIMATION_MAX_PIXELS = 16_000_000
+/** Frame artifacts of a run in frame order (the maximum excluded). */
+export function animationFrames(result: Pick<FloodRoiResult, 'artifacts'>) {
+  return result.artifacts.filter(a => a.frame_index != null).sort((a, b) => a.frame_index! - b.frame_index!)
+}
+/** True when the run has at least two frames and their previews fit ANIMATION_MAX_PIXELS. */
+export function animationAvailable(result: Pick<FloodRoiResult, 'artifacts' | 'grid'>) {
+  const frames = animationFrames(result).length, shape = result.grid?.shape
+  return frames >= 2 && Array.isArray(shape) && frames * shape[0] * shape[1] <= ANIMATION_MAX_PIXELS
+}
+
+/** One preloaded animation frame: its preview PNG as an object URL and its geographic bounds. */
+export interface AnimationFrame { name: string; frameIndex: number; scheduledTimeS: number | null; url: string; bounds: [number, number, number, number] }
+
+/** What the map draws while the animation is on: every preloaded frame (one image layer each, so changing frame never
+ * reloads an image), the frame shown, the cross-fade, its flow arrows and the gross rain intensity at that time. */
+export interface FloodMapAnimation {
+  frames: ReadonlyArray<AnimationFrame>
+  index: number
+  fadeMs: number
+  flowArrows: FlowArrowCollection | null
+  /** Gross rain (mm/h) at the simulated time shown; 0 when it does not rain, null when the run has no hyetograph. */
+  rainMmH: number | null
+  showRain: boolean
+  /** Frames of a run still in progress (shown before the results exist); the newest one is the frame shown. */
+  live?: boolean
+}
+
+/** Progress bar of a run in progress: % of the simulated time, hh:mm labels, frames so far, the attempt's solver and
+ * the solver it restarted from after a switch; null while there is no progress (preparing, older servers). */
+export function runProgressView(run: Pick<FloodRoiRun, 'state' | 'progress'> | null | undefined) {
+  const p = run?.progress
+  if (!p || !(p.duration_s > 0) || !Number.isFinite(p.simulated_s)) return null
+  const fraction = Math.min(1, Math.max(0, p.simulated_s / p.duration_s))
+  return {pct: Math.round(fraction * 1000) / 10, simulated: simulatedTimeLabel(Math.min(p.simulated_s, p.duration_s)), total: simulatedTimeLabel(p.duration_s),
+    frames: p.frames_available, solver: p.solver, restartedFrom: p.restarted_from, rainMmH: p.rain_mm_h ?? null,
+    latestFrameIndex: p.latest_frame_index, latestFrameTimeS: p.latest_frame_time_s}
+}
+
+/** Index of the live frame to fetch next: the newest complete frame, unless it (or a later one) is already shown. */
+export function liveFrameToFetch(progress: Pick<FloodRunProgress, 'latest_frame_index'> | null | undefined, fetched: number[]) {
+  const latest = progress?.latest_frame_index
+  if (latest == null || fetched.some(index => index >= latest)) return null
+  return latest
+}
+
+/** Fetches the preview of every frame (`concurrency` at a time) and returns them in frame order. On abort or on any
+ * failure it rejects and revokes every object URL it created, so nothing is left behind. */
+export async function preloadFramePreviews(
+  preview: (id: string, name: string, signal: AbortSignal) => Promise<{blob: Blob; bounds: [number, number, number, number]}>,
+  runId: string, artifacts: FloodRoiResult['artifacts'],
+  {signal, urls = URL, onProgress, concurrency = 4}: {signal: AbortSignal; urls?: Pick<typeof URL, 'createObjectURL' | 'revokeObjectURL'>; onProgress?: (done: number) => void; concurrency?: number},
+): Promise<AnimationFrame[]> {
+  const frames: AnimationFrame[] = new Array(artifacts.length), created: string[] = []
+  let next = 0, done = 0, stopped = false
+  const aborted = () => new DOMException('Animation preload aborted', 'AbortError')
+  const worker = async () => {
+    while (next < artifacts.length && !stopped) {
+      if (signal.aborted) throw aborted()
+      const artifact = artifacts[next++]
+      const image = await preview(runId, artifact.name, signal)
+      if (stopped) return
+      if (signal.aborted) throw aborted()
+      const url = urls.createObjectURL(image.blob); created.push(url)
+      frames[artifacts.indexOf(artifact)] = {name: artifact.name, frameIndex: artifact.frame_index ?? 0, scheduledTimeS: artifact.scheduled_time_s ?? null, url, bounds: image.bounds}
+      onProgress?.(++done)
+    }
+  }
+  try {
+    await Promise.all(Array.from({length: Math.max(1, Math.min(concurrency, artifacts.length))}, worker))
+    if (signal.aborted) throw aborted()
+    return frames
+  } catch (e) {
+    stopped = true
+    for (const url of created) urls.revokeObjectURL(url)
+    throw e
+  }
 }
 
 /** One controller per mounted panel. Invalidation fences every async continuation and timer. */
