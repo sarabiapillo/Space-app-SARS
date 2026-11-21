@@ -4,11 +4,15 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Camera, Mountain, RotateCcw, X } from 'lucide-react'
 import { useTranslation } from '../i18n/useTranslation'
 import {
+  DEFAULT_SAR_INCIDENCE_DEG,
   IMAGERY_SOURCE_LABEL,
   TERRAIN_SOURCE_LABEL,
   hypsometricCanvas,
   loadTerrain,
+  sarMaskCanvas,
   type LonLatBBox,
+  type SarMaskStats,
+  type SarOrbitDirection,
   type TerrainData,
 } from '../utils/terrain3d'
 
@@ -19,7 +23,7 @@ const MODEL_SIZE = 100
 /** Grosor fijo del zócalo bajo minElev: 3.5 % del lado horizontal mayor de la maqueta. */
 const BASE_THICKNESS_RATIO = 0.035
 
-type SurfaceMode = 'satellite' | 'hypsometric' | 'wireframe'
+type SurfaceMode = 'satellite' | 'hypsometric' | 'sar_mask' | 'wireframe'
 
 interface Terrain3DViewerProps {
   bbox: LonLatBBox
@@ -29,15 +33,15 @@ interface Terrain3DViewerProps {
 
 interface SceneApi {
   setExaggeration: (value: number) => void
-  setMode: (mode: SurfaceMode) => void
+  setMode: (mode: SurfaceMode, orbit: SarOrbitDirection) => void
   resetCamera: () => void
   capture: () => string | null
 }
 
 type LoadState =
   | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; data: TerrainData }
+  | { status: 'error'; bboxKey: string; message: string }
+  | { status: 'ready'; bboxKey: string; data: TerrainData }
 
 export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DViewerProps) {
   const { t, localizeText } = useTranslation()
@@ -46,27 +50,49 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [exaggeration, setExaggeration] = useState(2)
   const [mode, setMode] = useState<SurfaceMode>('satellite')
+  const [sarOrbit, setSarOrbit] = useState<SarOrbitDirection>('ascending')
+  const bboxKey = bbox.join(',')
 
-  // 1) Descarga de elevación + textura (una vez por montaje; el padre remonta si cambia la ROI).
+  // 1) Descarga de elevación + textura: solo pasa a 'ready' para el bboxKey activo cuando Promise.all
+  //    de todas las teselas Terrarium, el ensamblado, remuestreo y despike finalizaron.
   useEffect(() => {
     const ctrl = new AbortController()
-    loadTerrain(bbox, SEGMENTS, ctrl.signal).then(
-      (data) => setLoad({ status: 'ready', data }),
+    const parsedBBox = bboxKey.split(',').map(Number) as LonLatBBox
+    loadTerrain(parsedBBox, SEGMENTS, ctrl.signal).then(
+      (data) => {
+        if (!ctrl.signal.aborted) {
+          setLoad({ status: 'ready', bboxKey, data })
+        }
+      },
       (err: unknown) => {
-        if ((err as DOMException)?.name === 'AbortError') return
-        setLoad({ status: 'error', message: err instanceof Error ? err.message : String(err) })
+        if ((err as DOMException)?.name === 'AbortError' || ctrl.signal.aborted) return
+        setLoad({ status: 'error', bboxKey, message: err instanceof Error ? err.message : String(err) })
       },
     )
     return () => ctrl.abort()
-  }, [bbox])
+  }, [bboxKey])
 
-  const data = load.status === 'ready' ? load.data : null
+  const isCurrentLoad = load.status !== 'loading' && load.bboxKey === bboxKey
+  const data = isCurrentLoad && load.status === 'ready' ? load.data : null
+  const errorMessage = isCurrentLoad && load.status === 'error' ? load.message : null
+  const isLoading = !isCurrentLoad
   const effectiveMode: SurfaceMode = mode === 'satellite' && data && !data.imagery ? 'hypsometric' : mode
+
+  const sarMasks = useMemo<{
+    ascending: { canvas: HTMLCanvasElement; stats: SarMaskStats }
+    descending: { canvas: HTMLCanvasElement; stats: SarMaskStats }
+  } | null>(() => {
+    if (!data) return null
+    return {
+      ascending: sarMaskCanvas(data.grid, { orbit: 'ascending', incidenceDeg: DEFAULT_SAR_INCIDENCE_DEG }),
+      descending: sarMaskCanvas(data.grid, { orbit: 'descending', incidenceDeg: DEFAULT_SAR_INCIDENCE_DEG }),
+    }
+  }, [data])
 
   // 2) Escena Three.js: se construye una sola vez con los datos y se libera al desmontar.
   useEffect(() => {
     const container = containerRef.current
-    if (!data || !container) return
+    if (!data || !sarMasks || !container) return
     const { grid } = data
     const k = MODEL_SIZE / Math.max(grid.widthM, grid.heightM, 1)
     const W = grid.widthM * k
@@ -127,6 +153,8 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
     }
     const satTex = data.imagery ? makeTexture(data.imagery) : null
     const hypTex = makeTexture(hypsometricCanvas(grid))
+    const sarAscTex = makeTexture(sarMasks.ascending.canvas)
+    const sarDescTex = makeTexture(sarMasks.descending.canvas)
 
     const surfaceMat = new THREE.MeshStandardMaterial({ map: satTex ?? hypTex, roughness: 0.88, metalness: 0.02 })
     const wireMat = new THREE.MeshBasicMaterial({ color: 0x0f766e, wireframe: true })
@@ -165,12 +193,16 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
       controls.update()
     }
 
-    const applyMode = (m: SurfaceMode) => {
+    const applyMode = (m: SurfaceMode, orbit: SarOrbitDirection) => {
       if (m === 'wireframe') {
         surface.material = wireMat
       } else {
         surface.material = surfaceMat
-        surfaceMat.map = m === 'satellite' && satTex ? satTex : hypTex
+        if (m === 'sar_mask') {
+          surfaceMat.map = orbit === 'ascending' ? sarAscTex : sarDescTex
+        } else {
+          surfaceMat.map = m === 'satellite' && satTex ? satTex : hypTex
+        }
         surfaceMat.needsUpdate = true
       }
     }
@@ -215,11 +247,11 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
       renderer.forceContextLoss()
       renderer.domElement.remove()
     }
-  }, [data])
+  }, [data, sarMasks])
 
   // 3) Cambios de controles: actualizan la escena existente sin reconstruirla.
   useEffect(() => { apiRef.current?.setExaggeration(exaggeration) }, [exaggeration, data])
-  useEffect(() => { apiRef.current?.setMode(effectiveMode) }, [effectiveMode, data])
+  useEffect(() => { apiRef.current?.setMode(effectiveMode, sarOrbit) }, [effectiveMode, sarOrbit, data, sarMasks])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -268,14 +300,14 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
 
         <div className="terrain3d-body">
           <div className="terrain3d-stage" ref={containerRef}>
-            {load.status === 'loading' && (
+            {isLoading && (
               <div className="terrain3d-status">{t('Descargando elevación y textura de la ROI…', 'Downloading ROI elevation and texture…')}</div>
             )}
-            {load.status === 'error' && (
+            {errorMessage && (
               <div className="terrain3d-status terrain3d-status--error">
                 <strong>{t('No se pudo cargar el relieve 3D.', 'Could not load the 3D relief.')}</strong>
                 <span>{t('Revisa tu conexión a internet: las teselas abiertas se descargan desde el navegador. El resto de la aplicación sigue funcionando.', 'Check your internet connection: open tiles are downloaded by the browser. The rest of the application keeps working.')}</span>
-                <code>{localizeText(load.message)}</code>
+                <code>{localizeText(errorMessage)}</code>
               </div>
             )}
             {data && (
@@ -309,12 +341,64 @@ export default function Terrain3DViewer({ bbox, roiName, onClose }: Terrain3DVie
                 <button type="button" className={effectiveMode === 'hypsometric' ? 'is-active' : ''} onClick={() => setMode('hypsometric')} disabled={!data}>
                   {t('Hipsométrico (Elevación)', 'Hypsometric (Elevation)')}
                 </button>
+                <button type="button" className={effectiveMode === 'sar_mask' ? 'is-active' : ''} onClick={() => setMode('sar_mask')} disabled={!data}>
+                  {t('Máscara SAR (Geometría)', 'SAR Mask (Geometry)')}
+                </button>
                 <button type="button" className={effectiveMode === 'wireframe' ? 'is-active' : ''} onClick={() => setMode('wireframe')} disabled={!data}>
                   {t('Malla (Wireframe)', 'Mesh (Wireframe)')}
                 </button>
               </div>
-              {data && !data.imagery && (
+              {data && !data.imagery && mode === 'satellite' && (
                 <p className="terrain3d-note">{t('La textura satelital no está disponible; se muestra el modo hipsométrico.', 'Satellite texture is unavailable; showing hypsometric mode.')}</p>
+              )}
+              {effectiveMode === 'sar_mask' && sarMasks && (
+                <div className="terrain3d-sar-box">
+                  <span className="terrain3d-label">{t('Geometría de órbita NISAR', 'NISAR orbit geometry')}</span>
+                  <div className="terrain3d-orbit-toggle">
+                    <button
+                      type="button"
+                      className={sarOrbit === 'ascending' ? 'is-active' : ''}
+                      onClick={() => setSarOrbit('ascending')}
+                    >
+                      {t('Ascendente (T62/F10)', 'Ascending (T62/F10)')}
+                    </button>
+                    <button
+                      type="button"
+                      className={sarOrbit === 'descending' ? 'is-active' : ''}
+                      onClick={() => setSarOrbit('descending')}
+                    >
+                      {t('Descendente (T55/F80)', 'Descending (T55/F80)')}
+                    </button>
+                  </div>
+                  <ul className="terrain3d-sar-legend">
+                    <li>
+                      <span className="terrain3d-swatch terrain3d-swatch--reliable" />
+                      <span>{t('Confiable (≤ 15°)', 'Reliable (≤ 15°)')}</span>
+                      <strong>{`${fmt(sarMasks[sarOrbit].stats.reliablePct, 1)}%`}</strong>
+                    </li>
+                    <li>
+                      <span className="terrain3d-swatch terrain3d-swatch--steep" />
+                      <span>{t('Pendiente crítica (> 15°)', 'Critical slope (> 15°)')}</span>
+                      <strong>{`${fmt(sarMasks[sarOrbit].stats.steepPct, 1)}%`}</strong>
+                    </li>
+                    <li>
+                      <span className="terrain3d-swatch terrain3d-swatch--layover" />
+                      <span>{t('Layover / Escorzo (≥ θᵢ)', 'Layover / Foreshortening (≥ θᵢ)')}</span>
+                      <strong>{`${fmt(sarMasks[sarOrbit].stats.layoverPct, 1)}%`}</strong>
+                    </li>
+                    <li>
+                      <span className="terrain3d-swatch terrain3d-swatch--shadow" />
+                      <span>{t('Sombra radar (sin retorno)', 'Radar shadow (no return)')}</span>
+                      <strong>{`${fmt(sarMasks[sarOrbit].stats.shadowPct, 1)}%`}</strong>
+                    </li>
+                  </ul>
+                  <p className="terrain3d-note">
+                    {t(
+                      'Aproximación geométrica exploratoria a partir del DEM (θᵢ ≈ 43°); ilustra por qué el producto GCOV reporta shadowMaskingApplied = False.',
+                      'Exploratory geometric approximation from the DEM (θᵢ ≈ 43°); illustrates why the GCOV product reports shadowMaskingApplied = False.',
+                    )}
+                  </p>
+                </div>
               )}
             </section>
 

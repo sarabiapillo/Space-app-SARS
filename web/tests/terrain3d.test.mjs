@@ -2,17 +2,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
+  adaptiveDespikeThreshold,
   bboxFromGeometry,
   bboxSizeMeters,
   chooseZoom,
+  computeSarGeometricMask,
   decodeTerrarium,
   despikeElevationGrid,
   hypsometricColor,
   latToTileY,
   lonToTileX,
   resampleElevationBilinear,
+  sanitizeDecodedTilePixels,
   sanitizeElevationGrid,
   sanitizeElevationSample,
+  sarClassColor,
 } from '../src/utils/terrain3d.ts'
 import { setLanguage, localizeText } from '../src/i18n/core.ts'
 
@@ -107,10 +111,76 @@ test('despikeElevationGrid elimina aguja aislada de +256 m sin aplanar una pendi
   assert.equal(resampled[8], 640)
 })
 
+test('despike adaptativo en zonas costeras planas (<100 m, ej. Cancún) y sanity check en tesela nativa', () => {
+  // En zona baja (<100 m) con MAD=0, el umbral dinámico debe ser estricto (<= 15 m)
+  const lowThresh = adaptiveDespikeThreshold(5, 0)
+  assert.ok(lowThresh <= 15, `expected <= 15m in lowlands, got ${lowThresh}`)
+
+  // Planicie costera tipo Cancún (5 m s.n.m.) con un pico moderado de +25 m (30 m total) y un par de agujas
+  const cols = 5
+  const rows = 5
+  const cancun = new Float32Array(cols * rows).fill(5)
+  cancun[2 * cols + 2] = 30 // +25 m de salto en zona plana (< 80 m pero > umbral costero de 15 m)
+  cancun[1 * cols + 1] = 261 // +256 m
+  const cleaned = despikeElevationGrid(cancun, cols, rows)
+  assert.equal(cleaned.heights[2 * cols + 2], 5)
+  assert.equal(cleaned.heights[1 * cols + 1], 5)
+  assert.equal(cleaned.minM, 5)
+  assert.equal(cleaned.maxM, 5)
+
+  // Sanity check a nivel de tesela nativa: suaviza saltos > 150 m en un solo píxel antes del mosaico
+  const tile = new Float32Array(16).fill(10)
+  tile[5] = 266 // salto de +256 m dentro de la tesela nativa 4x4
+  const sanitizedTile = sanitizeDecodedTilePixels(tile, 4, 4, 150)
+  assert.equal(sanitizedTile[5], 10)
+})
+
+test('máscara geométrica SAR: 100% confiable en terreno plano y alterna layover/sombra al invertir órbita en acantilado', () => {
+  const cols = 5
+  const rows = 5
+  const flat = new Float32Array(cols * rows).fill(100)
+  const flatRes = computeSarGeometricMask(
+    { heights: flat, cols, rows, widthM: 400, heightM: 400 },
+    { orbit: 'ascending', incidenceDeg: 43 },
+  )
+  assert.equal(flatRes.stats.reliablePct, 100)
+  assert.equal(flatRes.stats.steepPct, 0)
+  assert.equal(flatRes.stats.layoverPct, 0)
+  assert.equal(flatRes.stats.shadowPct, 0)
+
+  // Rampa muy empinada que sube hacia el Oeste (zx < 0 fuerte: +200 m cada 100 m hacia el Oeste)
+  // En órbita Ascendente (haz apunta hacia el Oeste, lx < 0): el terreno sube en dirección del haz → Layover.
+  // En órbita Descendente (haz apunta hacia el Este, lx > 0): el terreno baja en dirección del haz → Sombra.
+  const cliff = new Float32Array(cols * rows)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      cliff[r * cols + c] = (cols - 1 - c) * 200
+    }
+  }
+  const ascCliff = computeSarGeometricMask(
+    { heights: cliff, cols, rows, widthM: 400, heightM: 400 },
+    { orbit: 'ascending', incidenceDeg: 43 },
+  )
+  const descCliff = computeSarGeometricMask(
+    { heights: cliff, cols, rows, widthM: 400, heightM: 400 },
+    { orbit: 'descending', incidenceDeg: 43 },
+  )
+  assert.equal(ascCliff.stats.layoverPct, 100)
+  assert.equal(ascCliff.stats.shadowPct, 0)
+  assert.equal(descCliff.stats.shadowPct, 100)
+  assert.equal(descCliff.stats.layoverPct, 0)
+
+  assert.deepEqual(sarClassColor('reliable'), [34, 197, 94])
+  assert.deepEqual(sarClassColor('steep'), [245, 158, 11])
+  assert.deepEqual(sarClassColor('layover'), [239, 68, 68])
+  assert.deepEqual(sarClassColor('shadow'), [30, 27, 75])
+})
+
 test('mensajes del módulo registrados en i18n (ES/EN)', () => {
   try {
     setLanguage('en')
     assert.equal(localizeText('Relieve 3D'), '3D Relief')
+    assert.equal(localizeText('Máscara SAR (Geometría)'), 'SAR Mask (Geometry)')
     assert.equal(localizeText('4 teselas no disponibles'), '4 tiles unavailable')
     assert.equal(localizeText('Selecciona primero una ROI para ver su relieve 3D.'), 'Select an ROI first to view its 3D relief.')
   } finally { setLanguage('es') }
