@@ -13,7 +13,8 @@ automático al otro si el intento falla tras la preparación. boundary: 'closed'
 (north/east/south/west: closed, free o fixed_level con level_m); initial_condition:
 'dry_zero_velocity' o 'still_water_at_fixed_level'; manning: número (uniforme) o 'worldcover' (n por celda de
 ESA WorldCover en manningfile, fpfric = mediana); infiltration: 'unsupported', 'runoff_coefficient' o
-'curve_number' (lluvia neta SCS-CN por celda, WorldCover + HYSOGs250m; requiere antecedent_moisture 'auto'
+'curve_number' (lluvia neta SCS-CN por celda, WorldCover + HYSOGs250m, Ia = 0.05 S con S convertida de la tabla 0.2 S;
+requiere antecedent_moisture 'auto'
 (NISAR SME2 / SMAP L4) o 'I'|'II'|'III', y admite urban_drainage_mm_h >= 0); domain_nonurban: booleano declarado
 (informativo: un dominio urbano se admite con aviso); atmospheric_pressure_hpa opcional (950-1040, eleva el nivel
 del mar fijo y la marea). Un lado de boundary puede ser {type:'tide', mdt?} (marea astronómica EOT20 como serie HVAR
@@ -59,7 +60,8 @@ from pipeline.elevation.nasadem import NASADEMProvider, _required_tiles
 from pipeline.elevation.vertical_datum import DATUM, DEFAULT_GRID_DIR, GRIDS, load_grids
 from .inputs import normalize_request, validate_roi
 from . import design_storm as storms
-from .curve_number import curve_number_grid, hsg_for_grid, net_rain_cube
+from .curve_number import (DEFAULT_LAMBDA, TABULATED_LAMBDA, curve_number_for_lambda, curve_number_grid, hsg_for_grid,
+                           initial_abstraction_provenance, net_rain_cube)
 from .landcover import BUILT_CLASS, landcover_for_grid, write_manning_file
 from .soil_moisture import _utc as _parse_utc, antecedent_condition
 from .dem_prepared import prepare_dem, _validate_crs
@@ -463,7 +465,9 @@ def _land_surface_request(h, rp, observed, drainage):
         curve = {'antecedent_moisture': h['antecedent_moisture'], 'event_time_utc': event, 'event_time_basis': basis,
                  'urban_drainage_mm_h': float(drainage), 'amc': None if h['antecedent_moisture'] == 'auto' else h['antecedent_moisture'],
                  'amc_source': None if h['antecedent_moisture'] == 'auto' else 'request', 'relative_saturation': None,
-                 'gross_rain_mm': None, 'mean_net_rain_mm': None, 'mean_runoff_coefficient': None, 'cn_mean': None}
+                 'gross_rain_mm': None, 'mean_net_rain_mm': None, 'mean_runoff_coefficient': None, 'cn_mean': None,
+                 # Ia = lambda S; 0.05 converts the tabulated (lambda 0.2) retention, see curve_number.retention_mm.
+                 'initial_abstraction_ratio': DEFAULT_LAMBDA, 'cn_mean_effective': None}
     worldcover = h['manning'] == 'worldcover'
     return {'manning': 'worldcover' if worldcover else 'uniform', 'manning_value': None if worldcover else h['manning'],
             'manning_fpfric': None, 'infiltration': h['infiltration'], 'curve_number': curve,
@@ -793,17 +797,27 @@ def _land_surface(directory, request, dem, datasets):
         moisture = _antecedent(request, spec['curve_number'], datasets.get('antecedent') or antecedent_condition)
         cn = curve_number_grid(classes, soils['hsg'], amc=moisture['amc'])
         np.save(out / 'curve-number.npy', cn)
-        manifest.update(soils=soils['provenance'], antecedent_moisture=moisture['provenance'])
+        ratio = _initial_abstraction_ratio(spec['curve_number'])
+        manifest.update(soils=soils['provenance'], antecedent_moisture=moisture['provenance'],
+                        initial_abstraction=initial_abstraction_provenance(ratio))
         summary['attribution'].append(HYSOGS_ATTRIBUTION)
         if moisture['source'] not in (None, 'request'):
             summary['attribution'].append(moisture['provenance'].get('citation') or moisture['source'])
         summary['curve_number'] = {'amc': moisture['amc'], 'amc_source': moisture['source'],
                                    'relative_saturation': moisture['relative_saturation'],
-                                   'cn_mean': float(np.nanmean(cn)) if np.isfinite(cn).any() else None}
+                                   'cn_mean': float(np.nanmean(cn)) if np.isfinite(cn).any() else None,
+                                   'cn_mean_effective': float(np.mean(curve_number_for_lambda(
+                                       cn[np.isfinite(cn)], initial_abstraction_ratio=ratio)))
+                                   if np.isfinite(cn).any() else None}
         result.update(cn=cn, amc=moisture['amc'])
     manifest['summary'] = summary
     (out / 'manifest.json').write_text(json.dumps(manifest, allow_nan=False, default=_json_default))
     return result
+
+
+def _initial_abstraction_ratio(spec):
+    """lambda of a Curve Number run; jobs created before the lambda 0.05 default keep 0.2."""
+    return spec.get('initial_abstraction_ratio', TABULATED_LAMBDA)
 
 
 def _json_default(value):
@@ -844,7 +858,8 @@ def _export_net_rain(directory, request, cfg, dem, profile, land):
     spec = request['computed']['land_surface']['curve_number']
     mask = roi_cell_mask(request['roi'], dem)
     cube, summary = net_rain_cube(profile['segments'], land['cn'], built_fraction=land['built_fraction'],
-                                  urban_drainage_mm_h=spec['urban_drainage_mm_h'])
+                                  urban_drainage_mm_h=spec['urban_drainage_mm_h'],
+                                  initial_abstraction_ratio=_initial_abstraction_ratio(spec))
     cube = cube * mask[None]
     gross = float(summary['total_rain_mm'])
     net = cube.sum(axis=0)[mask]

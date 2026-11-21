@@ -63,12 +63,15 @@ def test_mass_balance_adds_back_rain_missing_from_swe_verror(tmp_path):
 
 
 def test_frames_count_cells_per_depth_class_for_charts(tmp_path):
+    # A 1-3 cm class makes thin sheets of water visible: [0.01, 0.03), [0.03, 0.15), ... and >= 2 m.
     ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.6 2.5\n')
     ascii_grid(tmp_path / 'a.max', '.02 .15\n1 2\n')
     result = summarize_results(tmp_path, save_interval_s=1)
-    assert result['depth_classes_m'] == [.03, .15, .5, 1, 2]
-    assert result['frames'][0]['stats']['depth_class_cells'] == [1, 0, 1, 0, 1]
-    assert result['maximum']['stats']['depth_class_cells'] == [0, 1, 0, 1, 1]
+    assert result['depth_classes_m'] == [.01, .03, .15, .5, 1, 2]
+    assert result['frames'][0]['stats']['depth_class_cells'] == [0, 1, 0, 1, 0, 1]
+    assert result['maximum']['stats']['depth_class_cells'] == [1, 0, 1, 0, 1, 1]
+    ascii_grid(tmp_path / 'a-0000.wd', '.009 .01\n.0299 .03\n')  # bounds are inclusive below, exclusive above
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [2, 1, 0, 0, 0, 0]
 
 
 def test_missing_mass_file_keeps_explicit_warning(tmp_path):

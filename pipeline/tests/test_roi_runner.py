@@ -601,7 +601,7 @@ def test_native_copernicus_terrain_is_converted_from_the_ellipsoid_to_egm2008(ro
 from rasterio.transform import from_origin as _from_origin
 
 from pipeline.hydrology import roi_runner as rr
-from pipeline.hydrology.curve_number import convert_amc, scs_runoff_mm
+from pipeline.hydrology.curve_number import convert_amc, curve_number_for_lambda, scs_runoff_mm
 from pipeline.hydrology.results import URBAN_WARNING
 
 
@@ -746,13 +746,20 @@ def test_native_curve_number_net_rain_per_cell_with_auto_moisture(root):
     total = rain.sum(axis=0)
     assert (rain >= 0).all()
     roi = total > 0
-    # Grassland, HSG A (west) and D (east) under AMC III: net rain of each cell is its own SCS-CN runoff.
-    expected = scs_runoff_mm(30.0, cn)
+    # Grassland, HSG A (west) and D (east) under AMC III: net rain of each cell is its own SCS-CN runoff,
+    # with lambda 0.05 and the converted retention (S0.05 = 1.33 S0.20^1.15, inches).
+    expected = scs_runoff_mm(30.0, cn, initial_abstraction_ratio=0.05)
     assert total[roi] == pytest.approx(expected[roi])
+    assert not np.allclose(expected[roi], scs_runoff_mm(30.0, cn, initial_abstraction_ratio=0.2)[roi])
     assert len(np.unique(np.round(cn[roi], 6))) == 2
     assert set(np.round(cn[roi], 3)) == {round(convert_amc(54.0, 'III'), 3), round(convert_amc(86.0, 'III'), 3)}
     cnls = state['land_surface']['curve_number']
     assert (cnls['amc'], cnls['amc_source']) == ('III', 'SMAP L4')
+    assert cnls['initial_abstraction_ratio'] == 0.05
+    assert cnls['cn_mean_effective'] == pytest.approx(float(np.mean(curve_number_for_lambda(cn[np.isfinite(cn)]))))
+    lam = state['provenance']['land_surface']['initial_abstraction']
+    assert lam['initial_abstraction_ratio'] == 0.05 and '1.33' in lam['conversion'] and 'Hawkins' in lam['citation']
+    assert state['provenance']['rain']['method']['curve_number']['initial_abstraction_ratio'] == 0.05
     assert 0 < cnls['mean_runoff_coefficient'] < 1 and cnls['gross_rain_mm'] == pytest.approx(30)
     assert cnls['mean_net_rain_mm'] == pytest.approx(total[roi].mean())
     assert state['losses']['runoff_coefficient'] is None and state['losses']['infiltration'] == 'curve_number'

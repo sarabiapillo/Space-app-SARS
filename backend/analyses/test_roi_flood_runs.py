@@ -224,6 +224,15 @@ class RoiHttpTests(SimpleTestCase):
         from analyses.roi_flood_runs import _DEPTH_CLASSES
         from pipeline.hydrology.results import DEPTH_CLASS_BOUNDS_M
         self.assertEqual(tuple(lower for lower, _ in _DEPTH_CLASSES), DEPTH_CLASS_BOUNDS_M)
+        # The 0.01-0.03 m thin-sheet class is the lightest blue of the sequence.
+        self.assertEqual(_DEPTH_CLASSES[0], (.01, (222, 235, 247)))
+
+    def test_results_echo_each_run_own_depth_classes(self):
+        # Runs made before the 0.01 m class keep their five bounds; the UI reads them from the run.
+        run_id, state, directory = self.seed()
+        state['result']['depth_classes_m'] = [.03, .15, .5, 1, 2]
+        (directory / 'state.json').write_text(json.dumps(state))
+        self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{run_id}/results/').json()['depth_classes_m'], [.03, .15, .5, 1, 2])
 
     def test_curve_number_run_echoes_land_surface_and_charts_the_net_rain(self):
         run_id, state, directory = self.seed()

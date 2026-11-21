@@ -223,10 +223,11 @@ _PREVIEW_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_MAX_SOURCE_CELLS = 8_000_000
 _PREVIEW_MAX_EDGE = 2048
 _PREVIEW_MAX_CELLS = 4_000_000
-_PREVIEW_PALETTE = 'depth-classes-blues-v2'
-# Lower bound (m) and colour of each depth class, light to dark blue; below 0.03 m is transparent.
-# Keep in sync with DEPTH_CLASSES in web/src/utils/floodDg2.ts (the map legend).
-_DEPTH_CLASSES = [(.03, (198, 219, 239)), (.15, (107, 174, 214)), (.5, (33, 113, 181)),
+_PREVIEW_PALETTE = 'depth-classes-blues-v3'
+# Lower bound (m) and colour of each depth class, light to dark blue (ColorBrewer Blues); below 0.01 m is
+# transparent. 0.01-0.03 m shows thin sheets of water. Keep in sync with DEPTH_CLASSES in
+# web/src/utils/floodDg2.ts (the map legend) and DEPTH_CLASS_BOUNDS_M in pipeline/hydrology/results.py.
+_DEPTH_CLASSES = [(.01, (222, 235, 247)), (.03, (198, 219, 239)), (.15, (107, 174, 214)), (.5, (33, 113, 181)),
                   (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
 
 
@@ -290,7 +291,7 @@ class RoiRunPreviewView(APIView):
                 for lower, colour in _DEPTH_CLASSES:
                     rgba[depth >= lower, :3] = colour
                 rgba[:, :, 3] = np.where((valid > 0) & np.isfinite(depth) &
-                                          (depth >= .03) & (depth != src.nodata), 255, 0)
+                                          (depth >= _DEPTH_CLASSES[0][0]) & (depth != src.nodata), 255, 0)
                 output = io.BytesIO()
                 Image.fromarray(rgba, 'RGBA').save(output, format='PNG')
         except (RasterioError, ValueError, TypeError, KeyError, OverflowError, MemoryError):

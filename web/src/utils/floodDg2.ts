@@ -108,7 +108,14 @@ export function buildRoiFloodRequest(form: FloodDg2Form, roi: Polygon | null, t:
     const hours=Number(form.stormHours)
     if(simulation.duration_s<hours*3600)throw Error(t('La duración de simulación debe cubrir toda la tormenta de diseño.','The simulation duration must cover the whole design storm.'))
     rain={rainfall:null,rainfall_profile:{source:'design_storm',return_period_years:period,duration_h:hours,step_s:DESIGN_STORM_STEP_S}}
-  } else rain={rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:positive(form.rainDuration,'Duración de lluvia'),duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'}}
+  } else {
+    const rainDuration=positive(form.rainDuration,'Duración de lluvia')
+    if(rainDuration>simulation.duration_s)throw Error(t(`La lluvia (${rainDuration} s) dura más que la simulación (${simulation.duration_s} s): alarga la simulación o acorta la lluvia.`,`The rain (${rainDuration} s) lasts longer than the simulation (${simulation.duration_s} s): lengthen the simulation or shorten the rain.`))
+    rain={rainfall:{amount:positive(form.amount,'Lluvia'),unit:'mm',duration:rainDuration,duration_unit:'s'},rainfall_profile:{interval_count:integer(form.intervals,'Intervalos'),seed:integer(form.seed,'Semilla',true),distribution:'uniform_balanced'}}
+  }
+  // Same frame count as the server (floor(duration / save) + 2), checked before sending against its default limit.
+  const frames=Math.floor(simulation.duration_s/simulation.save_interval_s)+2
+  if(frames>DG2_DEFAULT_MAX_FRAMES){const minSave=Math.ceil(simulation.duration_s/(DG2_DEFAULT_MAX_FRAMES-2));throw Error(t(`Se guardarían ${frames} cuadros y el servidor admite máximo ${DG2_DEFAULT_MAX_FRAMES}: usa un intervalo de guardado de al menos ${minSave} s o una simulación más corta.`,`${frames} frames would be saved and the server allows at most ${DG2_DEFAULT_MAX_FRAMES}: use a save interval of at least ${minSave} s or a shorter simulation.`))}
   const manning=manningMode==='worldcover'?'worldcover':positive(form.manning,'Manning')
   return {roi,domain,...rain,terrain:{target_crs:form.crs,resolution_m:positive(form.resolution,'Resolución'),resampling:form.resampling,source:form.terrainSource,...(form.bathymetry?{bathymetry:'gebco'}:{})},hydraulics:{manning,initial_condition:form.stillWater?'still_water_at_fixed_level':'dry_zero_velocity',boundary,infiltration:form.infiltration,domain_nonurban:form.nonurban,lakes:form.lakes,...(curveNumber?{antecedent_moisture:form.moisture}:{}),...(form.pressure.trim()?{atmospheric_pressure_hpa:pressure}:{})},simulation}
 }
@@ -123,6 +130,8 @@ export function terrainLabel(source: string | null | undefined) {
 
 /** Default `FLOOD_ROI_DG2_MAX_CELLS` of the server (configurable there); about 1 km² at 30 m. */
 export const DG2_DEFAULT_MAX_CELLS = 3000
+/** Default `FLOOD_ROI_DG2_MAX_FRAMES` of the server: frames = floor(duration / save interval) + 2. */
+export const DG2_DEFAULT_MAX_FRAMES = 20
 
 type Side = 'north' | 'east' | 'south' | 'west'
 const SIDE_KEYS: Record<Side, 'boundaryNorth' | 'boundaryEast' | 'boundarySouth' | 'boundaryWest'> = {north:'boundaryNorth',east:'boundaryEast',south:'boundarySouth',west:'boundaryWest'}
@@ -155,17 +164,20 @@ export function withFormChange<F extends { confirm: boolean }>(form: F, name: ke
 }
 
 /** Fills the form with illustrative example values (not recommendations) so the user can review and run a
- * small test. The domain, lakes, the urban declaration and the confirmation stay the user's; the CRS is the UTM
- * zone of the ROI centre (EPSG:32615, the study area, without a ROI); the terrain is Copernicus GLO-30, Manning
- * comes from ESA WorldCover and losses from the Curve Number with automatic antecedent moisture (DG2). */
+ * test where water visibly accumulates: a 100-year, 3-hour PXR-4 design storm (synthetic fallback: 60 mm in 3 h),
+ * simulated one hour longer (14400 s) with a frame every 1200 s (14 frames, server limit 20) and no DG2 thin-depth
+ * threshold (the automatic FV1 fallback covers DG2 failures). The domain, lakes, the urban declaration and the
+ * confirmation stay the user's; the CRS is the UTM zone of the ROI centre (EPSG:32615, the study area, without a
+ * ROI); the terrain is Copernicus GLO-30, Manning comes from ESA WorldCover and losses from the Curve Number with
+ * automatic antecedent moisture. */
 export function exampleFormValues(form: FloodDg2Form, roi: Polygon | null): FloodDg2Form {
   const ring = outerRing(roi)
   const lons = ring?.map(p => p[0]) ?? [], lats = ring?.map(p => p[1]) ?? []
   const crs = ring ? utmEpsgFor((Math.min(...lons) + Math.max(...lons)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2) : 'EPSG:32615'
   return {...form, crs, resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus',
-    rainKind:'synthetic', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false}
+    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'1200', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
+    rainKind:'design_storm', returnPeriod:'100', stormHours:'3', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false}
 }
 
 /** Coastal scenario: the sea side keeps a fixed level of 0 m (EGM2008) and starts full; the other sides are free. */
@@ -219,11 +231,26 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   }
 }
 
+/** Lower bound (m) from which a cell counts as flooded; the 0.01–0.03 m class is a thin sheet of water. */
+export const FLOODED_MIN_DEPTH_M = .03
+
+/** Cells of the classes at or above FLOODED_MIN_DEPTH_M and of the thinner classes, using the run's own bounds
+ * (`depth_classes_m`; runs without it predate the 0.01 m class, so every class counts as flooded). */
+function splitDepthCells(stats: FloodRoiStats | undefined, bounds: number[] | null | undefined) {
+  if(!Array.isArray(stats?.depth_class_cells)) return null
+  const cells = stats.depth_class_cells as number[]
+  const thin = (i: number) => Array.isArray(bounds) && bounds[i] != null && bounds[i] < FLOODED_MIN_DEPTH_M
+  const sum = (keep: (i: number) => boolean) => cells.reduce((a, n, i) => keep(i) ? a + n : a, 0)
+  return {flooded: sum(i => !thin(i)), thin: cells.some((_, i) => thin(i)) ? sum(thin) : null}
+}
+
 /** Headline numbers of the selected frame (or the maximum when `frameIndex` is null) for the result cards.
- * Flooded area counts the depth classes (≥ 0.03 m), as the area chart does; null where older runs lack inputs. */
-export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'mass_balance' | 'froude' | 'time_of_concentration' | 'roads'>, frameIndex: number | null | undefined) {
+ * Flooded area counts the depth classes from 0.03 m, as the area chart does; `thinSheetHa` is the 0.01–0.03 m
+ * class (null for runs without it); null where older runs lack inputs. */
+export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'mass_balance' | 'froude' | 'time_of_concentration' | 'roads'> & Partial<Pick<FloodRoiResult, 'depth_classes_m'>>, frameIndex: number | null | undefined) {
   const stats = frameIndex == null ? result.maximum.stats : result.frames.find(f => f.frame_index === frameIndex)?.stats
-  const classes = Array.isArray(stats?.depth_class_cells) ? (stats.depth_class_cells as number[]).reduce((a, b) => a + b, 0) : null
+  const split = splitDepthCells(stats, result.depth_classes_m)
+  const classes = split ? split.flooded : null
   const cellsize = result.grid?.cellsize_m
   const valid = Number(stats?.valid_cells)
   const max = Number(stats?.max_m)
@@ -234,6 +261,7 @@ export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | '
   return {
     floodedHa: classes != null && cellsize ? classes * cellsize ** 2 / 1e4 : null,
     floodedPct: classes != null && valid > 0 ? classes * 100 / valid : null,
+    thinSheetHa: split?.thin != null && cellsize ? split.thin * cellsize ** 2 / 1e4 : null,
     maxDepthM: stats?.max_m != null && Number.isFinite(max) ? max : null,
     domainM3: last ? last[1] : null,
     rainM3: last ? last[2] : null,
@@ -317,7 +345,10 @@ export function landSurfaceNotes(land: FloodLandSurface | null | undefined, t: T
     const losses = cn.mean_runoff_coefficient == null || cn.gross_rain_mm == null || cn.mean_net_rain_mm == null ? ''
       : t(`: ${pct(cn.mean_runoff_coefficient)} % de la lluvia escurre (${mm(cn.gross_rain_mm)} mm → ${mm(cn.mean_net_rain_mm)} mm netos)`,
         `: ${pct(cn.mean_runoff_coefficient)} % of the rain runs off (${mm(cn.gross_rain_mm)} mm → ${mm(cn.mean_net_rain_mm)} mm net)`)
-    notes.push(t(`Número de curva (WorldCover + HYSOGs250m), humedad previa ${amc}${losses}`, `Curve Number (WorldCover + HYSOGs250m), antecedent moisture ${amc}${losses}`))
+    // Initial abstraction ratio (0.05 with the Hawkins et al. 2002 retention conversion); absent in older runs.
+    const lambda = (cn as {initial_abstraction_ratio?: number | null}).initial_abstraction_ratio
+    const ia = lambda == null ? '' : `, Ia = ${lambda}·S`
+    notes.push(t(`Número de curva (WorldCover + HYSOGs250m${ia}), humedad previa ${amc}${losses}`, `Curve Number (WorldCover + HYSOGs250m${ia}), antecedent moisture ${amc}${losses}`))
   }
   return notes
 }
@@ -392,9 +423,10 @@ export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameInd
   return {type:'FeatureCollection',features:frame.arrows.map(([lon,lat,speed,bearing])=>({type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{speed,bearing}}))}
 }
 
-/** Depth classes of the preview PNG, light to dark blue. Kept in sync with _DEPTH_CLASSES in
- * backend/analyses/roi_flood_runs.py by a test. Below 0.03 m the image is transparent. */
+/** Depth classes of the preview PNG, light to dark blue (ColorBrewer Blues). Kept in sync with _DEPTH_CLASSES in
+ * backend/analyses/roi_flood_runs.py by a test. Below 0.01 m the image is transparent; 0.01–0.03 m is a thin sheet. */
 export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb: [number, number, number]}> = [
+  {min:.01,max:.03,rgb:[222,235,247]},
   {min:.03,max:.15,rgb:[198,219,239]},
   {min:.15,max:.5,rgb:[107,174,214]},
   {min:.5,max:1,rgb:[33,113,181]},
@@ -419,7 +451,7 @@ export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' |
   const counted = result.frames.every(f => classes(f.stats))
   const evolution = counted && cellArea ? {
     minutes: result.frames.map(f => (f.scheduled_time_s ?? 0) / 60),
-    wetAreaHa: result.frames.map(f => classes(f.stats)!.reduce((a, b) => a + b, 0) * cellArea / 1e4),
+    wetAreaHa: result.frames.map(f => splitDepthCells(f.stats, result.depth_classes_m)!.flooded * cellArea / 1e4),
     maxDepthM: result.frames.map(f => Number(f.stats.max_m ?? 0)),
   } : null
   const series = result.mass_balance?.series
@@ -430,6 +462,8 @@ export function dg2ChartData(result: Pick<FloodRoiResult, 'frames' | 'maximum' |
   const distribution = cells && bounds && cellArea ? {
     labels: bounds.map((low, i) => i + 1 < bounds.length ? `${low}–${bounds[i + 1]}` : `≥ ${low}`),
     areaHa: cells.map(n => n * cellArea / 1e4),
+    // Colour of each of the run's own classes (older runs start at 0.03 m); grey for a bound the palette lacks.
+    colors: bounds.map(low => {const c = DEPTH_CLASSES.find(d => d.min === low); return c ? `rgb(${c.rgb.join(',')})` : 'rgb(148,163,184)'}),
   } : null
   return {hyetograph, evolution, volume, distribution}
 }

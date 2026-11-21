@@ -88,16 +88,60 @@ def test_amc_conversions_chow_and_hawkins():
 # --- SCS-CN runoff -----------------------------------------------------------------------------
 
 def test_scs_runoff_hand_computed_example():
-    """P = 100 mm, CN = 78, lambda = 0.2.
+    """P = 100 mm, CN = 78, lambda = 0.2 (option; the tabulated CN is used as is).
 
     S = 25400/78 - 254 = 71.641 mm; Ia = 0.2 S = 14.328 mm;
     Q = (100 - 14.328)^2 / (100 - 14.328 + 71.641) = 7339.67 / 157.313 = 46.656 mm.
     """
-    assert cnm.scs_runoff_mm(100.0, 78.0) == pytest.approx(46.656, abs=1e-3)
-    assert cnm.scs_runoff_mm(10.0, 78.0) == 0.0          # P below Ia
+    assert cnm.scs_runoff_mm(100.0, 78.0, initial_abstraction_ratio=0.2) == pytest.approx(46.656, abs=1e-3)
+    assert cnm.scs_runoff_mm(10.0, 78.0, initial_abstraction_ratio=0.2) == 0.0          # P below Ia
     assert cnm.scs_runoff_mm(50.0, 100.0) == pytest.approx(50.0)  # impervious / water
-    # lambda = 0.05: Ia = 3.582 mm, Q = 96.418^2 / (96.418 + 71.641) = 55.316 mm
-    assert cnm.scs_runoff_mm(100.0, 78.0, initial_abstraction_ratio=0.05) == pytest.approx(55.316, abs=1e-3)
+    assert cnm.scs_runoff_mm(50.0, 100.0, initial_abstraction_ratio=0.2) == pytest.approx(50.0)
+
+
+def test_lambda_005_converts_the_retention_hawkins_woodward():
+    """S0.05 = 1.33 S0.20^1.15 with S in inches (Hawkins et al. 2002; Woodward et al. 2003).
+
+    In mm: S0.05 = 1.33 * 25.4^-0.15 * S0.20^1.15 = 0.81870 * S0.20^1.15.
+    CN 78.6: S0.20 = 25400/78.6 - 254 = 69.1552 mm (2.72265 in); S0.05 = 1.33 * 2.72265^1.15 = 4.20815 in
+    = 106.887 mm; CN0.05 = 25400 / (254 + 106.887) = 70.382, the same as 100 / (1.879 (100/78.6 - 1)^1.15 + 1)
+    = 70.379 (1.879 is 1.33 * 10^0.15 rounded).
+    """
+    assert cnm.S005_COEFFICIENT_MM == pytest.approx(0.81870, abs=1e-5)
+    assert cnm.retention_mm(78.6, initial_abstraction_ratio=0.2) == pytest.approx(69.1552, abs=1e-4)
+    assert cnm.retention_mm(78.6) == pytest.approx(106.887, abs=1e-3)  # default lambda 0.05
+    assert cnm.curve_number_for_lambda(78.6) == pytest.approx(70.382, abs=1e-3)
+    assert cnm.curve_number_for_lambda(78.6) == pytest.approx(100 / (1.879 * (100 / 78.6 - 1) ** 1.15 + 1), abs=5e-3)
+    assert cnm.curve_number_for_lambda(78.6, initial_abstraction_ratio=0.2) == pytest.approx(78.6)
+    assert cnm.curve_number_for_lambda(100.0) == 100.0
+    np.testing.assert_allclose(cnm.curve_number_for_lambda(np.array([78.0, 62.0, 90.0])), [69.529, 48.311, 86.947], atol=1e-3)
+
+
+def test_lambda_005_is_the_default_and_gives_more_runoff_for_a_short_storm():
+    """Last real run (Sumidero): P = 30 mm, mean CN 78.6 (AMC II).
+
+    lambda 0.2: S = 69.155, Ia = 13.831, Q = 16.169^2 / (16.169 + 69.155) = 3.064 mm.
+    lambda 0.05: S = 106.887, Ia = 5.344, Q = 24.656^2 / (24.656 + 106.887) = 4.621 mm.
+    """
+    assert cnm.DEFAULT_LAMBDA == 0.05
+    assert cnm.scs_runoff_mm(30.0, 78.6) == pytest.approx(4.621, abs=1e-3)
+    assert cnm.scs_runoff_mm(30.0, 78.6, initial_abstraction_ratio=0.05) == pytest.approx(4.621, abs=1e-3)
+    assert cnm.scs_runoff_mm(30.0, 78.6, initial_abstraction_ratio=0.2) == pytest.approx(3.064, abs=1e-3)
+    # Large storms: the converted S is larger, so lambda 0.05 can give less runoff (P = 100 mm, CN 78:
+    # Ia = 5.566, Q = 94.434^2 / (94.434 + 111.317) = 43.343 mm, against 46.656 mm with lambda 0.2).
+    assert cnm.scs_runoff_mm(100.0, 78.0) == pytest.approx(43.343, abs=1e-3)
+    for other in (0.0, 0.1, 0.3, 1.0):
+        with pytest.raises(ValueError):
+            cnm.scs_runoff_mm(30.0, 78.6, initial_abstraction_ratio=other)
+
+
+def test_lambda_provenance_names_the_conversion_and_its_sources():
+    record = cnm.initial_abstraction_provenance()
+    assert record['initial_abstraction_ratio'] == 0.05 and record['tabulated_cn_ratio'] == 0.2
+    assert '1.33' in record['conversion'] and '1.15' in record['conversion']
+    assert 'Hawkins' in record['citation'] and 'Woodward' in record['citation']
+    plain = cnm.initial_abstraction_provenance(0.2)
+    assert plain['initial_abstraction_ratio'] == 0.2 and plain['conversion'] is None
 
 
 SEGMENTS = [{"start_s": 0, "end_s": 1800, "mm": 10.0}, {"start_s": 1800, "end_s": 3600, "mm": 40.0},
@@ -112,15 +156,21 @@ def test_incremental_net_rain_is_nonnegative_and_sums_to_total_runoff():
     np.testing.assert_allclose(cube[:, 0, 0].sum(), cnm.scs_runoff_mm(100.0, 78.0), rtol=1e-12)
     np.testing.assert_allclose(cube[:, 0, 1].sum(), cnm.scs_runoff_mm(100.0, 62.0), rtol=1e-12)
     np.testing.assert_allclose(cube[:, 1, 0].sum(), cnm.scs_runoff_mm(100.0, 90.0), rtol=1e-12)
-    # First interval (10 mm) is below Ia for CN 78 (14.3 mm): no runoff yet.
-    assert cube[0, 0, 0] == 0.0
+    # First interval (10 mm) is above Ia for CN 78 with lambda 0.05 (5.57 mm): runoff starts at once.
+    assert cube[0, 0, 0] == pytest.approx(cnm.scs_runoff_mm(10.0, 78.0)) and cube[0, 0, 0] > 0
     # Cells without CN (nodata) receive zero net rain, never NaN in the cube.
     assert np.all(cube[:, 1, 1] == 0.0)
     assert summary["total_rain_mm"] == pytest.approx(100.0)
     assert summary["cells_with_cn"] == 3
     expected_c = np.mean([cnm.scs_runoff_mm(100.0, v) for v in (78.0, 62.0, 90.0)]) / 100.0
     assert summary["mean_runoff_coefficient"] == pytest.approx(expected_c)
-    assert summary["initial_abstraction_ratio"] == 0.2
+    assert summary["initial_abstraction_ratio"] == 0.05 and summary["tabulated_cn_ratio"] == 0.2
+    assert summary["cn_mean_effective"] == pytest.approx(np.mean(cnm.curve_number_for_lambda(np.array([78.0, 62.0, 90.0]))))
+    # First interval (10 mm) is below Ia for CN 78 with lambda 0.2 (14.3 mm): the option keeps the old values.
+    old, old_summary = cnm.net_rain_cube(SEGMENTS, cn, initial_abstraction_ratio=0.2)
+    assert old[0, 0, 0] == 0.0 and old_summary["initial_abstraction_ratio"] == 0.2
+    np.testing.assert_allclose(old[:, 0, 0].sum(), 46.656, atol=1e-3)
+    assert old_summary["cn_mean_effective"] == pytest.approx(old_summary["cn_mean"])
 
 
 def test_segments_accept_intensity_forms_and_must_be_contiguous():

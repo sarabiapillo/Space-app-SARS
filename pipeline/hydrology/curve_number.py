@@ -26,6 +26,24 @@ project's assumption and is recorded in ``CN_TABLE``.
 
 AMC conversion: Chow, Maidment & Mays (1988), Applied Hydrology, eqs. 5.5.4-5.5.5 (default) and Hawkins et al.
 (1985) approximation of NEH-4 Table 10.1; both recorded as formulas, not calibrated for any region.
+
+Initial abstraction ratio (default lambda = Ia/S = 0.05, option 0.2). The tabulated CNs above (and the AMC
+conversion) assume lambda = 0.2. Hawkins et al. (2002) and Woodward et al. (2003) refitted rainfall-runoff event
+data of US small watersheds and found lambda = 0.05 fits better; with it the retention must be converted:
+``S0.05 = 1.33 S0.20^1.15`` with S in inches, i.e. ``S0.05 = 1.33 * 25.4^-0.15 * S0.20^1.15 = 0.8187 S0.20^1.15``
+with S in mm, equivalently ``CN0.05 = 100 / (1.879 (100/CN0.20 - 1)^1.15 + 1)`` (1.879 = 1.33 * 10^0.15).
+Order: tabulated CN (lambda 0.2) -> AMC condition (on the lambda 0.2 basis) -> S conversion to lambda 0.05.
+Effect: runoff starts earlier (Ia = 0.05 S0.05 is smaller) and small and short storms give more runoff; for large
+depths the converted S is larger, so lambda 0.05 can give somewhat less (CN 78.6: about equal at P = 60 mm).
+The fit is not calibrated for any region of this project. References:
+- Hawkins, R.H., Jiang, R., Woodward, D.E., Hjelmfelt, A.T., Van Mullem, J.A. (2002). Runoff curve number method:
+  examination of the initial abstraction ratio. Proceedings of the Second Federal Interagency Hydrologic Modeling
+  Conference, Las Vegas, NV.
+- Woodward, D.E., Hawkins, R.H., Jiang, R., Hjelmfelt, A.T., Van Mullem, J.A., Quan, Q.D. (2003). Runoff curve
+  number method: examination of the initial abstraction ratio. World Water & Environmental Resources Congress
+  2003, ASCE, https://doi.org/10.1061/40685(2003)308.
+The conversion form S0.05 = 1.33 S0.20^1.15 (inches) was checked 2026-11-20 on the Wikipedia article "Runoff curve
+number" (section on the initial abstraction ratio), which cites Hawkins et al. (2002).
 """
 from __future__ import annotations
 
@@ -65,7 +83,16 @@ CN_TABLE = {
     100: {"cn": (54, 71, 81, 86), "source": f"{_GCN} 140 lichens and mosses"},
 }
 AMC_METHODS = ("chow", "hawkins")
-DEFAULT_LAMBDA = 0.2
+# Initial abstraction ratio lambda = Ia / S: 0.05 (default, converted S) or 0.2 (the tabulated CN basis).
+LAMBDA_OPTIONS = (0.05, 0.2)
+DEFAULT_LAMBDA = 0.05
+TABULATED_LAMBDA = 0.2
+# S0.05 = 1.33 S0.20^1.15 with S in inches -> the coefficient for S in mm.
+S005_COEFFICIENT_MM = 1.33 * 25.4 ** -0.15
+S005_EXPONENT = 1.15
+LAMBDA_CITATION = ("Hawkins, Jiang, Woodward, Hjelmfelt and Van Mullem (2002), Runoff curve number method: examination "
+                   "of the initial abstraction ratio, 2nd Federal Interagency Hydrologic Modeling Conference; Woodward "
+                   "et al. (2003), World Water & Environmental Resources Congress, ASCE, doi:10.1061/40685(2003)308")
 URBAN_DRAINAGE_REFERENCE_MM_H = 12.0  # Environment Agency (England) national surface-water map drainage rate.
 
 
@@ -225,19 +252,56 @@ def curve_number_grid(classes, hsg, *, missing_hsg="D", amc="II", amc_method="ch
     return convert_amc(cn, amc, method=amc_method) if amc != "II" else cn
 
 
-def scs_runoff_mm(rain_mm, cn, *, initial_abstraction_ratio=DEFAULT_LAMBDA):
-    """Cumulative SCS-CN direct runoff Q (mm) for cumulative rain P (mm).
+def _check_lambda(initial_abstraction_ratio):
+    if initial_abstraction_ratio not in LAMBDA_OPTIONS:
+        raise ValueError(f"initial_abstraction_ratio must be one of {LAMBDA_OPTIONS}")
 
-    S = 25400/CN - 254, Ia = lambda S, Q = (P - Ia)^2 / (P - Ia + S) for P > Ia, else 0. Tabulated CNs assume
-    lambda = 0.2; another lambda reuses the same CN (no S conversion) and is a sensitivity option only.
+
+def retention_mm(cn, *, initial_abstraction_ratio=DEFAULT_LAMBDA):
+    """Potential retention S (mm) for a tabulated CN (lambda 0.2 basis) and the chosen lambda.
+
+    S0.20 = 25400/CN - 254; with lambda 0.05, S0.05 = 0.8187 S0.20^1.15 (Hawkins et al. 2002, S0.05 = 1.33
+    S0.20^1.15 in inches). CN 100 gives S = 0 for both.
+    """
+    _check_lambda(initial_abstraction_ratio)
+    scalar = np.isscalar(cn)
+    cn = np.asarray(cn, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = np.maximum(25400.0 / cn - 254.0, 0.0)
+        if initial_abstraction_ratio != TABULATED_LAMBDA:
+            s = S005_COEFFICIENT_MM * s ** S005_EXPONENT
+    return float(s) if scalar else s
+
+
+def curve_number_for_lambda(cn, *, initial_abstraction_ratio=DEFAULT_LAMBDA):
+    """CN that gives ``retention_mm`` with the usual S = 25400/CN - 254 (CN0.05 for lambda 0.05)."""
+    s = retention_mm(cn, initial_abstraction_ratio=initial_abstraction_ratio)
+    out = 25400.0 / (254.0 + np.asarray(s, dtype=np.float64))
+    return float(out) if np.isscalar(cn) else out
+
+
+def initial_abstraction_provenance(initial_abstraction_ratio=DEFAULT_LAMBDA):
+    """Record of lambda and, for 0.05, the S conversion applied to the tabulated CNs."""
+    _check_lambda(initial_abstraction_ratio)
+    converted = initial_abstraction_ratio != TABULATED_LAMBDA
+    return {"initial_abstraction_ratio": initial_abstraction_ratio, "tabulated_cn_ratio": TABULATED_LAMBDA,
+            "conversion": ("S0.05 = 1.33 S0.20^1.15 (S in inches) = 0.8187 S0.20^1.15 (S in mm); "
+                           "CN0.05 = 100 / (1.879 (100/CN0.20 - 1)^1.15 + 1); applied after the AMC conversion")
+            if converted else None,
+            "citation": LAMBDA_CITATION if converted else "SCS (1956) / USDA NEH-630 chapter 10: Ia = 0.2 S"}
+
+
+def scs_runoff_mm(rain_mm, cn, *, initial_abstraction_ratio=DEFAULT_LAMBDA):
+    """Cumulative SCS-CN direct runoff Q (mm) for cumulative rain P (mm) and a tabulated CN (lambda 0.2 basis).
+
+    S from ``retention_mm`` (converted for lambda 0.05), Ia = lambda S, Q = (P - Ia)^2 / (P - Ia + S) for P > Ia,
+    else 0. lambda is 0.05 (default) or 0.2 (the tabulated CN as is).
     """
     scalar = np.isscalar(rain_mm) and np.isscalar(cn)
     p = np.asarray(rain_mm, dtype=np.float64)
     cn = np.asarray(cn, dtype=np.float64)
-    if not 0 <= initial_abstraction_ratio <= 1:
-        raise ValueError("initial_abstraction_ratio must be within [0, 1]")
+    s = retention_mm(cn, initial_abstraction_ratio=initial_abstraction_ratio)
     with np.errstate(divide="ignore", invalid="ignore"):
-        s = 25400.0 / cn - 254.0
         ia = initial_abstraction_ratio * s
         excess = np.maximum(p - ia, 0.0)
         denominator = excess + s
@@ -284,8 +348,10 @@ def net_rain_cube(segments, cn_grid, *, initial_abstraction_ratio=DEFAULT_LAMBDA
     net_k = Q(P_k) - Q(P_k-1), never negative. Urban drainage (default 0 mm/h; 12 mm/h is the England national
     reference, a borrowed assumption) removes up to rate x interval hours of that interval's runoff in the built
     share f of each cell: net_k -= f * min(net_k, rate * dt_h); unused capacity is not carried over.
-    Cells without CN get zero net rain.
+    Cells without CN get zero net rain. ``cn_grid`` holds tabulated CNs (lambda 0.2 basis, AMC applied);
+    with lambda 0.05 the retention is converted (see ``retention_mm``).
     """
+    _check_lambda(initial_abstraction_ratio)
     edges, depths = _segment_depths(segments)
     cn_grid = np.asarray(cn_grid, dtype=np.float64)
     if cn_grid.ndim != 2:
@@ -313,13 +379,17 @@ def net_rain_cube(segments, cn_grid, *, initial_abstraction_ratio=DEFAULT_LAMBDA
     summary = {
         "method": "scs_curve_number_incremental", "intervals": int(len(depths)), "total_rain_mm": total,
         "cells": int(cn_grid.size), "cells_with_cn": int(known.sum()),
-        "initial_abstraction_ratio": float(initial_abstraction_ratio), "urban_drainage_mm_h": float(urban_drainage_mm_h),
+        "initial_abstraction_ratio": float(initial_abstraction_ratio), "tabulated_cn_ratio": TABULATED_LAMBDA,
+        "urban_drainage_mm_h": float(urban_drainage_mm_h),
         "mean_runoff_mm": float(runoff.mean()) if runoff.size else 0.0,
         "mean_runoff_coefficient": float(runoff.mean() / total) if runoff.size and total > 0 else 0.0,
         "mean_drainage_removed_mm": float(removed.sum(axis=0)[known].mean()) if runoff.size else 0.0,
         "cn_min": float(np.nanmin(cn_grid)) if known.any() else None,
         "cn_max": float(np.nanmax(cn_grid)) if known.any() else None,
         "cn_mean": float(np.nanmean(cn_grid)) if known.any() else None,
+        "cn_mean_effective": float(np.mean(curve_number_for_lambda(cn_grid[known],
+                                                                   initial_abstraction_ratio=initial_abstraction_ratio)))
+        if known.any() else None,
         "interval_edges_s": edges.tolist(), "interval_rain_mm": depths.tolist(),
     }
     return cube, summary

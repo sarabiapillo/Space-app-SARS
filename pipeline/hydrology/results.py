@@ -29,8 +29,10 @@ CHANNEL_MIN_UPSLOPE_KM2 = .12
 FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H) over cells at '
                'least min_depth_m deep, outside the D8 channel network of the solver DEM (upslope area >= '
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
-# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts.
-DEPTH_CLASS_BOUNDS_M = (.03, .15, .5, 1, 2)
+# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts. The 0.01-0.03 m
+# class shows thin sheets of water; the flooded area of the panel still counts from 0.03 m. Runs store their own
+# list (depth_classes_m), so results made with the earlier (.03, .15, .5, 1, 2) stay readable.
+DEPTH_CLASS_BOUNDS_M = (.01, .03, .15, .5, 1, 2)
 # DG2 wet/dry fronts on steep terrain can leave negative cell-average depths even with dg2depththresh.
 # Every negative depth of a solver output is set to 0; the water volume this adds, sum(-h_neg) * cell^2, is
 # compared per frame (and on the maximum grid) with the water left in that frame after clipping, sum(h) * cell^2.
@@ -462,7 +464,7 @@ def flow_arrows(depth, vx, vy, *, crs, eligible=None, max_arrows=FLOW_MAX_ARROWS
 
 
 def _depth_class_cells(data):
-    """Valid cells per depth class: [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2) and >= 2 m."""
+    """Valid cells per depth class: [0.01, 0.03), [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2) and >= 2 m."""
     values = data['values'][data['values'] != data['nodata']]
     edges = [*DEPTH_CLASS_BOUNDS_M, math.inf]
     return [int(np.count_nonzero((values >= low) & (values < high))) for low, high in zip(edges, edges[1:])]

@@ -33,6 +33,10 @@ export function FloodResultSummary({ result, frameIndex }: Props) {
         sub={fallback ? t(`cambio automático desde ${solverLabel(fallback.from)}`, `automatic switch from ${solverLabel(fallback.from)}`) : t('el elegido', 'the one chosen')} />
       <Card label={t('Área inundada (≥ 0.03 m)', 'Flooded area (≥ 0.03 m)')} value={`${fmt(s.floodedHa)} ha`}
         sub={s.floodedPct == null ? undefined : t(`${fmt(s.floodedPct, 1)} % de las celdas con dato`, `${fmt(s.floodedPct, 1)} % of cells with data`)} />
+      {s.thinSheetHa != null && (
+        <Card label={t('Lámina delgada (0.01–0.03 m)', 'Thin sheet (0.01–0.03 m)')} value={`${fmt(s.thinSheetHa)} ha`}
+          sub={t('agua que escurre; no cuenta como inundada', 'water running off; not counted as flooded')} />
+      )}
       <Card label={t('Profundidad máxima', 'Maximum depth')} value={`${fmt(s.maxDepthM)} m`}
         sub={atMaximum ? t('en toda la corrida', 'over the whole run') : t('en el cuadro elegido', 'in the chosen frame')} />
       <Card label={t('Agua en el dominio al final', 'Water in the domain at the end')} value={`${fmt(s.domainM3, 0)} m³`}

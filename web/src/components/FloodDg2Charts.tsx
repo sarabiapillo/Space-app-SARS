@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import { Bar, Line } from 'react-chartjs-2'
 import type { FloodRoiResult } from '../api/client'
-import { hyetographCaption, DEPTH_CLASSES, dg2ChartData } from '../utils/floodDg2'
+import { hyetographCaption, dg2ChartData } from '../utils/floodDg2'
 import { useTranslation } from '../i18n/useTranslation'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Tooltip, Legend)
@@ -121,7 +121,7 @@ export function FloodDg2Charts({ result, frameIndex }: Props) {
           </figcaption>
           <div className="flood-charts__canvas">
             <Bar
-              data={{ labels: data.distribution.labels, datasets: [{ data: data.distribution.areaHa, backgroundColor: DEPTH_CLASSES.map(c => `rgb(${c.rgb.join(',')})`), borderColor: '#334155', borderWidth: 1 }] }}
+              data={{ labels: data.distribution.labels, datasets: [{ data: data.distribution.areaHa, backgroundColor: data.distribution.colors, borderColor: '#334155', borderWidth: 1 }] }}
               options={axes(t('profundidad (m)', 'depth (m)'), 'ha', locale)}
             />
           </div>

@@ -192,9 +192,33 @@ test('map legend depth classes match the backend preview palette exactly', async
   const python = readFileSync(new URL('../../backend/analyses/roi_flood_runs.py', import.meta.url), 'utf8')
   const block = python.match(/_DEPTH_CLASSES = \[([\s\S]*?)\]\n/)[1]
   const backend = [...block.matchAll(/\(([\d.]+), \((\d+), (\d+), (\d+)\)\)/g)].map(m => [Number(m[1]), [Number(m[2]), Number(m[3]), Number(m[4])]])
-  assert.equal(backend.length, 5)
+  assert.equal(backend.length, 6)
   assert.deepEqual(DEPTH_CLASSES.map(c => [c.min, c.rgb]), backend)
-  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.15, .5, 1, 2, null])
+  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.03, .15, .5, 1, 2, null])
+  // The 0.01-0.03 m thin-sheet class is the lightest blue of the sequence.
+  assert.deepEqual(DEPTH_CLASSES[0], {min:.01, max:.03, rgb:[222,235,247]})
+})
+
+test('depth classes of a run: new runs chart the 1-3 cm class, older five-class runs keep their own bounds', async () => {
+  const { dg2ChartData, dg2Summary } = await import('../src/utils/floodDg2.ts')
+  const base = { grid: { cellsize_m: 30 }, rainfall_segments: null, mass_balance: null }
+  const fresh = { ...base, depth_classes_m: [.01, .03, .15, .5, 1, 2],
+    frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 100, depth_class_cells: [40, 6, 3, 0, 0, 0] } }],
+    maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [50, 8, 4, 0, 0, 0] } } }
+  const chart = dg2ChartData(fresh, null)
+  assert.deepEqual(chart.distribution.labels, ['0.01–0.03', '0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
+  assert.deepEqual(chart.distribution.colors, ['rgb(222,235,247)', 'rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
+  // Flooded area still counts from 0.03 m; the 1-3 cm sheet is reported apart.
+  assert.deepEqual(chart.evolution.wetAreaHa, [9 * 900 / 1e4])
+  const summary = dg2Summary(fresh, null)
+  assert.deepEqual([summary.floodedHa, summary.floodedPct, summary.thinSheetHa], [12 * 900 / 1e4, 12, 50 * 900 / 1e4])
+  const old = { ...base, depth_classes_m: [.03, .15, .5, 1, 2],
+    frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 100, depth_class_cells: [6, 3, 0, 0, 0] } }],
+    maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [8, 4, 0, 0, 0] } } }
+  assert.deepEqual(dg2ChartData(old, null).distribution.labels, ['0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
+  assert.deepEqual(dg2ChartData(old, null).distribution.colors, ['rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
+  assert.deepEqual([dg2Summary(old, null).floodedHa, dg2Summary(old, null).thinSheetHa], [12 * 900 / 1e4, null])
+  assert.deepEqual(dg2ChartData(old, null).evolution.wetAreaHa, [9 * 900 / 1e4])
 })
 
 test('DG2 chart data: hyetograph, wet area and maximum depth over time, volume balance and depth distribution', async () => {
@@ -242,16 +266,40 @@ const emptyForm = () => ({domain:'',useRoi:false,crs:'',resolution:'',resampling
 test('example values fill the illustrative numbers and land-surface choices, never the user declarations', async () => {
   const { exampleFormValues } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues({...emptyForm(), confirm:true, pressure:'990'}, square)
+  // A 100-year, 3-hour design storm, simulated one hour longer (14400 s) with a frame every 1200 s (14 frames),
+  // no DG2 thin-depth threshold: enough water to see where it accumulates on a ~1 km² hillside.
   assert.deepEqual(filled, {...emptyForm(), crs:'EPSG:32615', resolution:'30', resampling:'nearest', manning:'0.05',
     boundaryNorth:'free', boundaryEast:'free', boundarySouth:'free', boundaryWest:'free', seaLevel:'', stillWater:false, pressure:'',
-    amount:'30', rainDuration:'600', intervals:'4', seed:'7', duration:'900', save:'60', tstep:'1', thinDepth:'0.02', thinDepthOff:false, solver:'dg2', terrainSource:'copernicus',
-    rainKind:'synthetic', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false})
+    amount:'60', rainDuration:'10800', intervals:'18', seed:'7', duration:'14400', save:'1200', tstep:'1', thinDepth:'0.02', thinDepthOff:true, solver:'dg2', terrainSource:'copernicus',
+    rainKind:'design_storm', returnPeriod:'100', stormHours:'3', manningMode:'worldcover', infiltration:'curve_number', moisture:'auto', confirm:false})
   // Lakes, the domain, the urban declaration and the confirmation stay the user's explicit choice.
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true}, square, tr), /lagos/)
   assert.throws(() => buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, lakes:'none'}, square, tr), /Confirma/)
-  const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, infiltration:'unsupported', lakes:'none'}, square, tr)
-  assert.deepEqual([body.rainfall.amount, body.rainfall.duration, body.simulation.duration_s, body.simulation.save_interval_s, body.simulation.dg2_depth_thresh_m], [30, 600, 900, 60, .02])
-  assert.equal(body.terrain.source, 'copernicus')  // the example picks the recommended Copernicus GLO-30
+  const body = buildRoiFloodRequest({...filled, useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr)
+  assert.deepEqual(body.rainfall, null)
+  assert.deepEqual(body.rainfall_profile, {source:'design_storm', return_period_years:100, duration_h:3, step_s:600})
+  assert.deepEqual(body.simulation, {duration_s:14400, save_interval_s:1200, initial_tstep_s:1, dg2_depth_thresh_m:null, solver:'dg2'})
+  assert.deepEqual([body.terrain.source, body.terrain.resolution_m, body.hydraulics.manning, body.hydraulics.infiltration, body.hydraulics.antecedent_moisture],
+    ['copernicus', 30, 'worldcover', 'curve_number', 'auto'])
+  assert.deepEqual(Object.values(body.hydraulics.boundary), [{type:'free'}, {type:'free'}, {type:'free'}, {type:'free'}])
+  // Server limits: floor(14400 / 1200) + 2 = 14 frames <= 20 and the 3 h storm fits in the 4 h simulation.
+  assert.ok(Math.floor(14400 / 1200) + 2 <= 20 && 3 * 3600 <= 14400)
+  // Switching the example to synthetic rain keeps a consistent 60 mm in 3 h.
+  const synthetic = buildRoiFloodRequest({...filled, rainKind:'synthetic', useRoi:true, nonurban:true, confirm:true, lakes:'none'}, square, tr)
+  assert.deepEqual(synthetic.rainfall, {amount:60, unit:'mm', duration:10800, duration_unit:'s'})
+})
+
+test('pre-send checks: rain longer than the simulation and more than 20 frames are refused with a clear message', () => {
+  assert.throws(() => buildRoiFloodRequest(filledForm({rainDuration:'3600', duration:'1800', save:'600'}), square, tr),
+    /La lluvia \(3600 s\) dura más que la simulación \(1800 s\)/)
+  assert.throws(() => buildRoiFloodRequest(filledForm({duration:'7200', save:'300'}), square, tr),
+    /26 cuadros.*máximo 20.*intervalo de guardado de al menos 400 s/)
+  // At the limit: floor(5400 / 300) + 2 = 20 frames, rain as long as the simulation.
+  const body = buildRoiFloodRequest(filledForm({rainDuration:'5400', duration:'5400', save:'300'}), square, tr)
+  assert.deepEqual([body.simulation.duration_s, body.simulation.save_interval_s, body.rainfall.duration], [5400, 300, 5400])
+  assert.throws(() => buildRoiFloodRequest(filledForm({rainKind:'design_storm', returnPeriod:'100', stormHours:'3', duration:'7200', save:'1200'}), square, tr),
+    /debe cubrir toda la tormenta/)
+  assert.equal(tr('x','y'), 'x')
 })
 
 test('terrain source: Copernicus or NASADEM is sent as terrain.source and must be chosen', () => {
@@ -329,10 +377,10 @@ test('result summary: flooded area, maximum depth, volumes, Froude, time of conc
     time_of_concentration:{minutes:12.34, flow_length_m:900, slope_m_m:.02, upslope_area_km2:.5, outlet:[0,0]},
     roads:{available:true, total_km:4, thresholds_m:{caution:.15, cut:.3}, maximum:{caution_km:.5, cut_km:1.25}, frames:[{frame_index:1, caution_km:.2, cut_km:.75}]},
   }
-  assert.deepEqual(dg2Summary(result, null), {floodedHa:31*900/1e4, floodedPct:62, maxDepthM:3.1, domainM3:1500, rainM3:2400, froude:null, tcMin:12.34, roads:{cutKm:1.25, cautionKm:.5, totalKm:4}})
-  assert.deepEqual(dg2Summary(result, 1), {floodedHa:22*900/1e4, floodedPct:44, maxDepthM:2.2, domainM3:1500, rainM3:2400, froude:{max:1.4, supercritical:3, cells:20}, tcMin:12.34, roads:{cutKm:.75, cautionKm:.2, totalKm:4}})
+  assert.deepEqual(dg2Summary(result, null), {floodedHa:31*900/1e4, floodedPct:62, thinSheetHa:null, maxDepthM:3.1, domainM3:1500, rainM3:2400, froude:null, tcMin:12.34, roads:{cutKm:1.25, cautionKm:.5, totalKm:4}})
+  assert.deepEqual(dg2Summary(result, 1), {floodedHa:22*900/1e4, floodedPct:44, thinSheetHa:null, maxDepthM:2.2, domainM3:1500, rainM3:2400, froude:{max:1.4, supercritical:3, cells:20}, tcMin:12.34, roads:{cutKm:.75, cautionKm:.2, totalKm:4}})
   const old = dg2Summary({grid:{cellsize_m:30}, frames:[], maximum:{stats:{max_m:1}}}, null)
-  assert.deepEqual(old, {floodedHa:null, floodedPct:null, maxDepthM:1, domainM3:null, rainM3:null, froude:null, tcMin:null, roads:null})
+  assert.deepEqual(old, {floodedHa:null, floodedPct:null, thinSheetHa:null, maxDepthM:1, domainM3:null, rainM3:null, froude:null, tcMin:null, roads:null})
   assert.equal(dg2Summary({...result, roads:{available:false}}, null).roads, 'unavailable')
 })
 
@@ -432,7 +480,7 @@ test('the urban declaration is informational: an urban domain is sent, not refus
 test('example values pick Copernicus, WorldCover Manning and Curve Number with auto moisture, still DG2', async () => {
   const { exampleFormValues, formStepStatus } = await import('../src/utils/floodDg2.ts')
   const filled = exampleFormValues(emptyForm(), square)
-  assert.deepEqual([filled.terrainSource, filled.manningMode, filled.infiltration, filled.moisture, filled.solver, filled.rainKind], ['copernicus', 'worldcover', 'curve_number', 'auto', 'dg2', 'synthetic'])
+  assert.deepEqual([filled.terrainSource, filled.manningMode, filled.infiltration, filled.moisture, filled.solver, filled.rainKind], ['copernicus', 'worldcover', 'curve_number', 'auto', 'dg2', 'design_storm'])
   const ready = {...filled, useRoi:true, lakes:'none', confirm:true}
   assert.deepEqual(formStepStatus(ready, square), {zone:true, rain:true, terrain:true, solver:true, confirm:true})
   const body = buildRoiFloodRequest(ready, square, tr)
@@ -455,6 +503,9 @@ test('urban warning, land-surface notes, design storm and dataset errors are sho
   assert.deepEqual(landSurfaceNotes(land, tr), ['Manning por celda (ESA WorldCover); celdas sin dato: n = 0.035',
     'Número de curva (WorldCover + HYSOGs250m), humedad previa AMC III (SMAP L4): 42 % de la lluvia escurre (30 mm → 12.6 mm netos)'])
   assert.deepEqual(landSurfaceNotes({...land, manning:'uniform', manning_value:.05, infiltration:'unsupported', curve_number:null}, tr), ['Manning uniforme n = 0.05'])
+  // Runs since the lambda 0.05 default say which initial abstraction they used; older runs say nothing.
+  assert.equal(landSurfaceNotes({...land, curve_number:{...land.curve_number, initial_abstraction_ratio:.05}}, tr)[1],
+    'Número de curva (WorldCover + HYSOGs250m, Ia = 0.05·S), humedad previa AMC III (SMAP L4): 42 % de la lluvia escurre (30 mm → 12.6 mm netos)')
   assert.deepEqual(landSurfaceNotes(null, tr), [])
   assert.equal(designStormNote({return_period_years:10, duration_s:3600, step_s:600, total_mm:61.24, extrapolated:true, within_stated_accuracy:false, attribution:'PXR v2.1.0 ODbL'}, tr),
     'Tormenta de diseño: periodo de retorno 10 años, 1 h, 61.2 mm (bloques alternos de 10 min, PXR-4). Bloques menores de 1 h extrapolados; fuera del rango de exactitud declarado (2–360 h).')

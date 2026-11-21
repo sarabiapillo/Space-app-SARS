@@ -15,7 +15,7 @@ export function FloodDepthLegend() {
           </li>
         ))}
       </ul>
-      <small>{t('Menos de 0.03 m: transparente', 'Below 0.03 m: transparent')}</small>
+      <small>{t('0.01–0.03 m: lámina delgada. Menos de 0.01 m: transparente', '0.01–0.03 m: thin sheet. Below 0.01 m: transparent')}</small>
     </div>
   )
 }
