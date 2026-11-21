@@ -41,12 +41,28 @@ def build_flood_service_settings(project_root, environ):
     config = {
         'executable': path('EXECUTABLE', 'tools/lisflood-fp-8.0/runtime/build/lisflood'),
         'dem_executable': path('DEM_EXECUTABLE', 'tools/lisflood-fp-8.0/runtime/build/generateDG2DEM'),
-        'timeout_s': positive('TIMEOUT_S', 15, 120),
-        'preparation_timeout_s': positive('PREPARATION_TIMEOUT_S', 120, 600),
-        'max_cells': positive('MAX_CELLS', 1000, 50_000_000, integer=True),
-        'max_rain_values': positive('MAX_RAIN_VALUES', 5000, 50_000_000, integer=True),
-        'max_frames': positive('MAX_FRAMES', 5, 50_000_000, integer=True),
+        # Defaults sized for a small real NASADEM+DG2 run (measured 2026-11-19: 1680 cells x 900 s
+        # simulated took 59-69 s of solver time). Larger or longer runs end as `solver_timeout`.
+        'timeout_s': positive('TIMEOUT_S', 120, 120),
+        'preparation_timeout_s': positive('PREPARATION_TIMEOUT_S', 600, 600),
+        'max_cells': positive('MAX_CELLS', 3000, 50_000_000, integer=True),
+        'max_rain_values': positive('MAX_RAIN_VALUES', 100_000, 50_000_000, integer=True),
+        'max_frames': positive('MAX_FRAMES', 20, 50_000_000, integer=True),
         'max_tiles': positive('MAX_TILES', 2, 50_000_000, integer=True),
+        # HydroLAKES GeoPackage (python -m pipeline.hydrology.lakes prepare ...); the lakes option is
+        # refused per request while this file does not exist.
+        'lakes_path': path('LAKES_PATH', 'reference/hydrolakes/HydroLAKES_polys_v10.gpkg'),
+        # NGA EGM96/EGM2008 geoid grids (python -m pipeline.elevation.vertical_datum prepare): every height
+        # is converted to EGM2008, so the service is unavailable while they are missing.
+        'geoid_dir': path('GEOID_DIR', 'reference/geoid'),
+        # PXR-4 v2.1.0 return levels (python -m pipeline.hydrology.design_storm prepare); design-storm requests
+        # are answered 503 design_storm_unavailable while this file does not exist.
+        'pxr_path': path('PXR_PATH', 'reference/pxr/pxr4-2.1.0.nc'),
+        # EOT20 ocean tides (python -m pipeline.hydrology.tides prepare-eot20) and DTUUH22MDT (prepare-mdt) for tide
+        # sides; runs with a tide side (or GEBCO with the DTU MDT) fail with tide_unavailable / bathymetry_unavailable
+        # while they are missing. GEBCO_2026 itself is read from the public COG on Source Cooperative.
+        'eot20_dir': path('EOT20_DIR', 'reference/eot20'),
+        'mdt_path': path('MDT_PATH', 'reference/dtu22mdt/dtuuh22mdt.grd.gz'),
     }
     for key, pinned in (('BINARY_SHA256', PINNED_BINARY), ('DEM_SHA256', PINNED_DEM)):
         supplied = environ.get(prefix + key, pinned)

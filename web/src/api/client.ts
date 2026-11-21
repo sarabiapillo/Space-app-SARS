@@ -59,8 +59,15 @@ export type {
   ExploreWebManifest,
 }
 
+/** Django's CSRF token from its cookie; DRF session auth rejects a logged-in POST without it (HTTP 403). */
+export function csrfHeaders(): Record<string, string> {
+  const token = typeof document === 'undefined' ? '' : decodeURIComponent(document.cookie.split(';').map(s => s.trim()).find(s => s.startsWith('csrftoken='))?.slice(10) ?? '')
+  return token ? { 'X-CSRFToken': token } : {}
+}
+
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(init?.headers ?? {}) } })
+  const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes((init?.method ?? 'GET').toUpperCase())
+  const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(unsafe ? csrfHeaders() : {}), ...(init?.headers ?? {}) } })
   const body = await response.json().catch(() => ({})) as Record<string, unknown>
   if (!response.ok) {
     const detail = ['detail', 'error', 'query', 'radius_km', 'place_id', 'geometry', 'q', 'roi', 'scene_id']
@@ -425,6 +432,7 @@ export async function runSolarSimulation(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify({ ...req, elevation_deg: elevation, azimuth_deg: azimuth }),
   })
@@ -434,6 +442,129 @@ export async function runSolarSimulation(
     throw new Error(res.status === 400 ? `HTTP 400: ${err.error || detail || 'Solicitud solar no válida'}` : err.error || detail || `Error HTTP ${res.status}`)
   }
   return res.json()
+}
+
+/** Automatic switch to the other solver after the requested one failed (reason: public code of the worker). */
+export interface FloodSolverFallback { from: string; to: string; reason: string }
+export interface FloodSolverAttempt { solver: string; outcome: 'succeeded' | 'failed'; reason: string | null }
+/** Land surface of a run: Manning (uniform or ESA WorldCover per cell), Curve Number losses and urban warning.
+ * Values found during preparation (fpfric, AMC, losses, built-up share) are null until then; null in older runs. */
+export interface FloodLandSurface {
+  manning: 'uniform' | 'worldcover'; manning_value: number | null; manning_fpfric: number | null
+  infiltration: string
+  curve_number: {antecedent_moisture: string; amc: string | null; amc_source: string | null; event_time_utc?: string | null; event_time_basis?: string | null
+    relative_saturation?: number | null; urban_drainage_mm_h?: number; gross_rain_mm?: number | null; mean_net_rain_mm?: number | null
+    mean_runoff_coefficient?: number | null; cn_mean?: number | null} | null
+  urban: {declared_nonurban: boolean; built_up_fraction: number | null; built_up_cells: number | null; warning: boolean}
+  attribution: string[]
+}
+/** PXR-4 design storm at the domain centroid (no segments: they are the hyetograph). */
+export interface FloodDesignStorm {
+  total_mm: number; duration_s: number; step_s: number; return_period_years: number
+  extrapolated: boolean; within_stated_accuracy: boolean; point?: [number, number]
+  method?: string; dataset?: string; version?: string; doi?: string; licence?: string; attribution?: string
+}
+/** EOT20 tide of the tide sides: requested window and point; levels (m EGM2008, incl. MDT and surge) after preparation. */
+export interface FloodRoiTide {
+  model: string; sides: string[]; mdt: string | number | null; start_utc: string; end_utc: string; step_s: number
+  event_time_basis: string; point: [number, number]; node: [number, number] | null; mdt_m: number | null; datum: string | null
+  barometric_surge_m: number | null; start_level_m: number | null; min_m: number | null; max_m: number | null
+  count: number | null; attribution: string[] | null; sampling?: string | null
+}
+/** GEBCO_2026 sea floor on the sea cells (replaced_cells null until preparation). */
+export interface FloodRoiBathymetry {
+  source: string; dataset: string; sea_sides: string[]; mdt: string | number | null; mdt_m: number | null; datum: string | null
+  replaced_cells: number | null; min_elevation_m: number | null; attribution: string
+}
+export interface FloodRoiRun {
+  id: string; state: string; stage: string; error?: string | null; synthetic?: boolean; hydraulic_accuracy_validated?: boolean; dg2_depth_thresh_m?: number | null
+  losses?: {infiltration: string; runoff_coefficient: number | null; atmospheric_pressure_hpa: number | null; barometric_surge_m: number} | null
+  /** 'dg2' or 'fv1': requested by the user, and the one whose results are shown (or last tried). */
+  requested_solver?: string; solver?: string
+  solver_fallback?: FloodSolverFallback | null
+  solver_attempts?: FloodSolverAttempt[] | null
+  /** Terrain source and vertical datum of every height; older runs report NASADEM and EGM96. */
+  terrain_source?: string; vertical_datum?: string
+  /** Licence notice the terrain source requires (Copernicus GLO-30); null for NASADEM. */
+  terrain_attribution?: string | null
+  /** Land surface (null in older runs), rain source ('synthetic', 'observed' or 'design_storm') and design storm. */
+  land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
+  /** Tide (HVAR) and GEBCO sea-floor summaries; null when not requested and in older runs. */
+  tide?: FloodRoiTide | null; bathymetry?: FloodRoiBathymetry | null
+}
+export interface FloodRoiStats { wet_cells?: number; max_depth_m?: number; mean_depth_m?: number; [key: string]: unknown }
+export interface FloodRoiResult {
+  frames: Array<{frame_index: number; scheduled_time_s: number | null; time_s: null; stats: FloodRoiStats}>
+  maximum: {stats: FloodRoiStats}
+  artifacts: Array<{name: string; url: string; frame_index?: number | null; scheduled_time_s?: number | null}>
+  warnings?: string[]; synthetic?: boolean; hydraulic_accuracy_validated?: boolean
+  requested_solver?: string; solver?: string; solver_fallback?: FloodSolverFallback | null
+  terrain_source?: string; vertical_datum?: string; terrain_attribution?: string | null
+  land_surface?: FloodLandSurface | null; rainfall_source?: string; design_storm?: FloodDesignStorm | null
+  tide?: FloodRoiTide | null; bathymetry?: FloodRoiBathymetry | null
+  /** Negative depths set to 0 and the volume they add relative to the water of each frame (null in older runs). */
+  negative_depth?: {status?: 'none' | 'minor' | 'artifacts'; clipped_cell_frames?: number; frames?: Array<number | 'maximum'>; min_m?: number | null; max_added_volume_ratio?: number | null; thresholds?: {warning: number; fail: number}} | null
+  /** Solver-velocity arrows per frame; null for runs without LISFLOOD-FP voutput. */
+  flow?: FloodRoiFlow | null
+  grid?: {cellsize_m: number; shape?: [number, number]}
+  /** Chart inputs (null in older runs): depth class lower bounds (m), the rain the solver received (net when losses are
+   * modelled; ROI mean for the Curve Number) and the volume series. */
+  depth_classes_m?: number[] | null
+  rainfall_segments?: Array<{start_s: number; end_s: number; intensity_mm_h: number}> | null
+  mass_balance?: {series?: Array<[number, number, number]>; [key: string]: unknown} | null
+  /** Hydraulic indicators (null in older runs). */
+  froude?: {min_depth_m: number; frames: Array<{frame_index: number; cells: number; max: number | null; mean: number | null; supercritical_cells: number}>} | null
+  time_of_concentration?: {minutes: number; flow_length_m: number; slope_m_m: number; upslope_area_km2: number; outlet: [number, number]} | null
+  /** Road exposure on OpenStreetMap roads (© OpenStreetMap contributors). */
+  /** Lakes used, or skipped with a reason (e.g. cut by the domain edge). */
+  lakes?: Array<{hylak_id: number; name: string | null; skipped?: string; depth_avg_m?: number; cells?: number; surface_m?: number; volume_m3?: number}> | null
+  roads?: {available: boolean; reason?: string; attribution?: string; osm_timestamp?: string; total_km?: number | null; thresholds_m?: {caution: number; cut: number}; frames?: Array<{frame_index: number; caution_km: number; cut_km: number}>; maximum?: {caution_km: number; cut_km: number} | null} | null
+}
+/** Each arrow is [lon, lat, speed m/s, bearing degrees clockwise from true north]. */
+export interface FloodRoiFlow {
+  units: 'm/s'; min_depth_m: number; method?: string
+  /** Overflow-only arrows (absent in older runs): D8 channel threshold and arrow cap. */
+  channel_min_upslope_km2?: number; max_arrows?: number
+  frames: Array<{frame_index: number; max_speed_m_s: number; arrows: Array<[number, number, number, number]>}>
+}
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function roiRunPath(id: string) {
+  if (!uuidPattern.test(id)) throw new Error('ID de corrida inválido')
+  return `/api/flood-roi-runs/${id}/`
+}
+export function roiFloodArtifactUrl(id: string, name: string) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.tif$/.test(name) || name.includes('..')) throw new Error('Nombre de artefacto inválido')
+  return `${roiRunPath(id)}artifacts/${name}/`
+}
+async function roiResponse(path: string, init: RequestInit = {}) {
+  const response = await fetch(path, {credentials:'same-origin', ...init})
+  if (!response.ok) {
+    if (response.status===401 || response.status===403) throw new Error('Sesión requerida o CSRF vencido. Inicia sesión en /admin/login/ y vuelve a intentar.')
+    const body = await response.json().catch(()=>null)
+    const errors = body?.errors && typeof body.errors === 'object' ? Object.values(body.errors).flat() : []
+    const detail = errors.find((v): v is string => typeof v==='string') ?? (typeof body?.detail==='string' ? body.detail : null)
+    throw new Error(detail ?? (response.status===503 ? 'Servicio DG2 no disponible (HTTP 503).' : `Error HTTP ${response.status}`))
+  }
+  return response
+}
+export async function startRoiFlood(req: unknown, signal?: AbortSignal): Promise<FloodRoiRun> {
+  const res = await roiResponse('/api/flood-scenarios/roi/start/', {method:'POST',signal,headers:{'Content-Type':'application/json','Accept':'application/json',...csrfHeaders()},body:JSON.stringify(req)})
+  if (res.status!==202) throw new Error('Respuesta de inicio DG2 inválida')
+  const run = await res.json() as FloodRoiRun
+  roiRunPath(run.id)
+  return run
+}
+export async function getRoiFloodStatus(id: string, signal?: AbortSignal): Promise<FloodRoiRun> {
+  return (await roiResponse(roiRunPath(id),{signal,headers:{Accept:'application/json'}})).json()
+}
+export async function getRoiFloodResults(id: string, signal?: AbortSignal): Promise<FloodRoiResult> {
+  return (await roiResponse(`${roiRunPath(id)}results/`,{signal,headers:{Accept:'application/json'}})).json()
+}
+export async function getRoiFloodPreview(id: string, name: string, signal?: AbortSignal) {
+  const res = await roiResponse(`${roiFloodArtifactUrl(id,name)}preview/`,{signal})
+  const raw=res.headers.get('X-Preview-Bounds')?.split(',').map(Number)
+  if (res.headers.get('X-Preview-CRS')!=='EPSG:3857' || res.headers.get('X-Preview-Units')!=='m' || !res.headers.get('content-type')?.startsWith('image/png') || raw?.length!==4 || !raw.every(Number.isFinite) || raw[0]<-180 || raw[2]>180 || raw[1]<-90 || raw[3]>90 || raw[0]>=raw[2] || raw[1]>=raw[3]) throw new Error('Metadatos de preview inválidos')
+  return {blob:await res.blob(),bounds:raw as [number,number,number,number]}
 }
 
 export interface FloodRainfallInput {
@@ -504,6 +635,7 @@ export async function prepareFloodScenario(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify(req),
   })
@@ -582,6 +714,7 @@ export async function simulateFloodScenario(
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
+      ...csrfHeaders(),
     },
     body: JSON.stringify(req),
   })

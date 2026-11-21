@@ -77,3 +77,21 @@ test('catalog API preserves successful backend response and marks it non-synthet
   })
   assert.deepEqual(await getRois(), { data: payload, isSyntheticMock: false })
 })
+
+test('every POST sends the Django CSRF token from the cookie, so a logged-in session is not rejected', async () => {
+  const { requestGcovDownload, runSolarSimulation, prepareFloodScenario, simulateFloodScenario, csrfHeaders } = await import('../src/api/client.ts')
+  globalThis.document = { cookie: 'sessionid=s; csrftoken=abc%3D1' }
+  const sent = []
+  globalThis.fetch = async (path, init) => { sent.push([path, new Headers(init?.headers).get('X-CSRFToken')]); return new Response('{}') }
+  await generateLocationRoi({ place_id: 1, query: 'x', radius_km: 1 })
+  await searchGcov({ type: 'Polygon', coordinates: [] })
+  await requestGcovDownload('scene', { type: 'Polygon', coordinates: [] })
+  await runSolarSimulation({}).catch(() => {})
+  await prepareFloodScenario({}).catch(() => {})
+  await simulateFloodScenario({}).catch(() => {})
+  assert.deepEqual(sent.map(([, token]) => token), Array(6).fill('abc=1'))
+  assert.deepEqual(csrfHeaders(), { 'X-CSRFToken': 'abc=1' })
+  globalThis.document = { cookie: '' }
+  assert.deepEqual(csrfHeaders(), {})
+  delete globalThis.document
+})

@@ -170,6 +170,12 @@ export interface SeismicSimulationState {
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */
+/** Solver-velocity arrows of one DG2 frame (GeoJSON points; speed m/s, bearing degrees from true north). */
+export interface FlowArrowCollection {
+  type: 'FeatureCollection'
+  features: Array<{type: 'Feature'; geometry: {type: 'Point'; coordinates: [number, number]}; properties: {speed: number; bearing: number}}>
+}
+
 export interface FloodSimulationState {
   enabled: boolean
   selectedZoneId: string
@@ -182,6 +188,9 @@ export interface FloodSimulationState {
   rasterBounds: [number, number, number, number] | null
   showRasterOnMap: boolean
   waterOpacity: number
+  /** Flow arrows of the selected DG2 frame; null for the maximum or runs without velocities. */
+  flowArrows?: FlowArrowCollection | null
+  showFlowArrows?: boolean
   stats?: {
     rainfallMm: number
     durationHours: number

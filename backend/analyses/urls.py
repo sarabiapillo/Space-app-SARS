@@ -2,12 +2,13 @@ from django.urls import path
 
 from .views import FloodScenarioPrepareView, FloodScenarioSimulateView
 from .flood_runs import FloodRunStartView, FloodRunStatusView, FloodRunResultsView, FloodRunArtifactView
-from .roi_flood_runs import RoiRunStartView, RoiRunStatusView, RoiRunResultsView, RoiRunArtifactView
+from .roi_flood_runs import RoiRunStartView, RoiRunStatusView, RoiRunResultsView, RoiRunArtifactView, RoiRunPreviewView
 
 urlpatterns = [
     path("flood-scenarios/roi/start/", RoiRunStartView.as_view(), name="flood-roi-start"),
     path("flood-roi-runs/<uuid:run_id>/", RoiRunStatusView.as_view(), name="flood-roi-status"),
     path("flood-roi-runs/<uuid:run_id>/results/", RoiRunResultsView.as_view(), name="flood-roi-results"),
+    path("flood-roi-runs/<uuid:run_id>/artifacts/<str:artifact>/preview/", RoiRunPreviewView.as_view(), name="flood-roi-preview"),
     path("flood-roi-runs/<uuid:run_id>/artifacts/<str:artifact>/", RoiRunArtifactView.as_view(), name="flood-roi-artifact"),
     path("flood-scenarios/prepare/", FloodScenarioPrepareView.as_view(), name="flood-scenario-prepare"),
     path("flood-scenarios/simulate/", FloodScenarioSimulateView.as_view(), name="flood-scenario-simulate"),

@@ -203,3 +203,83 @@ def test_duration_overflow_is_value_error(tmp_path, dem):
     with pytest.raises(ValueError):
         export_rainfall_netcdf(profile(), dem, tmp_path / "overflow.nc",
                                simulation_duration_s=10**10000, max_values=100000)
+
+
+def test_observed_profile_exports_each_interval_and_is_marked_observed(dem, tmp_path):
+    from pipeline.hydrology.rainfall import observed_rainfall_profile
+    observed = observed_rainfall_profile(ROI, [{"start_s": 0, "end_s": 1800, "mm": 3.0},
+                                               {"start_s": 1800, "end_s": 3600, "mm": 7.5}], {"product": "GPM_3IMERGHHL"})
+    manifest = json.loads(export_rainfall_netcdf(observed, dem, tmp_path / "rain.nc", simulation_duration_s=3600).read_text())
+    assert manifest["synthetic"] is False and manifest["observed"] is True
+    with netcdf_file(tmp_path / "rain.nc", "r", mmap=False) as nc:
+        rain = nc.variables["rainfall_depth"][:].copy()
+    assert rain[0].max() == pytest.approx(3.0) and rain[1].max() == pytest.approx(7.5)
+
+
+def test_a_profile_neither_synthetic_nor_observed_is_still_rejected(dem, tmp_path):
+    unflagged = {**profile(), "synthetic": False}
+    with pytest.raises(ValueError):
+        export_rainfall_netcdf(unflagged, dem, tmp_path / "rain.nc", simulation_duration_s=7200)
+
+
+# --- per-cell rain cube export (net rain from Curve Number, etc.) ------------------------------
+
+def _cube_for(dem_path, intervals=3):
+    from pipeline.hydrology.rainfall_netcdf import export_rainfall_cube_netcdf  # noqa: F401
+    with rasterio.open(dem_path) as raster:
+        height, width = raster.height, raster.width
+    rng = np.random.default_rng(5)
+    return rng.uniform(0.0, 4.0, size=(intervals, height, width))
+
+
+def test_cube_export_round_trip_keeps_native_layout_and_per_cell_values(tmp_path, dem):
+    from pipeline.hydrology.rainfall_netcdf import export_rainfall_cube_netcdf
+    cube = _cube_for(dem)
+    edges = [0.0, 1800.0, 3600.0, 5400.0]
+    method = {"name": "scs_curve_number_incremental", "initial_abstraction_ratio": 0.2}
+    destination = tmp_path / "net.nc"
+    manifest_path = export_rainfall_cube_netcdf(cube, edges, dem, destination, simulation_duration_s=7200,
+                                                method=method, synthetic=True, max_values=10_000)
+    assert destination.read_bytes()[:4] == b"CDF\x02"
+    metadata = json.loads(manifest_path.read_text())
+    assert metadata["spatial_policy"].startswith("per-cell")
+    assert metadata["method"] == method
+    assert metadata["synthetic"] is True and metadata["hydraulic_ready"] is False
+    assert metadata["cube_sha256"] == hashlib.sha256(np.ascontiguousarray(cube, dtype="<f8").tobytes()).hexdigest()
+    assert metadata["interval_mean_mm"] == pytest.approx(cube.mean(axis=(1, 2)).tolist())
+    with netcdf_file(destination, "r", mmap=False) as nc:
+        dimension_ids = list(nc.dimensions)
+        variable_ids = list(nc.variables)
+        assert dimension_ids.index("native_header_anchor") == variable_ids.index("rainfall_depth")
+        assert all(dimension_ids.index(axis) == variable_ids.index(axis) for axis in ("time", "x", "y"))
+        t = nc.variables["time"][:].copy()
+        values = nc.variables["rainfall_depth"][:].copy()
+    np.testing.assert_allclose(t, [0.0, 0.5, 1.0, 1.5, 2.0])
+    np.testing.assert_array_equal(values[:3], cube)
+    assert np.all(values[3:] == 0)
+
+
+def test_cube_export_rejects_bad_shapes_values_and_overwrite(tmp_path, dem):
+    from pipeline.hydrology.rainfall_netcdf import export_rainfall_cube_netcdf
+    cube = _cube_for(dem)
+    edges = [0.0, 1800.0, 3600.0, 5400.0]
+    kwargs = dict(simulation_duration_s=5400, method={"name": "x"}, synthetic=True)
+    with pytest.raises(ValueError):
+        export_rainfall_cube_netcdf(cube[:, :-1], edges, dem, tmp_path / "a.nc", **kwargs)
+    with pytest.raises(ValueError):
+        export_rainfall_cube_netcdf(cube, edges[:-1], dem, tmp_path / "b.nc", **kwargs)
+    negative = cube.copy(); negative[0, 0, 0] = -1
+    with pytest.raises(ValueError):
+        export_rainfall_cube_netcdf(negative, edges, dem, tmp_path / "c.nc", **kwargs)
+    with pytest.raises(ValueError):
+        export_rainfall_cube_netcdf(cube, [0.0, 1800.0, 1800.0, 5400.0], dem, tmp_path / "d.nc", **kwargs)
+    with pytest.raises(ValueError, match="budget"):
+        export_rainfall_cube_netcdf(cube, edges, dem, tmp_path / "e.nc", max_values=1, **kwargs)
+    with pytest.raises(ValueError):
+        export_rainfall_cube_netcdf(cube, edges, dem, tmp_path / "f.nc", simulation_duration_s=5400,
+                                    method={"name": "x"}, synthetic=False)
+    for name in "abcdef":
+        assert not (tmp_path / f"{name}.nc").exists()
+    export_rainfall_cube_netcdf(cube, edges, dem, tmp_path / "ok.nc", **kwargs)
+    with pytest.raises(FileExistsError):
+        export_rainfall_cube_netcdf(cube, edges, dem, tmp_path / "ok.nc", **kwargs)

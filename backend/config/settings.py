@@ -49,6 +49,18 @@ DEBUG = env("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
 
 ALLOWED_HOSTS = [h.strip() for h in env("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
 
+# The Vite dev server proxies /api and /admin, so browser POSTs carry its Origin.
+VITE_DEV_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+
+def csrf_trusted_origins(value, *, debug):
+    """Comma-separated origins from the environment; without them, the Vite dev origins only in DEBUG."""
+    origins = [o.strip() for o in value.split(",") if o.strip()]
+    return origins or (list(VITE_DEV_ORIGINS) if debug else [])
+
+
+CSRF_TRUSTED_ORIGINS = csrf_trusted_origins(env("DJANGO_CSRF_TRUSTED_ORIGINS", ""), debug=DEBUG)
+
 
 # Application definition
 

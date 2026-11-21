@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { setLanguage } from '../src/i18n/core.ts'
 import { render } from './i18n-rendering.mjs'
-const { ScientificFiguresViewer, SCIENTIFIC_FIGURES } = await import('../src/components/ScientificFiguresViewer.tsx')
+const { ScientificFiguresViewer } = await import('../src/components/ScientificFiguresViewer.tsx')
+const { SCIENTIFIC_FIGURES } = await import('../src/components/scientificFigures.ts')
 
 test('scientific viewer translates every built-in figure title, subtitle, tag and description without replacing image sources', () => {
   const snapshot = JSON.stringify(SCIENTIFIC_FIGURES)

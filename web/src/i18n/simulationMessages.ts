@@ -41,4 +41,7 @@ export const simulationMessages: Record<string, string> = {
   'Se requieren únicamente los campos rainfall y roi.': 'Only rainfall and roi fields are required.',
   'Unidad no admitida; use mm.': 'Unsupported unit; use mm.',
   'Campos de lluvia desconocidos o faltantes.': 'Unknown or missing rainfall fields.',
+  'artefactos numéricos en terreno muy empinado; profundidades poco confiables, la dirección del flujo sí vale': 'numerical artifacts on very steep terrain; depths unreliable, the flow direction is still valid',
+  'zona urbana: edificios y drenaje no representados; profundidades indicativas': 'urban area: buildings and drainage not represented; indicative depths',
+  'Datos de tormenta de diseño (PXR-4) no disponibles en el servidor.': 'Design-storm data (PXR-4) not available on the server.',
 }

@@ -4,7 +4,7 @@ import {
   LUT_PLASMA_256,
   LUT_TURBO_256,
   LUT_VIRIDIS_256,
-} from './colormapTables'
+} from './colormapTables.ts'
 
 export type ScientificColormapId =
   | 'inferno'
@@ -127,7 +127,25 @@ export const SCIENTIFIC_COLORMAPS: readonly ScientificColormapSpec[] = Object.fr
 ])
 
 const lutCache = new Map<ScientificColormapId, Uint8Array>()
+/**
+ * Upper bound for colorized PNG blobs kept alive. The map shows at most the two most
+ * recent (t1/t2), so least-recently-used eviction never revokes a URL in display.
+ */
+export const COLORIZED_URL_CACHE_LIMIT = 16
 const colorizedUrlCache = new Map<string, Promise<string>>()
+
+/** Inserts or refreshes an entry as most recent; evicts and revokes the oldest beyond the limit. */
+function rememberColorizedUrl(cacheKey: string, promise: Promise<string>) {
+  colorizedUrlCache.delete(cacheKey)
+  colorizedUrlCache.set(cacheKey, promise)
+  while (colorizedUrlCache.size > COLORIZED_URL_CACHE_LIMIT) {
+    const [oldestKey, oldest] = colorizedUrlCache.entries().next().value as [string, Promise<string>]
+    colorizedUrlCache.delete(oldestKey)
+    void oldest.then((url) => {
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+    })
+  }
+}
 
 export function getColormapSpec(id: ScientificColormapId): ScientificColormapSpec {
   return SCIENTIFIC_COLORMAPS.find((c) => c.id === id) ?? SCIENTIFIC_COLORMAPS[0]
@@ -187,7 +205,10 @@ export function colorizePngWithLut(
 
   const cacheKey = `${pngUrl}::${colormapId}`
   const existing = colorizedUrlCache.get(cacheKey)
-  if (existing) return existing
+  if (existing) {
+    rememberColorizedUrl(cacheKey, existing)
+    return existing
+  }
 
   const promise = new Promise<string>((resolve) => {
     const img = new Image()
@@ -241,6 +262,6 @@ export function colorizePngWithLut(
     img.src = pngUrl
   })
 
-  colorizedUrlCache.set(cacheKey, promise)
+  rememberColorizedUrl(cacheKey, promise)
   return promise
 }
