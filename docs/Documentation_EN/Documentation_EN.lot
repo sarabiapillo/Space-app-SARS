@@ -1,0 +1,33 @@
+\babel@toc {english}{}\relax 
+\contentsline {table}{\numberline {1}{\ignorespaces Inputs, outputs, and verification checks across each stage of the observation chain.}}{18}{table.caption.5}%
+\contentsline {table}{\numberline {2}{\ignorespaces The three levels of scientific statements and how they are distinguished.}}{19}{table.caption.7}%
+\contentsline {table}{\numberline {3}{\ignorespaces Representative radar wavelengths and their qualitative interaction with vegetation. Values represent common orders of magnitude rather than specific mission parameters.}}{24}{table.caption.9}%
+\contentsline {table}{\numberline {4}{\ignorespaces Theoretical speckle statistics in dB for $L$ independent looks (Equation~\eqref {eq:db-gamma}). The bias is the difference between the mean of the dB values and the dB of the linear mean.}}{26}{table.caption.11}%
+\contentsline {table}{\numberline {5}{\ignorespaces What can and cannot be inferred directly from SAR pixel backscatter.}}{29}{table.caption.15}%
+\contentsline {table}{\numberline {6}{\ignorespaces Sensitivity of received power $P_r$ to each variable in Equation~\eqref {eq:radar} (holding all others constant), computed via $10\log _{10}$ of the ratio.}}{30}{table.caption.16}%
+\contentsline {table}{\numberline {7}{\ignorespaces The three backscatter conventions and their reference planes. Dividing by a smaller projected area yields a larger numerical coefficient.}}{31}{table.caption.18}%
+\contentsline {table}{\numberline {8}{\ignorespaces Decibel-to-linear power ratio equivalences. Every $+3$\,dB doubles linear power; every $+10$\,dB multiplies power by 10.}}{32}{table.caption.21}%
+\contentsline {table}{\numberline {9}{\ignorespaces Typical qualitative SAR backscatter trends. Actual magnitudes depend on site geometry, incidence angle, and season; this table is a physical guide rather than an automated classification rule.}}{40}{table.caption.29}%
+\contentsline {table}{\numberline {10}{\ignorespaces Multilook output for the illustrative array in Figure~\ref {fig:multilook_bloques}. The bottom-right block has $N_v=1<2$ and is masked to $\mathrm {NaN}$.}}{45}{table.caption.46}%
+\contentsline {table}{\numberline {14}{\ignorespaces Full-resolution $\gamma ^0$ dB statistics across the Stage 1 Chiapas ROI (HH and HV). Values extracted from \texttt {metadatos.json}.}}{56}{table.caption.65}%
+\contentsline {table}{\numberline {15}{\ignorespaces Independent auxiliary sources used to contextualize and contrast SAR backscatter changes.}}{57}{table.caption.68}%
+\contentsline {table}{\numberline {16}{\ignorespaces Physical translation of each term in the 2D Shallow Water Equations~\eqref {eq:conserv}.}}{59}{table.caption.70}%
+\contentsline {table}{\numberline {17}{\ignorespaces Strict epistemic boundaries across platform modules.}}{64}{table.caption.81}%
+\contentsline {table}{\numberline {20}{\ignorespaces Requirements to move from a technically verified run to a scientifically defensible flood study.}}{76}{table.caption.82}%
+\contentsline {table}{\numberline {21}{\ignorespaces Expected qualitative physical sensitivities of the flood simulator.}}{79}{table.caption.88}%
+\contentsline {table}{\numberline {22}{\ignorespaces Standardized verification test record template.}}{79}{table.caption.89}%
+\contentsline {table}{\numberline {23}{\ignorespaces Sources of physical approximation in the direct solar irradiance model and their bias direction.}}{85}{table.caption.95}%
+\contentsline {table}{\numberline {24}{\ignorespaces Incident direct irradiance on three terrain facets at solar noon on November 15 (illustrative, $T_L=3$).}}{86}{table.caption.97}%
+\contentsline {table}{\numberline {25}{\ignorespaces SAR geometric feasibility mask categories in the 3D Terrain Viewer (\texttt {computeSarGeometricMask}).}}{94}{table.caption.101}%
+\contentsline {table}{\numberline {26}{\ignorespaces Illustrative linear $\gamma ^0_{HH}$ values across a $3\times 3$ pixel region.}}{108}{table.caption.140}%
+\contentsline {table}{\numberline {27}{\ignorespaces Decibel values and pixel-by-pixel temporal difference $\Delta =\mathrm {B}-\mathrm {A}$.}}{108}{table.caption.141}%
+\contentsline {table}{\numberline {29}{\ignorespaces Frequently used unit conversions across the documentation.}}{114}{table.caption.149}%
+\contentsline {table}{\numberline {30}{\ignorespaces Thematic index of key figures across the documentation.}}{116}{table.caption.158}%
+\contentsline {table}{\numberline {31}{\ignorespaces Frequently used SAR radar formulas.}}{118}{table.caption.192}%
+\contentsline {table}{\numberline {32}{\ignorespaces Frequently used shallow-water hydrodynamics formulas.}}{119}{table.caption.194}%
+\contentsline {table}{\numberline {33}{\ignorespaces Frequently used solar geometry and irradiance formulas.}}{119}{table.caption.196}%
+\contentsline {table}{\numberline {34}{\ignorespaces SAR geometric feasibility mask categories in the 3D Terrain Viewer (\texttt {computeSarGeometricMask}).}}{128}{table.caption.201}%
+\contentsline {table}{\numberline {35}{\ignorespaces Comparison of $V_{s30}$ soil classes implemented in \nolinkurl {web/src/utils/seismic.ts} (\texttt {SOIL\_VS30} and \texttt {siteWaveParams}). Users may also enter any custom $V_{s30}\in [80,1500]\,\mathrm {m/s}$ for both the regional scenario and the receiving station.}}{133}{table.caption.208}%
+\contentsline {table}{\numberline {36}{\ignorespaces Data contracts across TerraPulse AI subsystems.}}{140}{table.caption.216}%
+\contentsline {table}{\numberline {37}{\ignorespaces Complete catalog of TerraPulse AI REST endpoints.}}{144}{table.caption.217}%
+\contentsline {table}{\numberline {38}{\ignorespaces Relational and spatial data model implemented in PostgreSQL 16 + PostGIS 3.4.}}{149}{table.caption.223}%
