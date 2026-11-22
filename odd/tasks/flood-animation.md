@@ -14,7 +14,7 @@ Branch: `feature/flood-ui-dg2`. Delivery: work-unit commits. Runners: `pytest`, 
 
 ## Tasks
 
-- [x] T2 S6 wet-surface class and stronger rain presence (delegated writer, context backstop) — commit below; pipeline 614, backend 48 (1 pvlib), web 154, tsc clean, lint 0 errors, flow-check 72 (two runs)
+- [x] T2 S6 wet-surface class and stronger rain presence (delegated writer, context backstop) — 5d8bbf4; pipeline 614, backend 48 (1 pvlib), web 154, tsc clean, lint 0 errors, flow-check 72 (two runs)
 - [x] T1 S1–S5 animation, rain effect, thin-sheet class, water budget, live progress (delegated writer) — a338c54; pipeline 614, backend 47 (1 pvlib), web 151, flow-check 71; real Earthdata rerun blocked by the classifier (offline re-summary of fd2b11c8 used); independent verifier running for items 2 (live endpoint) and 4 (reading frames while written)
 
 ## Log
