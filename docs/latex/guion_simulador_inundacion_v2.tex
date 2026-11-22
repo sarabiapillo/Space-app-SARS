@@ -1,0 +1,347 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage{fontspec}
+\usepackage[spanish,es-nodecimaldot,es-noindentfirst,es-noshorthands]{babel}
+\usepackage[margin=2.0cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{longtable,booktabs,array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tcolorbox}
+
+\definecolor{agua}{RGB}{8,81,156}
+\definecolor{celeste}{RGB}{232,246,252}
+\definecolor{gris}{RGB}{85,85,85}
+\definecolor{transicionbg}{RGB}{245,248,252}
+\definecolor{borde}{RGB}{165,200,228}
+
+\titleformat{\section}{\Large\bfseries\color{agua}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{agua}}{\thesubsection}{0.6em}{}
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\parskip}{4pt}
+\setlength{\emergencystretch}{3em}
+
+\newtcolorbox{decir}{
+  colback=celeste,
+  colframe=agua,
+  boxrule=0.55pt,
+  arc=2pt,
+  left=7pt,
+  right=7pt,
+  top=5pt,
+  bottom=5pt
+}
+
+\newcommand{\mostrar}[1]{%
+  \par\noindent{\small\color{gris}\textbf{En pantalla:} #1}\par
+}
+
+\newcommand{\transicion}[1]{%
+  \par\noindent\fcolorbox{borde}{transicionbg}{%
+    \parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small\textbf{Transición:} #1}%
+  }\par\medskip
+}
+
+\newcommand{\enpantalla}[1]{%
+  \par\noindent{\small\color{gris}\textbf{Dónde se ve en pantalla:} #1}\par
+}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries\color{agua} Simulador de inundación por lluvia --- Guion de presentación (v2)}\\[4pt]
+{\large TerraPulse AI \textperiodcentered\ NASA Space Apps Challenge 2026}\\[4pt]
+{\small Rama \texttt{feature/flood-ui-dg2} \textperiodcentered\ 22 de noviembre de 2026}
+\end{center}
+
+\noindent\fcolorbox{borde}{transicionbg}{%
+  \parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small
+  \textbf{Nota de puesta en escena.} Duración objetivo: \textbf{9 minutos} (rango 8--10~min). Hilo único: \emph{de la pregunta práctica al recorrido de una gota de agua}. Todos los resultados del simulador son \textbf{exploratorios} (\texttt{synthetic}, \texttt{hydraulic\_accuracy\_\allowbreak validated:\ false}): describen escenarios físicos, no pronósticos ni eventos validados. Conviene hacer la demostración en entorno local, ya que en producción el servicio DG2 puede no estar instalado aún.}%
+}
+
+\section{Guion de presentación (9 minutos)}
+
+\subsection*{Bloque 1 --- El problema (1 min)}
+\mostrar{el visor de TerraPulse AI centrado en Chiapas (Cañón del Sumidero y Tuxtla Gutiérrez).}
+\begin{decir}
+``Cuando cae una tormenta fuerte, el dato que suele salir en las noticias es cuántos milímetros llovieron. Pero ese número, por sí solo, no responde la pregunta que de verdad importa en el territorio: \textbf{si cae cierta lluvia sobre una zona, ¿hacia dónde se mueve el agua y dónde se acumula?}
+
+Dos lluvias idénticas se comportan de forma muy distinta según las pendientes, el tipo de suelo y la cobertura vegetal. Una parte se infiltra, otra corre en láminas delgadas por las laderas y otra termina estancándose en las zonas bajas. Nuestro simulador de inundación toma el relieve real de cualquier lugar del mundo, le pone encima una lluvia y calcula, celda por celda, qué recorrido sigue el agua.''
+\end{decir}
+\transicion{Con esa pregunta clara, veamos primero qué es exactamente esta herramienta y qué límites declara desde el primer segundo.}
+
+\subsection*{Bloque 2 --- La idea: un laboratorio de escenarios, no un pronóstico (1 min)}
+\mostrar{el panel \texttt{Simulación de inundación (DG2/FV1)} abierto junto al mapa, señalando los avisos de escenario exploratorio.}
+\begin{decir}
+``Antes de mover un solo botón, conviene distinguir entre observar e imaginar escenarios. En TerraPulse AI, los productos satelitales miden lo que ya ocurrió en la superficie; este módulo, en cambio, es un \textbf{laboratorio de escenarios hipotéticos}. No pronostica el clima ni sustituye una alerta de protección civil. Por honestidad científica, cada resultado queda etiquetado como \texttt{synthetic} y con exactitud hidráulica \emph{no validada}.
+
+Lo que sí garantiza el simulador es \textbf{conservación física del agua} sobre datos abiertos y globales: toda la lluvia que entra al dominio se infiltra, queda retenida en el terreno o sale por sus bordes. Así cualquiera puede explorar trayectorias y zonas de acumulación en cualquier parte del planeta.''
+\end{decir}
+\transicion{Para que el simulador no parezca una caja negra, sigamos una gota de agua desde que cae del cielo hasta que se detiene.}
+
+\subsection*{Bloque 3 --- Cómo funciona: ``sigamos una gota'' (2 min)}
+\mostrar{recorrido visual por las entradas del panel: terreno, cobertura, lluvia y método de cálculo.}
+\begin{decir}
+``Pensemos en una sola gota que cae sobre esta zona y sigamos cuatro pasos: el terreno, la superficie, la lluvia y el motor hidráulico.
+
+\textbf{Primero, el terreno.} La gota cae sobre un modelo digital de elevación de 30~metros ---Copernicus GLO-30 o NASADEM, obtenidos de NASA Earthdata y ASF---. Aquí cuidamos un detalle técnico fundamental: el \textbf{datum vertical}, es decir, el `cero' desde el cual medimos las alturas. El satélite mide sobre un elipsoide matemático, pero el agua busca el nivel del mar. Por eso convertimos todas las alturas a un único datum, \textbf{EGM2008}. En Tuxtla Gutiérrez esa corrección cambia la elevación en unos 4.5~metros; gracias a ella, el terreno, el nivel del mar, las mareas astronómicas de \textbf{EOT20}, el fondo marino de \textbf{GEBCO} y los lagos de \textbf{HydroLAKES} hablan el mismo idioma.
+
+\textbf{Segundo, la superficie.} Al tocar el suelo, dos propiedades deciden la suerte de nuestra gota. Una es la \textbf{rugosidad de Manning}, un número que mide cuánto frena la superficie al agua: la leemos celda por celda de \textbf{ESA WorldCover}, porque un bosque frena el flujo mucho más que un pastizal. La otra es la \textbf{infiltración por número de curva SCS}, que cruza esa cobertura con los grupos de suelo de \textbf{HYSOGs250m} y con la \textbf{humedad previa del suelo} que consultamos automáticamente en \textbf{NISAR SME2} ---o en \textbf{SMAP L4} si no hay dato, como pasa en zonas urbanas---. Solo la lluvia neta que el suelo no logra absorber empieza a escurrir.
+
+\textbf{Tercero, la lluvia.} Podemos probar una lluvia sintética reproducible con una semilla fija, o cargar una \textbf{tormenta de diseño} de \textbf{PXR-4}: un catálogo global de curvas intensidad-duración-frecuencia. Si elegimos una tormenta de 100~años ---una lluvia cuya probabilidad de superarse es de 1 entre 100 cada año---, el servidor la reparte en un \textbf{hietograma de bloques alternos}, colocando los minutos más intensos en el centro de la tormenta.
+
+\textbf{Cuarto, el motor hidráulico.} Esa lluvia neta entra a \textbf{LISFLOOD-FP 8.0.3}, un motor abierto que resuelve las \textbf{ecuaciones de aguas someras en 2D}: conservación de masa y conservación de momento. Podemos correrlo con \textbf{DG2} (Galerkin discontinuo de segundo orden), que ajusta un plano inclinado en cada celda y captura mejor el detalle, o con \textbf{FV1} (volúmenes finitos de primer orden), que usa un valor plano por celda y es más estable en laderas muy empinadas. Cuando las láminas son muy delgadas en pendientes fuertes, DG2 puede generar profundidades negativas numéricas; nosotros las ponemos en cero y medimos cuánto volumen artificial añaden. Si es menos de 1\,\%, es normal; entre 1\,\% y 10\,\%, mostramos un aviso; y si supera el 10\,\% o el solver falla, el servidor cambia automáticamente al otro método y nos avisa.''
+\end{decir}
+\transicion{Ahora que sabemos qué le ocurre a cada gota detrás de escena, veamos cómo se configura y cobra vida en la pantalla.}
+
+\subsection*{Bloque 4 --- Demostración en vivo: configurar y ver avanzar la lluvia (2 min)}
+\mostrar{el panel paso a paso (\texttt{1 Zona}, \texttt{2 Lluvia}, \texttt{3 Terreno y fronteras}, \texttt{4 Opciones avanzadas}, \texttt{Confirmar y simular}) pulsando \texttt{Cargar valores de ejemplo}; luego el mapa mientras corre la simulación con la barra de progreso y la cortina de lluvia.}
+\begin{decir}
+``En el panel seguimos cinco pasos muy directos. En el paso uno elegimos la zona de interés y aceptamos explícitamente que es un dominio de cálculo, no necesariamente una cuenca cerrada. Para agilizar la prueba, pulso \textbf{Cargar valores de ejemplo}. Aclaro que son valores ilustrativos para explorar, no recomendaciones físicas: rellenan una tormenta de diseño de 100~años y 3~horas, 4~horas de simulación para dar una hora extra de escurrimiento, un cuadro cada 300~segundos ---49~cuadros en total---, terreno Copernicus a 30~metros, Manning de WorldCover, número de curva automático, las cuatro fronteras libres para que el agua pueda salir, y método DG2 con respaldo automático a FV1. Confirmo que los resultados no están validados e inicio la corrida.
+
+Mientras calcula, no dejamos al usuario viendo una barra congelada: \textbf{la propia animación funciona como barra de progreso}. Conforme el motor termina cada cuadro, el agua aparece sobre el mapa. El velo translúcido, las gotas inclinadas y el letrero superior ---`Lloviendo X~mm/h \textperiodcentered\ acumulado Y~mm de Z~mm'--- muestran en tiempo real cuánto está lloviendo.
+
+Fíjense en los colores: el cian semitransparente muestra las láminas delgadas; desde medio milímetro hasta 2~mm es la \textbf{superficie mojada}, que hace visible que llovió en toda la zona; de 2 a 10~mm es escurrimiento y de 1 a 3~cm es lámina delgada. Cuando el agua alcanza los 3~cm pasa a azul opaco cada vez más oscuro: eso ya es \textbf{agua encharcada}, y es lo que contabilizamos como área inundada.''
+\end{decir}
+\transicion{Cuando el servidor termina el último cuadro, la barra de progreso se transforma en el reproductor completo y nos deja revisar exactamente a dónde fue el agua.}
+
+\subsection*{Bloque 5 --- Resultados: ¿a dónde se fue el agua? (1.5 min)}
+\mostrar{reproducción completa (velocidad \texttt{0.5x--4x}, botón \texttt{Ver máximo}), tarjetas de resumen, gráfica por clases y bloque \texttt{¿A dónde fue la lluvia?}, contrastando un cuadro del pico de lluvia con el cuadro final.}
+\begin{decir}
+``Ya con la corrida terminada podemos reproducir la película completa, cambiar de velocidad o saltar al mapa de profundidad máxima. Pero más allá de la imagen, el bloque \textbf{¿A dónde fue la lluvia?} cierra las cuentas en metros cúbicos.
+
+Tengo dos casos reales ya procesados que ilustran bien lo que descubre la herramienta. En el \textbf{Cañón del Sumidero}, con esta tormenta de 100~años y 3~horas ---unos 60~mm de lluvia---, cayeron \textbf{9\,078~m$^3$} de agua bruta. El suelo y la vegetación infiltraron o retuvieron \textbf{6\,285~m$^3$}, es decir, el 69\,\%. Los \textbf{2\,793~m$^3$} de lluvia neta escurrieron hacia abajo: al final de las cuatro horas, \textbf{2\,741~m$^3$} terminaron encharcados en dos fondos de valle con profundidades de hasta \textbf{1.08~m}, \textbf{31~m$^3$} quedaron en láminas sobre las laderas y apenas \textbf{0.4~m$^3$} salieron por los bordes. Como las paredes del cañón son tan empinadas, DG2 superó el límite de profundidades negativas y el servidor cambió automáticamente a FV1, dejándolo indicado arriba.
+
+El segundo caso es la \textbf{zona urbana de Tuxtla Gutiérrez}. Con la misma tormenta, en el pico de lluvia se mojaron \textbf{392 de 532~celdas}, y \textbf{256 de ellas} tenían entre 0.5 y 2~mm. Eso explica por qué creamos la clase de superficie mojada: una lámina de pocos milímetros ocupa casi todo el mapa con un volumen mínimo, mientras el agua encharcada concentra casi todo el volumen en unas pocas depresiones.''
+\end{decir}
+\transicion{Estos resultados conservan la masa y tienen sentido físico, pero el rigor científico exige poner sus límites igual de visibles.}
+
+\subsection*{Bloque 6 --- Límites con honestidad (1 min)}
+\mostrar{el aviso amarillo de \texttt{exactitud hidráulica NO validada}, el aviso de zona urbana y el \texttt{Detalle técnico del cuadro}.}
+\begin{decir}
+``Quiero cerrar siendo igual de claro con los cinco límites del simulador:
+
+\begin{enumerate}
+  \item \textbf{No está validado contra un evento real.} Entre junio y noviembre de 2026 cruzamos la lluvia satelital de IMERG con pasadas de NISAR y mapas de agua OPERA DSWx tanto en nuestra zona de estudio como en la costa de Chiapas, y no hubo ninguna inundación pluvial observable con el satélite. Las herramientas de validación ---precisión, recall, F1 e IoU--- ya están programadas y listas para cuando exista un evento.
+  \item \textbf{Procesos que no modelamos.} Solo cae lluvia dentro del rectángulo: no entran ríos desde fuera, no hay alcantarillado ni drenaje pluvial urbano por defecto, y tampoco hay evaporación.
+  \item \textbf{Resolución de 30~metros.} Copernicus y NASADEM son modelos de superficie que mezclan suelo con copas de árboles y techos; en ciudad, las profundidades son solo indicativas y llevan aviso.
+  \item \textbf{Lluvia global suavizada.} Las curvas PXR-4 provienen de un reanálisis en celdas de unos 28~km y tienden a suavizar tormentas tropicales cortas; donde existan curvas locales, conviene compararlas.
+  \item \textbf{Presupuesto de cálculo.} Para responder en tiempos razonables, el servidor limita por defecto a 3\,000~celdas y 120~segundos por intento de solver, es decir, dominios locales del orden de 1~km$^2$ a 30~metros.''
+\end{enumerate}
+\end{decir}
+\transicion{Con esos alcances y límites claros, cierro resumiendo qué aporta este simulador dentro de TerraPulse AI.}
+
+\subsection*{Bloque 7 --- Cierre (0.5 min)}
+\mostrar{vista general del mapa con el resultado máximo, las flechas de flujo y el balance de agua.}
+\begin{decir}
+``En resumen, pasamos de mirar un dato aislado de lluvia a responder hacia dónde corre y dónde se acumula el agua, con un flujo reproducible que funciona en cualquier punto del mundo usando únicamente datos abiertos y con trazabilidad completa de parámetros, fuentes y advertencias. Es una herramienta exploratoria para entender escenarios de riesgo ---nunca para ordenar una evacuación sin validación previa---, y su siguiente paso inmediato es contrastar una corrida como estas frente a una inundación real captada por NISAR. Muchas gracias; quedo atento a sus preguntas.''
+\end{decir}
+
+\section{Parámetros del panel}
+
+La tabla sigue el orden exacto de las secciones del panel (\texttt{RainDg2Panel.tsx}). Los valores que coloca \textbf{Cargar valores de ejemplo} son ilustrativos para probar el flujo; no son recomendaciones físicas.
+
+{\small
+\renewcommand{\arraystretch}{1.24}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{2.2cm}>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{5.4cm}>{\raggedright\arraybackslash}p{5.2cm}@{}}
+\toprule
+\textbf{Sección} & \textbf{Parámetro} & \textbf{Qué hace} & \textbf{Por qué se necesita}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Sección} & \textbf{Parámetro} & \textbf{Qué hace} & \textbf{Por qué se necesita}\\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+% ---------------- 1. Zona
+1. Zona & ROI (polígono) / Zona precargada & Define el área de interés sobre el mapa o elige un caso precargado del catálogo. & Sin área no hay malla de cálculo; junto con la resolución fija el número de celdas (máx. 3\,000 por defecto).\\
+ & Declaración ``Acepto usar la ROI como dominio computacional'' & El usuario acepta explícitamente que la ROI es un dominio de cálculo y no afirma que sea una cuenca. & Un rectángulo corta cauces y laderas: el agua exterior no entra. Hay que declararlo para interpretar bien los bordes.\\
+ & Usar otro dominio (GeoJSON) & Permite introducir un polígono GeoJSON (\texttt{EPSG:4326}) distinto que cubra la ROI. & Sirve para ampliar el dominio o centrarlo en un valle sin redibujar la ROI.\\
+% ---------------- 2. Lluvia
+2. Lluvia & Tipo de lluvia & Elige entre \emph{Sintética} (definida por el usuario) o \emph{Tormenta de diseño} (\texttt{PXR-4}). & Permite alternar entre un escenario libre y una lluvia asociada a un periodo de retorno del sitio.\\
+ & Periodo de retorno (años) & Valores de 2, 5, 10, 25, 50 o 100~años; probabilidad anual $1/T$ de superar esa lluvia. Ejemplo: 100. & Traduce qué tan extrema es la tormenta a una lámina de lluvia calculada en el centroide del dominio.\\
+ & Duración de la tormenta (h) & Duración de la tormenta de diseño en múltiplos de 10~min (máx. 24~h). Ejemplo: 3. & Para una misma probabilidad, la lluvia acumulada e intensidad pico cambian según cuánto dure la tormenta.\\
+ & Lluvia hipotética (mm) & Lámina total que cae uniformemente sobre la ROI (modo sintético). Ejemplo: 60. & Fija el volumen bruto de agua del escenario sintético.\\
+ & Duración de la lluvia (s) & Tiempo durante el cual llueve en modo sintético. Ejemplo: 10\,800~s (3~h). & Junto con el total define la intensidad media ($\text{mm/h}$).\\
+ & Número de intervalos & Divide la lluvia sintética en tramos pares de igual duración conservando el total. Ejemplo: 18. & Introduce variaciones de intensidad (picos y pausas) más realistas que una lluvia constante.\\
+ & Semilla del perfil sintético & Entero no negativo que fija el generador aleatorio del perfil. Ejemplo: 7. & Garantiza reproducibilidad exacta al repetir una corrida.\\
+% ---------------- 3. Terreno y fronteras
+3. Terreno y fronteras & Terreno & Elige \texttt{Copernicus GLO-30} (global, recomendado) o \texttt{NASADEM} (56$^\circ$\,S--60$^\circ$\,N), ambos a 30~m vía NASA Earthdata. & La topografía gobierna la dirección y velocidad del flujo; es la entrada principal del modelo.\\
+ & Escenario rápido & Atajos \emph{Tierra adentro} (todo libre) o \emph{Mar al norte/este/sur/oeste}. & Configura las condiciones de borde costeras o terrestres con un clic y sin errores.\\
+ & Frontera por lado (N, E, S, O) & Asigna \emph{cerrada} (pared), \emph{libre} (\texttt{FREE}), \emph{nivel fijo} (\texttt{HFIX}) o \emph{Marea} (\texttt{EOT20}) a cada borde. Ejemplo: todas libres. & Define si el agua sale, rebota o encuentra el mar en el perímetro; un borde incorrecto altera el balance.\\
+ & Inicio del evento (UTC) & Fecha y hora UTC de inicio (solo con lados de marea). & La marea astronómica depende de la hora exacta y se calcula en la ventana $[t_0,\, t_0 + D_{\text{sim}}]$.\\
+ & Nivel del mar fijo (m, EGM2008) & Altura del agua en los lados de tipo \emph{nivel fijo}, referida al geoide EGM2008. & Representa un mar alto o una marea estática que frena la descarga al océano.\\
+ & Iniciar con el mar lleno & Llena al inicio las celdas bajo el nivel del mar conectadas a un lado de mar. & En DG2 una frontera de nivel fijo no llena un dominio seco en reposo.\\
+ & Fondo marino: GEBCO & Aplica la batimetría \texttt{GEBCO\_2026} ($\approx 450$~m) en las celdas marinas conectadas al borde de mar. & Los DEM terrestres de 30~m marcan el mar plano a 0~m; sin batimetría la profundidad inicial sería cero.\\
+ & Presión atmosférica (hPa) & Valor opcional (950--1\,040~hPa) que eleva el nivel del mar $\approx 1$~cm por cada hPa bajo 1013.25. & Incorpora el efecto de barómetro inverso de una baja presión en escenarios costeros.\\
+ & Rugosidad de Manning & Elige \emph{uniforme} (un único valor) o \emph{según cobertura} (\texttt{ESA WorldCover}). Ejemplo: WorldCover. & La rugosidad frena el flujo; por ejemplo, un bosque ($n \approx 0.10$) frena más que un pastizal ($n \approx 0.035$).\\
+ & Rugosidad Manning $n$ ($\text{s/m}^{1/3}$) & Valor escalar de fricción cuando se selecciona modo uniforme. Ejemplo: 0.05. & Controla la resistencia global del terreno cuando no se usa mapa de coberturas.\\
+ & Infiltración & Elige \emph{no modelada}, \emph{coeficiente de escorrentía} (0.65--0.92) o \emph{número de curva} por celda (\texttt{WorldCover} + \texttt{HYSOGs250m}). Ejemplo: número de curva. & Descuenta el agua retenida o infiltrada antes del flujo superficial; sin pérdidas todo el volumen escurre.\\
+ & Humedad previa del suelo & Elige \emph{automática} (\texttt{NISAR SME2} / \texttt{SMAP L4}), \emph{I} (seco), \emph{II} (medio) o \emph{III} (húmedo). Ejemplo: automática. & Un suelo previamente húmedo infiltra menos y genera mayor escorrentía.\\
+ & Lagos & Elige \emph{no incluir} o \emph{HydroLAKES} (lagos completos llenos al inicio con lecho paraboloide estimado). & Evita que un lago vacío en el DEM actúe como un pozo artificial que absorbe toda la lluvia.\\
+% ---------------- 4. Opciones avanzadas
+4. Opciones avanzadas & Método & Elige \texttt{DG2} (más preciso) o \texttt{FV1} (más estable en terreno empinado). Respaldo automático al otro si falla. Ejemplo: DG2. & Equilibra fidelidad de segundo orden en zonas suaves con estabilidad robusta en cañones y laderas fuertes.\\
+ & CRS métrico del terreno (\texttt{EPSG:...}) & Proyección plana en metros (p.~ej. \texttt{EPSG:32615} en Chiapas). Se sugiere automáticamente según la ROI. & LISFLOOD-FP requiere distancias y áreas en metros, no en grados geográficos.\\
+ & Resolución del terreno (m) & Tamaño de celda de la malla de cálculo. Ejemplo: 30~m. & Controla el detalle espacial, la cantidad total de celdas y el tiempo de ejecución.\\
+ & Remuestreo & Elige \texttt{nearest} (conserva elevaciones originales) o \texttt{bilinear} (suaviza). Ejemplo: \texttt{nearest}. & Adapta el DEM original a la malla métrica elegida sin inventar o suavizar picos si se usa \texttt{nearest}.\\
+ & Duración de simulación (s) & Tiempo físico simulado (máx. 86\,400~s). Ejemplo: 14\,400~s (4~h). & Debe cubrir toda la lluvia más un margen posterior para observar cómo drena y se acumula el agua.\\
+ & Intervalo de guardado de cuadros (s) & Frecuencia de salida de los cuadros (máx. 121~cuadros). Ejemplo: 300~s (49~cuadros). & Define la fluidez de la animación y las curvas temporales sin saturar el servidor.\\
+ & Paso inicial (s) & Primer paso temporal $\Delta t$ de arranque; luego el solver lo ajusta automáticamente. Ejemplo: 1~s. & Garantiza un arranque numéricamente estable del esquema explícito.\\
+ & Umbral de lámina delgada DG2 (m) & Activa \texttt{dg2depththresh} (0--1~m) para anular pendientes DG2 en agua somera; desactivado por defecto en ejemplo. & Reduce profundidades negativas en láminas finas, pero modifica la solución; por eso se registra explícitamente.\\
+% ---------------- 5. Confirmar
+5. Confirmar y simular & El dominio & Declaración informativa: \emph{incluye zona urbana} o \emph{no es urbano}. & Alerta al usuario cuando hay zona construida, ya que edificios y drenaje no están modelados.\\
+ & Confirmación de hipótesis & Casilla obligatoria que reconoce lluvia supuesta y exactitud hidráulica no validada. & Evita interpretar o comunicar un escenario exploratorio como predicción certificada.\\
+% ---------------- Resultados
+Resultados & Reproducción (\texttt{Reproducir}, 0.5$\times$--4$\times$, \texttt{Repetir}) & Anima secuencialmente los cuadros calculados con deslizador y tiempo simulado (\texttt{hh:mm}). & Muestra la evolución temporal: dónde empieza el escurrimiento y cómo se llenan las depresiones.\\
+ & \texttt{Mostrar lluvia} & Superpone gotas inclinadas, velo translúcido e insignia ``Lloviendo X~mm/h \textperiodcentered\ acumulado Y~mm de Z~mm''. & Hace explícito en qué instantes llueve sobre el dominio y con qué intensidad bruta.\\
+ & \texttt{Ver máximo} & Muestra el mapa envolvente de profundidad máxima alcanzada en toda la corrida. & Resume en una sola capa la peor extensión y profundidad de toda la simulación.\\
+ & Clases de profundidad & 8~clases: 0.5--2~mm (superficie mojada), 2--10~mm (escurrimiento), 1--3~cm (lámina delgada), desde 3~cm (encharcada hasta $\ge 2$~m). & Separa visualmente por dónde solo pasó o cayó agua de las zonas con acumulación real.\\
+ & Área inundada ($\ge 0.03$~m) & Suma el área de celdas con al menos 3~cm de agua (frente a láminas menores de 3~cm). & Ofrece una métrica comparable y conservadora de acumulación efectiva.\\
+ & Balance de agua (\texttt{¿A dónde fue la lluvia?}) & Desglosa en m$^3$ lluvia bruta, infiltrada, neta, láminas, encharcada y salida por bordes. & Demuestra la conservación de masa y explica el destino físico del volumen caído.\\
+ & Avisos & Reporta zona urbana, artefactos numéricos (1--10\,\%), cambio automático de método y falta de validación. & Aporta transparencia operativa sobre la confiabilidad de las profundidades mostradas.\\
+\end{longtable}
+}
+
+\section{Ecuaciones y su conexión con la pantalla}
+
+\subsection{Flujo del agua: ecuaciones de aguas someras 2D}
+Con profundidad $h$, velocidades $u,v$, elevación del terreno $z_b$, gravedad $g = 9.81\ \text{m/s}^2$ y rugosidad $n$, LISFLOOD-FP (DG2 y FV1) resuelve la forma conservativa:
+\begin{align}
+\frac{\partial h}{\partial t}+\frac{\partial (hu)}{\partial x}+\frac{\partial (hv)}{\partial y} &= R_{\text{neta}} \label{eq:masa}\\
+\frac{\partial (hu)}{\partial t}+\frac{\partial}{\partial x}\!\left(hu^2+\tfrac12 g h^2\right)+\frac{\partial (huv)}{\partial y} &= -g h\frac{\partial z_b}{\partial x}-g h S_{fx}\\
+\frac{\partial (hv)}{\partial t}+\frac{\partial (huv)}{\partial x}+\frac{\partial}{\partial y}\!\left(hv^2+\tfrac12 g h^2\right) &= -g h\frac{\partial z_b}{\partial y}-g h S_{fy}
+\end{align}
+La ecuación \eqref{eq:masa} expresa conservación de masa: el agua en una celda cambia por el flujo neto en sus cuatro lados más la lluvia neta $R_{\text{neta}}$ (m/s). Las dos siguientes expresan conservación de momento: la pendiente del terreno acelera el agua y la fricción la frena.
+\enpantalla{gobiernan la animación cuadro por cuadro en el mapa, las flechas blancas de velocidad en zonas de desbordamiento ($h \ge 0.15\ \text{m}$) y la igualdad de volúmenes del balance \texttt{¿A dónde fue la lluvia?}.}
+
+\paragraph{Fricción de Manning.}
+\begin{equation}
+S_{fx}=\frac{n^2\,u\sqrt{u^2+v^2}}{h^{4/3}},\qquad S_{fy}=\frac{n^2\,v\sqrt{u^2+v^2}}{h^{4/3}}
+\end{equation}
+Cuanto mayor es la rugosidad $n$ o menor la profundidad $h$, mayor es la resistencia al avance: por eso las láminas delgadas se desplazan lento.
+\enpantalla{se nota al comparar la velocidad de drenaje sobre bosques ($n \approx 0.10$, donde el tono cian tarda más en bajar) frente a zonas despejadas o pastizales ($n \approx 0.035$).}
+
+\paragraph{Estabilidad (condición CFL).} El esquema es explícito y ajusta internamente su paso de tiempo para que una perturbación no cruce más de una celda en un paso:
+\begin{equation}
+\Delta t \le C_{\text{CFL}}\,\min\!\left(\frac{\Delta x}{|u|+\sqrt{gh}},\ \frac{\Delta y}{|v|+\sqrt{gh}}\right)
+\end{equation}
+\enpantalla{explica por qué el campo \texttt{Paso inicial (s)} de las opciones avanzadas solo fija el primer instante y por qué la barra de progreso avanza más rápido o más lento según el tamaño de celda y la pendiente.}
+
+\paragraph{DG2 frente a FV1.} FV1 representa la solución en cada celda con un valor constante (1.er orden). DG2 la representa con un plano inclinado (valor medio y dos pendientes, 2.º orden), capturando mejor los frentes y el microrelieve, aunque puede generar profundidades negativas en laderas muy empinadas.
+\enpantalla{se refleja en el selector \texttt{Método}, en la tarjeta \texttt{Método de cálculo} de los resultados y en el aviso automático cuando el servidor cambia de \texttt{DG2} a \texttt{FV1}.}
+
+\subsection{Profundidades negativas: regla por volumen}
+Toda profundidad negativa en las salidas del solver se recorta a cero y se mide el volumen añadido frente al agua presente en cada cuadro (y en el máximo):
+\begin{equation}
+f=\frac{V_{\text{añadido}}}{V_{\text{agua}}},\qquad
+\begin{cases}
+f < 1\% & \text{resultado normal}\\
+1\% \le f \le 10\% & \text{aviso: profundidades poco confiables; la dirección del flujo vale}\\
+f > 10\% & \text{falla; el servidor cambia al otro método}
+\end{cases}
+\end{equation}
+\enpantalla{cuando $1\% \le f \le 10\%$ aparece el recuadro amarillo de artefactos numéricos sobre las tarjetas y en \texttt{Detalle técnico del cuadro} se muestra el porcentaje exacto (como 3.9\,\% en Tuxtla); si supera 10\,\%, activa el cambio automático a FV1.}
+
+\subsection{Infiltración: número de curva SCS}
+A partir del número de curva tabulado $CN$ (\texttt{ESA WorldCover} + \texttt{HYSOGs250m}, base $\lambda = 0.20$), la retención potencial $S$ (mm) se convierte a la abstracción inicial $\lambda = 0.05$ (Hawkins et al., 2002; Woodward et al., 2003):
+\begin{equation}
+S_{0.20}=\frac{25\,400}{CN}-254,\qquad S_{0.05}=0.8187\,S_{0.20}^{\,1.15}
+\end{equation}
+Con abstracción inicial $I_a = \lambda S_{0.05}$ ($\lambda = 0.05$), la escorrentía acumulada $Q$ (mm) para una lluvia acumulada $P$ (mm) es:
+\begin{equation}
+Q=\begin{cases}\dfrac{(P-\lambda S)^2}{P+(1-\lambda)S}, & P>\lambda S,\\[6pt] 0, & P\le \lambda S.\end{cases}
+\end{equation}
+\enpantalla{explica por qué los primeros cuadros de la animación permanecen secos aunque la insignia superior ya muestre lluvia cayendo, y aparece en las barras dobles (bruta frente a neta) del hietograma y en la fracción infiltrada de \texttt{¿A dónde fue la lluvia?}.}
+
+\paragraph{Humedad previa (AMC).} Antes de convertir a $\lambda = 0.05$, el $CN$ de condición media (II) se ajusta a condición seca (I) o húmeda (III) (Chow et al., 1988):
+\begin{equation}
+CN_{\text{I}}=\frac{4.2\,CN_{\text{II}}}{10-0.058\,CN_{\text{II}}},\qquad CN_{\text{III}}=\frac{23\,CN_{\text{II}}}{10+0.13\,CN_{\text{II}}}
+\end{equation}
+En modo automático, la saturación relativa $\theta$ de \texttt{NISAR SME2} (o \texttt{SMAP L4}) decide la condición: I si $\theta < 0.30$, III si $\theta > 0.60$, y II en el rango intermedio.
+\enpantalla{se muestra en el resumen de la corrida con la línea \texttt{Número de curva ..., humedad previa AMC II (SMAP L4): ... \% de la lluvia escurre}.}
+
+\paragraph{Coeficiente de escorrentía (alternativa simple).} Cuando se elige el coeficiente agregado con duración de lluvia $D$ en horas ($D \ge 0.5$):
+\begin{equation}
+C=\min\!\left(0.92,\ 0.65+0.27\left(1-e^{-D/24}\right)\right),\qquad R_{\text{neta}}=C\cdot R
+\end{equation}
+\enpantalla{aparece en la línea \texttt{Infiltración: coeficiente ...} del bloque de estado de la corrida y reduce de manera uniforme todas las barras del hietograma.}
+
+\subsection{Lluvia}
+\paragraph{Tormenta de diseño (PXR-4).} En la celda de $0.25^\circ$ más cercana al centroide del dominio, la intensidad máxima anual sigue una distribución GEV cuyos parámetros dependen de la duración $D$ (h):
+\begin{equation}
+\mu=a\,D^{\alpha},\qquad \sigma=b\,D^{\beta},\qquad
+i_T=\mu+\sigma\,\frac{1-\left[-\ln\!\left(1-\tfrac{1}{T}\right)\right]^{\kappa}}{\kappa},\quad \kappa=-0.114
+\end{equation}
+La lámina total es $P_T = i_T \cdot D$ (mm). En Tuxtla Gutiérrez, $T=100$~años y $D=3$~h dan unos 60~mm.
+\enpantalla{fija el total $Z$~mm de la insignia sobre el mapa (\texttt{acumulado Y mm de Z mm}) y la línea informativa de tormenta de diseño en el panel.}
+
+\paragraph{Hietograma de bloques alternos.} Se evalúa la lluvia acumulada $P(k\Delta t)$ en bloques de $\Delta t = 10$~min, se calculan los incrementos $\Delta P_k = P(k\Delta t) - P((k-1)\Delta t)$, se ordenan de mayor a menor y se colocan alternadamente alrededor del bloque central, conservando exactamente la suma $P(n\Delta t)$.
+\enpantalla{dibuja la forma acampanada con el pico al centro en el hietograma de \texttt{Gráficas} y controla la densidad de gotas animadas sobre el mapa en cada minuto.}
+
+\paragraph{Lluvia sintética.} Con intensidad media $\bar r$ y un número par $N$ de intervalos, se sortean $N/2$ desviaciones $\delta_j \sim U(-b,b)$ con $b = \min(10\ \text{mm/h},\ \bar r)$, se añaden sus opuestas $-\delta_j$ y se barajan con la semilla elegida:
+\begin{equation}
+r_k=\bar r+\delta_k,\qquad \sum_{k=1}^{N}\delta_k=0\ \Rightarrow\ \text{el total se conserva.}
+\end{equation}
+\enpantalla{genera los altibajos del hietograma sintético y los cambios de intensidad en las gotas, manteniendo exacto el total tecleado en \texttt{Lluvia hipotética (mm)}.}
+
+\subsection{Alturas y nivel del mar}
+\paragraph{Un solo datum vertical (EGM2008).} Con las ondulaciones del geoide $N$ de las rejillas públicas de la NGA:
+\begin{align}
+H_{\text{EGM2008}} &= h_{\text{WGS84}} - N_{\text{EGM2008}} && \text{(Copernicus GLO-30)}\\
+H_{\text{EGM2008}} &= H_{\text{EGM96}} + N_{\text{EGM96}} - N_{\text{EGM2008}} && \text{(NASADEM)}
+\end{align}
+\enpantalla{se refleja en la línea \texttt{Terreno: Copernicus GLO-30 \textperiodcentered\ alturas EGM2008} de la tarjeta de corrida y garantiza compatibilidad con \texttt{Nivel del mar fijo (m, EGM2008)} y la marea \texttt{EOT20}.}
+
+\paragraph{Barómetro inverso.} Con densidad $\rho = 1\,000\ \text{kg/m}^3$ y $g = 9.81\ \text{m/s}^2$:
+\begin{equation}
+\Delta\eta=\frac{\max(0,\ 1013.25-p)\times 100}{\rho g}\ \approx\ 1\ \text{cm por hPa bajo 1013.25}
+\end{equation}
+\enpantalla{se imprime en la tarjeta de la corrida como \texttt{Presión: ... hPa $\rightarrow$ +... m} y eleva directamente el nivel del agua en las fronteras marinas.}
+
+\subsection{Balance de agua}
+\begin{equation}
+V_{\text{bruta}}=V_{\text{infiltrada}}+V_{\text{neta}},\qquad
+V_{\text{neta}}+V_{\text{inicial}}=V_{\text{final}}+V_{\text{salida}}-V_{\text{entrada}},\qquad
+V_{\text{final}}=V_{\text{láminas}}+V_{\text{encharcada}}
+\end{equation}
+Se distinguen láminas ($h < 0.03$~m) y agua encharcada ($h \ge 0.03$~m). En la corrida real del Cañón del Sumidero (100~años, 3~h): bruta 9\,078~m$^3$, infiltrada 6\,285~m$^3$ (69\,\%), neta 2\,793~m$^3$, volumen final 2\,792.5~m$^3$ (2\,741~m$^3$ encharcada y 31~m$^3$ en láminas; los $\approx 20$~m$^3$ de diferencia respecto al desglose provienen del redondeo a milímetros del último cuadro ASCII) y salida por bordes de 0.4~m$^3$.
+\enpantalla{alimenta directamente la barra apilada, las cifras y el texto explicativo del bloque \texttt{¿A dónde fue la lluvia?}, junto con la gráfica de volumen acumulado frente a lluvia.}
+
+\section{Preguntas probables y respuestas cortas}
+
+\begin{itemize}
+  \item \textbf{Validación: ¿Está validado contra una inundación real?}
+  No. Entre junio y noviembre de 2026 buscamos un evento pluvial observable cruzando lluvia IMERG con pasadas de NISAR y mapas OPERA DSWx tanto en la ROI como en la costa de Chiapas, y no hubo un evento utilizable: en la región el agua drena antes de las pasadas comparables y en la costa tampoco quedó inundación pluvial observable. Las métricas de validación (precisión, recall, F1 e IoU) ya están implementadas para validar en cuanto exista un evento observable.
+
+  \item \textbf{El cañón: ¿Por qué el agua no llena el Cañón del Sumidero ni aparece el río?}
+  El simulador solo modela la lluvia que cae dentro del polígono de cálculo; no incorpora caudales de ríos que entren desde fuera del dominio. Además, el modelo de elevación de 30~m registra la superficie del agua en el fondo del cañón como terreno base, no la batimetría del río Grijalva.
+
+  \item \textbf{Por qué queda mojado: ¿Por qué al final de la animación la zona sigue pintada de celeste?}
+  Porque el modelo no incluye evaporación ni infiltración continua después de que cesa la lluvia. Las láminas de agua muy delgadas (0.5--2~mm, clase \emph{superficie mojada}) que quedan sobre terrenos casi planos o depresiones menores no alcanzan a drenar por completo dentro de las 4~horas simuladas.
+
+  \item \textbf{Cambio de DG2 a FV1: ¿Por qué cambió automáticamente de método y sigue siendo útil el resultado?}
+  En laderas casi verticales o muy empinadas, la reconstrucción lineal de DG2 puede producir profundidades negativas en láminas finas. Cuando el volumen añadido al corregirlas a cero supera el 10\,\% del agua presente, el servidor descarta esa corrida y relanza automáticamente con FV1 ---que es de primer orden y más estable--- avisando al usuario para que el resultado conserve la masa.
+
+  \item \textbf{Zonas urbanas: ¿Sirve en Tuxtla Gutiérrez o en otra ciudad? ¿Qué tan confiables son las profundidades?}
+  Sí se puede ejecutar en zonas urbanas y muestra claramente por dónde escurre el agua según la topografía y qué calles quedan expuestas, pero las profundidades son \textbf{indicativas}. Un terreno de 30~m no distingue edificios uno por uno ni incluye la red de drenaje pluvial, por lo que el sistema muestra siempre un aviso específico cuando detecta superficie construida en WorldCover.
+
+  \item \textbf{Cobertura global y tamaño: ¿Funciona en cualquier parte del mundo y por qué hay un límite de 3\,000~celdas?}
+  Sí: todas las fuentes de terreno, cobertura, suelo, humedad, tormenta de diseño, mareas y batimetría son abiertas y de cobertura global (con NASADEM limitado a 56$^\circ$\,S--60$^\circ$\,N y Copernicus GLO-30 global). El límite por defecto de 3\,000~celdas y 120~segundos por intento de solver mantiene la respuesta en tiempos interactivos en CPU ($\approx 1\ \text{km}^2$ a 30~m).
+\end{itemize}
+
+\section*{Referencias principales}
+{\small
+\begin{itemize}
+  \item Shaw, J., Kesserwani, G., Neal, J., Bates, P., Sharifian, M. K. (2021). LISFLOOD-FP 8.0: the new discontinuous Galerkin shallow-water solver for multi-core CPUs and GPUs. \emph{Geosci. Model Dev.} 14, 3577--3602, \nolinkurl{doi:10.5194/gmd-14-3577-2021}.
+  \item Courty, L. G., Wilby, R. L., Hillier, J. K., Slater, L. J. (2019). Intensity-duration-frequency curves at the global scale. \emph{Environ. Res. Lett.} 14, 084045 (PXR-4 v2.1.0, \nolinkurl{doi:10.5281/zenodo.3351812}).
+  \item Hawkins, R. H., Jiang, R., Woodward, D. E., Hjelmfelt, A. T., Van Mullem, J. A. (2002). Runoff curve number method: examination of the initial abstraction ratio. \emph{2nd Federal Interagency Hydrologic Modeling Conference}; y Woodward et al. (2003), \emph{ASCE}, \nolinkurl{doi:10.1061/40685(2003)308}.
+  \item Chow, V. T., Maidment, D. R., Mays, L. W. (1988). \emph{Applied Hydrology}. McGraw-Hill.
+  \item Ross, C. W. et al. (2018). Global Hydrologic Soil Groups (HYSOGs250m). ORNL DAAC, \nolinkurl{doi:10.3334/ORNLDAAC/1566}.
+  \item Zanaga, D. et al. (2022). ESA WorldCover 10~m 2021 v200 (CC BY 4.0, \nolinkurl{doi:10.5281/zenodo.7254221}).
+  \item Copernicus GLO-30 (\texttt{NISAR\_DEM}); NASADEM; NISAR \texttt{L3\_SME2}; SMAP L4; EOT20 (Hart-Davis et al., 2021, \nolinkurl{doi:10.17882/79489}); GEBCO\_2026; HydroLAKES v1.0 (Messager et al., 2016); OpenStreetMap; NGA EGM2008.
+\end{itemize}
+}
+
+\end{document}
