@@ -1,0 +1,183 @@
+% Ficha técnica ejecutiva de TerraPulse AI.
+% Compilar: conda run -n tectonic tectonic -X compile docs/latex/ficha_tecnica.tex
+% Las capturas son opcionales: si existen en docs/latex/ficha/ (fig_gcov.png, fig_3d.png,
+% fig_sismo.png, fig_solar.png, fig_inundacion.png, fig_ndvi.png) se insertan; si no, queda un recuadro.
+\documentclass[10pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage[spanish]{babel}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs,tabularx,array,graphicx,wrapfig,enumitem,amsmath,amssymb,xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt,label=\rule[0.15em]{0.45em}{0.45em}}
+\setlength{\parindent}{0pt}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\graphicspath{{ficha/}}
+\newcommand{\captura}[1]{%
+  \IfFileExists{ficha/#1}{\includegraphics[width=\linewidth]{#1}}%
+  {\fbox{\parbox[c][3.6cm][c]{0.93\linewidth}{\centering\small Captura: \texttt{ficha/\detokenize{#1}}}}}}
+\newcommand{\modulo}[3]{% título, archivo de captura, contenido
+  \subsection*{#1}
+  \begin{minipage}[t]{0.58\linewidth}#3\end{minipage}\hfill
+  \begin{minipage}[t]{0.38\linewidth}\vspace{2pt}\captura{#2}\end{minipage}\par\medskip}
+
+\begin{document}
+\begin{center}
+{\Large\bfseries FICHA TÉCNICA EJECUTIVA — TERRAPULSE AI}\\[2pt]
+{\small Especificación de Arquitectura y Capacidades del Sistema Geoespacial y Geofísico}
+\end{center}
+\hrule\medskip
+
+\section*{1. Datos Generales}
+\begin{tabularx}{\linewidth}{@{}lL@{}}
+\toprule
+\textbf{Nombre del Proyecto} & TerraPulse AI \hfill \textbf{Versión}\quad 1.0 \\
+\textbf{Tipo de Software} & Plataforma Web de Análisis Geoespacial y Geofísico (SaaS Científico) \\
+\textbf{Contexto Técnico} & NASA Space Apps Challenge 2026 (\emph{Be an Earth System Trend Detective}) \\
+\textbf{Licencia y Datos} & Código reproducible con trazabilidad extrema sobre productos públicos NASA/ASF \\
+\textbf{Público Objetivo} & Agencias de Protección Civil, investigadores ambientales y gestores de riesgo. \\
+\bottomrule
+\end{tabularx}
+
+\section*{2. Descripción Corta}
+TerraPulse AI es una plataforma analítica geoespacial y geofísica de extremo a extremo que procesa observaciones de radar de apertura sintética (SAR) en banda L de la misión NASA–ISRO NISAR sin requerir la descarga de escenas completas ($\sim$7\,GB). Resuelve la inspección radiométrica bajo demanda mediante lectura remota por bloques HTTPS (HDF5/h5py), la detección cuantitativa y auditable de cambios superficiales ($\Delta\gamma^0$) con control estricto de comparabilidad orbital/CRID, y la modelación física acoplada sobre Regiones de Interés (ROI) arbitrarias (topografía 3D con factibilidad geométrica SAR, propagación sísmica elástica, irradiancia solar y simulación hidráulica de lluvia e inundación).
+
+\section*{3. Stack Tecnológico}
+\begin{tabularx}{\linewidth}{@{}p{0.27\linewidth}L@{}}
+\toprule
+\textbf{Capa} & \textbf{Tecnologías, Motores y Librerías} \\
+\midrule
+\textbf{Backend y Pipeline} & Python 3.11, Django 5.2 (GeoDjango), Django REST Framework (DRF 3.18), \texttt{h5py} (streaming HDF5 por ventanas HTTP), \texttt{rasterio}/GDAL (COG EPSG:3857/32615), \texttt{numpy}, \texttt{xarray}, \texttt{geopandas}, \texttt{shapely}, \texttt{pyproj}, \texttt{scipy}, \texttt{matplotlib} (pipeline CLI \texttt{pipeline/vegetation}), \texttt{earthaccess} y \texttt{asf\_search}. \\
+\addlinespace
+\textbf{Simulación hidráulica (lluvia e inundación)} & LISFLOOD-FP 8.0.3 compilado localmente para CPU (solvers DG2, Galerkin discontinuo de 2.º orden, y FV1, volúmenes finitos de 1.er orden, con cambio automático entre ambos) y \texttt{generateDG2DEM}, con hashes SHA-256 fijados; PROJ/\texttt{pyproj} con rejillas de geoide NGA (\texttt{vgridshift} EGM96/EGM2008); \texttt{pyTMD} 3.1.0 (mareas EOT20); \texttt{scipy.io} (forzamiento de lluvia NetCDF); GDAL \texttt{/vsicurl} (lectura por ventanas de ESA WorldCover, GEBCO y el DEM Copernicus); \texttt{earthaccess} (IMERG, NISAR\_DEM, HYSOGs250m, NISAR SME2, SMAP L4); API Overpass (caminos OpenStreetMap). \\
+\addlinespace
+\textbf{Frontend (SPA)} & React 19, TypeScript 6, Vite 8, MapLibre GL JS 6 (renderizado vectorial/ráster WebGL 2D), Three.js 0.187 (bloques topográficos 3D con \texttt{React.lazy}) y Chart.js 4 (telemetría SAR, sismogramas a 50\,Hz, histogramas e hietogramas). \\
+\addlinespace
+\textbf{Base de Datos y Despliegue} & PostgreSQL 16 con extensión espacial PostGIS 3.4 (\texttt{postgis/postgis:16-3.4}), contenedorización mediante Docker y Docker Compose con persistencia en volúmenes y ejecución de subprocesos aislados por grupos de sesión POSIX. \\
+\addlinespace
+\textbf{Pruebas y verificación} & \texttt{pytest}, pruebas de Django, \texttt{node:test}, comprobación de tipos con \texttt{tsc}, ESLint y comprobación de flujo en navegador con Playwright. \\
+\bottomrule
+\end{tabularx}
+
+\newpage
+\section*{4. Módulos Principales (Capacidades)}
+
+\modulo{4.1. Mapa de Cambio SAR (GCOV)}{fig_gcov.png}{%
+Calcula la diferencia temporal $\Delta\gamma^0_{\mathrm{dB}}=\gamma^0_{\mathrm{dB},t_2}-\gamma^0_{\mathrm{dB},t_1}$ (HH/HV) promediando potencia lineal antes de convertir a decibeles, con verificación estricta de identidad de malla, CRID y madurez.
+\begin{itemize}
+\item \textbf{Entradas:} Polígono ROI (\texttt{EPSG:4326}), par de escenas NISAR \texttt{L2\_PR\_GCOV} (Freq A, banda L), factor \emph{multilook} ($2\times2$, $5\times5$, $10\times10$) y umbral de cambio ($\pm1{,}5$ a $\pm6{,}0$\,dB).
+\item \textbf{Salidas:} Rásteres GeoTIFF/COG (\texttt{delta\_dB.tif}, \texttt{zscore.tif}, \texttt{cambio.tif}), PNG web ($\pm6$\,dB), métricas de área afectada (km$^2$ y \%), ruido robusto $\sigma_{\mathrm{MAD}}$ y gráficas Chart.js (histogramas $\gamma^0$, incidencia y QA).
+\end{itemize}}
+
+\modulo{4.2. Visor 3D (Máscara SAR)}{fig_3d.png}{%
+Reconstruye una malla topográfica de $161\times161$ vértices en Three.js con filtro anti-picos $3\times3$ y evalúa la pendiente proyectada hacia el vector del haz lateral NISAR ($\theta_i\approx43^\circ$) para diagnosticar distorsiones geométricas.
+\begin{itemize}
+\item \textbf{Entradas:} Geometría ROI activa, teselas de elevación AWS Terrarium (decodificación nativa 1:1 en metros), mosaico óptico \emph{Esri World Imagery}, dirección orbital (ASC T62/F10 o DESC T55/F80) y exageración vertical ($1{,}0\times$ a $5{,}0\times$).
+\item \textbf{Salidas:} Escena 3D interactiva WebGL (modos Satelital, Hipsométrico, Máscara SAR y Wireframe), desglose porcentual de factibilidad (\emph{layover}, sombra radar, pendiente crítica $>15^\circ$ y suelo confiable), telemetría ($h_{\min}$, $h_{\max}$, $\Delta z$) y captura PNG.
+\end{itemize}}
+
+\modulo{4.3. Simulador Sísmico (GMPE, ondas P/S)}{fig_sismo.png}{%
+Modela en tiempo real la atenuación sísmica regional para México (subducción interplaca, intraplaca profundo y cortical) y la elastodinámica de ondas de cuerpo entre el hipocentro y una estación virtual.
+\begin{itemize}
+\item \textbf{Entradas:} Coordenadas epicentrales ($\lambda,\phi$), magnitud de momento ($M_w$), profundidad focal ($h$), mecanismo de falla, velocidad de onda de corte superficial ($V_{s30}$) y posición de la estación receptora.
+\item \textbf{Salidas:} Anillos geodésicos de isosisma en MapLibre GL, curva de atenuación PGA ($g$/Gal) e intensidad MMI continua, tiempos de arribo ($t_P$ a 6,0\,km/s, $t_S$ a 3,5\,km/s), ventana de alerta $\Delta t$, sismograma sintético $a(t,D)$ a 50\,Hz y espectrograma.
+\end{itemize}}
+
+\modulo{4.4. Simulador Solar}{fig_solar.png}{%
+Calcula la irradiancia solar directa incidente sobre topografía real integrando efemérides astronómicas de alta precisión (SPA), extinción atmosférica de cielo despejado y horizonte de auto-sombreado topográfico.
+\begin{itemize}
+\item \textbf{Entradas:} Polígono ROI (\texttt{EPSG:4326}), granulares \texttt{NASADEM\_HGT v001} ($1''\approx30$\,m), fecha/hora local con zona IANA, factor de intensidad (\%), temperatura ambiente ($^\circ$C), presión barométrica (hPa) y turbidez de Linke.
+\item \textbf{Salidas:} GeoTIFF numérico de irradiancia incidente (W/m$^2$ en UTM), mapa de calor PNG (\texttt{EPSG:4326}, paleta \emph{inferno}), vectores solares (elevación aparente, azimut, DNI ajustado) y muestreo puntual interactivo (\texttt{/sample}).
+\end{itemize}}
+
+\modulo{4.5. Simulador de Lluvia e Inundación (LISFLOOD-FP DG2/FV1)}{fig_inundacion.png}{%
+Resuelve las ecuaciones de aguas someras 2D con LISFLOOD-FP 8.0.3 sobre la ROI: balance de agua por celda, empuje de la pendiente y fricción de Manning. Usa el solver DG2 o FV1; si el elegido falla, cambia automáticamente al otro y lo informa. Las profundidades negativas residuales se evalúan por volumen (aviso entre 1\,\% y 10\,\% del agua; falla sobre 10\,\%). Todas las alturas se expresan en EGM2008.
+\begin{itemize}
+\item \textbf{Entradas:} Polígono ROI y dominio (\texttt{EPSG:4326}); terreno Copernicus GLO-30 (\texttt{NISAR\_DEM}) o NASADEM convertido a EGM2008, reproyectado a UTM; lluvia sintética, tormenta de diseño (periodo de retorno 2 a 100 años, PXR-4, bloques alternos) u observada (IMERG Final, Late o Early); rugosidad de Manning uniforme o por cobertura (ESA WorldCover); infiltración por coeficiente agregado o por número de curva por celda (WorldCover + HYSOGs250m, $I_a=0{,}05\,S$) con humedad previa de NISAR SME2 o SMAP L4; fronteras por lado (cerrada, libre, nivel fijo o marea EOT20) y presión atmosférica (barómetro invertido); lagos HydroLAKES y fondo marino GEBCO opcionales.
+\item \textbf{Salidas:} COG de profundidad por cuadro y envolvente máxima, capa MapLibre en 6 clases de profundidad (desde 1\,cm), flechas de flujo en zonas de desbordamiento, área inundada, balance de masa, número de Froude, tiempo de concentración (Kirpich), caminos cortados (OpenStreetMap), gráficas (hietograma, área y profundidad en el tiempo, volumen frente a lluvia, distribución por clase) y avisos (zona urbana, artefactos numéricos, exactitud hidráulica no validada).
+\end{itemize}}
+
+\modulo{4.6. Análisis Multitemporal de Vegetación (NDVI)}{fig_ndvi.png}{%
+Pipeline CLI independiente (\texttt{python -m pipeline.vegetation}, desacoplado de la API Django y del frontend) que cuantifica el índice $\mathrm{NDVI}=(\mathrm{NIR}-\mathrm{RED})/(\mathrm{NIR}+\mathrm{RED})$ y la diferencia temporal $\Delta\mathrm{NDVI}=\mathrm{NDVI}_{\text{última}}-\mathrm{NDVI}_{\text{primera}}$ (mide respuesta espectral de vegetación verde; no demuestra por sí solo deforestación ni causa física).
+\begin{itemize}
+\item \textbf{Entradas:} Mínimo dos escenas Sentinel-2 alineadas (bandas RED B4 y NIR B8 en GeoTIFF Float32/Float64 con reflectancia ya escalada), polígono ROI (\texttt{EPSG:4326}), umbral $[-1,1]$ y manifiesto JSON.
+\item \textbf{Salidas:} GeoTIFF de NDVI por fecha, estadísticas poblacionales (mín, máx, media, $\sigma$, cobertura válida y \% sobre umbral), mapas PNG e histogramas de NDVI, mapa de $\Delta$NDVI, gráfica de evolución temporal y \texttt{run.json} con trazabilidad SHA-256.
+\end{itemize}}
+
+\section*{5. Fuentes de Datos}
+\small
+\begin{tabularx}{\linewidth}{@{}p{0.24\linewidth}p{0.24\linewidth}L@{}}
+\toprule
+\textbf{Fuente / Proveedor} & \textbf{Producto / Nivel} & \textbf{Uso Operativo en la Plataforma} \\
+\midrule
+\textbf{NASA Earthdata \& ASF} & Catálogo CMR / Vertex & Autenticación OAuth/netrc, búsqueda espacial y lectura parcial por rangos HTTP de bloques HDF5 dentro de la ROI. \\
+\textbf{NASA–ISRO NISAR} & \texttt{L2\_PR\_GCOV} (Freq A) & Covarianza geocodificada en banda L ($\lambda\approx24$\,cm), polarizaciones HH y HV, máscara de subfranja y ángulo de incidencia. \\
+\textbf{NASA LP DAAC} & \texttt{NASADEM\_HGT v001} & Modelo digital de elevación científico ($1''\approx30$\,m, mallas HGT $3601\times3601$ de 16 bits) para simulación solar e hidráulica. \\
+\textbf{NASA ASF / Copernicus} & \texttt{NISAR\_DEM} v1.2 (Copernicus GLO-30) & Terreno de 30\,m para la simulación hidráulica; alturas elipsoidales convertidas a EGM2008. \\
+\textbf{NASA GES DISC} & GPM IMERG V07 (Final, Late, Early; 30 min, 0,1$^\circ$) & Lluvia observada para reproducir eventos reales. \\
+\textbf{NASA ORNL DAAC} & HYSOGs250m & Grupos hidrológicos de suelo para el número de curva. \\
+\textbf{NASA–ISRO NISAR / NASA NSIDC} & \texttt{L3\_SME2} (200\,m) / SMAP L4 \texttt{SPL4SMGP} & Humedad del suelo antes de la lluvia (condición antecedente). \\
+\textbf{ESA} & WorldCover 2021 v200 (10\,m) & Rugosidad de Manning e infiltración por cobertura; detección de zona urbana. \\
+\textbf{Zenodo (Courty et al.)} & PXR-4 v2.1.0 (ERA5) & Lluvias de periodo de retorno para tormentas de diseño. \\
+\textbf{SEANOE / DTU} & EOT20; DTUUH22MDT & Marea astronómica en la frontera costera y su referencia a EGM2008. \\
+\textbf{GEBCO} & GEBCO\_2026 & Fondo marino en las celdas de mar. \\
+\textbf{HydroSHEDS} & HydroLAKES v1.0 & Lagos llenos al inicio con lecho estimado. \\
+\textbf{OpenStreetMap} & Vías vehiculares (Overpass) & Longitud de caminos cortados o en precaución. \\
+\textbf{PROJ / NGA} & Rejillas de geoide EGM96 y EGM2008 & Conversión de alturas a un único datum vertical. \\
+\textbf{AWS Terrarium / Esri} & Teselas PNG $256\times256$ & Decodificación nativa 1:1 en metros para el visor de relieve 3D en cliente y recubrimiento óptico Esri World Imagery. \\
+\textbf{ESA / Copernicus} & Sentinel-2 MSI (B4 / B8) & Bandas locales RED (B4) y NIR (B8) en GeoTIFF con reflectancia escalada para el pipeline CLI multitemporal de NDVI (\texttt{pipeline/vegetation}). \\
+\bottomrule
+\end{tabularx}
+\normalsize
+
+\section*{6. Requisitos y Restricciones Operativas}
+\begin{itemize}
+\item \textbf{Tamaño Máximo y Geometría de ROI:} Polígono GeoJSON cerrado en \texttt{EPSG:4326} (4 a 100 vértices, sin agujeros) con caja envolvente restringida a un máximo estricto de $0{,}6^\circ\times0{,}6^\circ$ ($\approx65$\,km por lado) para procesamiento SAR y hasta $3{,}0^\circ$ para el visor 3D en cliente.
+\item \textbf{Resolución Multilook Dinámica y Umbrales:} Muestreo espacial configurable en tiempo real a 20\,m ($2\times2$), 50\,m ($5\times5$, por defecto) y 100\,m ($10\times10$) desde los COG de potencia lineal precalculados ($\sim$0,1–1,5\,s sin re-descargar de ASF), con umbrales de clasificación de $\pm1{,}5$ a $\pm6{,}0$\,dB y alerta automática de \emph{speckle} cuando umbral $<3\sigma_{\mathrm{MAD}}$.
+\item \textbf{Caché Transaccional y Concurrencia:} Identificadores deterministas SHA-256 por geometría y versión de código (\texttt{roi-web-3}), directorios atómicos de bloqueo (\texttt{reservation/} y \texttt{<combo>.lock}), retención LRU de las 4 combinaciones $\Delta\gamma^0$ más recientes, verificación de integridad de granulares NASADEM por recibo local SHA-256/CRC y límite de 3 trabajos activos concurrentes (HTTP 429) con \emph{timeout} duro de 30 minutos.
+\item \textbf{Simulación de Lluvia e Inundación:} Presupuestos por defecto de 3000 celdas por dominio, 20 cuadros guardados y 120\,s de solver por intento (dos intentos con el cambio automático DG2/FV1). Requiere en el servidor las rejillas de geoide, el archivo PXR-4 y los cachés EOT20/DTUUH22MDT (instalables con comandos \texttt{prepare}), y una cuenta NASA Earthdata para el terreno, los suelos, la humedad y la lluvia. Solo usa datos con licencia abierta. Los resultados se marcan como exactitud hidráulica no validada.
+\item \textbf{Infraestructura de Despliegue (Hardware):} El entorno Dockerizado requiere un servidor o instancia Cloud (p.\,ej., AWS EC2 / VPS Linux x86\_64) con un mínimo de 4 vCPU, 8\,GB de RAM (16\,GB recomendados para procesamiento matricial concurrente de bloques HDF5/COG) y 50\,GB de almacenamiento SSD NVMe para volúmenes PostGIS y caché transaccional de rásteres (\texttt{data/}).
+\item \textbf{Restricciones del Pipeline de Vegetación (NDVI):} Requiere un mínimo de 2 fechas distintas con escenas previamente alineadas en el mismo CRS y grilla espacial; aplica enmascaramiento estricto de valores NoData y denominadores nulos ($\mathrm{NIR}+\mathrm{RED}=0$), y opera sobre insumos locales sin descarga automática ni corrección atmosférica o fenológica integrada.
+\end{itemize}
+
+\section*{7. Referencias}
+\small
+\begin{itemize}
+\item \textbf{4.1. Mapa de Cambio SAR (GCOV) y Fuentes NISAR:}
+[1] NASA–ISRO SAR (NISAR) Mission \& Products Overview (\url{https://nisar.jpl.nasa.gov/} y \url{https://nisar-docs.asf.alaska.edu/products-overview/}).
+[2] Alaska Satellite Facility (ASF) NISAR Documentation \& Data Availability (\url{https://nisar-docs.asf.alaska.edu/availability-overview/} y \url{https://search.asf.alaska.edu/}).
+[3] ISCE3 Radar Processing Framework (\url{https://github.com/isce-framework/isce3}) y NASA Earthdata Search (\url{https://search.earthdata.nasa.gov/}).
+\item \textbf{4.2. Visor 3D (Máscara SAR) y Modelos Digitales de Elevación:}
+[1] Horn, B. K. P. (1981). Hill shading and the reflectance map. \emph{Proceedings of the IEEE}, 69(1), 14–47 (doi:10.1109/PROC.1981.11918).
+[2] NASA LP DAAC (2025). \emph{NASADEM User Guide, Version 1.3} (colección \texttt{NASADEM\_HGT v001}, \url{https://lpdaac.usgs.gov/documents/2237/NASADEM_User_Guide_V13.pdf}).
+[3] AWS Open Data Terrain Tiles (\emph{Terrarium Format Specification}, \url{https://s3.amazonaws.com/elevation-tiles-prod/terrarium/}) y Esri World Imagery.
+\item \textbf{4.3. Simulador Sísmico (GMPE, ondas P/S):}
+[1] Arroyo, D., García, D., Ordaz, M., Mora, M. A. y Singh, S. K. (2010). Strong ground-motion relations for Mexican interplate earthquakes. \emph{Journal of Seismology}, 14, 769–785 (doi:10.1007/s10950-010-9200-0).
+[2] García, D., Singh, S. K., Herráiz, M., Ordaz, M. y Pacheco, J. F. (2005). Inslab earthquakes of Central Mexico: peak ground-motion parameters and response spectra. \emph{Bulletin of the Seismological Society of America}, 95(6), 2272–2282 (doi:10.1785/0120050072).
+[3] Wald, D. J., Quitoriano, V., Heaton, T. H. y Kanamori, H. (1999). Relationships between peak ground acceleration, peak ground velocity, and Modified Mercalli Intensity in California. \emph{Earthquake Spectra}, 15(3), 557–564.
+[4] Hanks, T. C. y Kanamori, H. (1979). A moment magnitude scale. \emph{Journal of Geophysical Research}, 84(B5), 2348–2350.
+\item \textbf{4.4. Simulador Solar:}
+[1] Reda, I. y Andreas, A. (2004). Solar position algorithm for solar radiation applications. \emph{Solar Energy}, 76(5), 577–589 (doi:10.1016/j.solener.2003.12.003).
+[2] Ineichen, P. y Perez, R. (2002). A new airmass independent formulation for the Linke turbidity coefficient. \emph{Solar Energy}, 73(3), 151–157 (doi:10.1016/S0038-092X(02)00045-2).
+[3] Kasten, F. y Young, A. T. (1989). Revised optical air mass tables and approximation formula. \emph{Applied Optics}, 28(22), 4735–4738 (doi:10.1364/AO.28.004735).
+[4] Dubayah, R. y Rich, P. M. (1995). Topographic solar radiation models for GIS. \emph{International Journal of Geographical Information Systems}, 9(4), 405–419 (doi:10.1080/02693799508902046).
+[5] Holmgren, W. F., Hansen, C. W. y Mikofski, M. A. (2018). pvlib python: a Python package for modeling solar energy systems. \emph{Journal of Open Source Software}, 3(29), 884 (doi:10.21105/joss.00884).
+\item \textbf{4.5. Simulador de Lluvia e Inundación (LISFLOOD-FP DG2/FV1):}
+[1] Shaw, J., Kesserwani, G., Neal, J., Bates, P. y Sharifian, M. K. (2021). LISFLOOD-FP 8.0: the new discontinuous Galerkin shallow-water solver for multi-core CPUs and GPUs. \emph{Geoscientific Model Development}, 14, 3577–3602 (doi:10.5194/gmd-14-3577-2021).
+[2] Sharifian, M. K., Kesserwani, G., Chowdhury, A. A., Neal, J. y Bates, P. (2023). LISFLOOD-FP 8.1: new GPU accelerated solvers for faster fluvial/pluvial flood simulations. \emph{Geoscientific Model Development}, 16, 2391–2413 (doi:10.5194/gmd-16-2391-2023).
+[3] University of Bristol Hydrology Research Group — LISFLOOD-FP Documentation \& Zenodo Artifact (\url{https://www.bristol.ac.uk/geography/research/hydrology/models/lisflood/} y \url{https://zenodo.org/records/4073011}).
+[4] Huffman, G. J. et al. GPM IMERG V07, NASA GES DISC.
+[5] Zanaga, D. et al. (2022). ESA WorldCover 10\,m 2021 v200 (doi:10.5281/zenodo.7254221).
+[6] Ross, C. W. et al. (2018). Global Hydrologic Soil Groups (HYSOGs250m), ORNL DAAC (doi:10.3334/ORNLDAAC/1566).
+[7] Hawkins, R. H., Jiang, R., Woodward, D. E., Hjelmfelt, A. T. y Van Mullem, J. A. (2002). Runoff curve number method: examination of the initial abstraction ratio. \emph{2nd Federal Interagency Hydrologic Modeling Conference}.
+[8] Courty, L. G., Wilby, R. L., Hillier, J. K. y Slater, L. J. (2019). Intensity-duration-frequency curves at the global scale. \emph{Environmental Research Letters}, 14, 084045 (PXR, doi:10.5281/zenodo.3351812).
+[9] Hart-Davis, M. G. et al. (2021). EOT20: a global ocean tide model from multi-mission satellite altimetry (doi:10.17882/79489).
+[10] Messager, M. L. et al. (2016). Estimating the volume and age of water stored in global lakes using a geo-statistical approach. \emph{Nature Communications}, 7, 13603 (HydroLAKES).
+[11] GEBCO Compilation Group (2026). GEBCO 2026 Grid.
+[12] Kirpich, Z. P. (1940). Time of concentration of small agricultural watersheds. \emph{Civil Engineering}, 10(6), 362.
+\item \textbf{4.6. Análisis Multitemporal de Vegetación (NDVI):}
+[1] NASA Earth Observatory — Measuring Vegetation (NDVI \& EVI) (\url{https://earthobservatory.nasa.gov/features/MeasuringVegetation}).
+[2] European Space Agency (ESA) \& Copernicus Data Space Ecosystem — Sentinel-2 MSI User Guide \& Spectral Bands B4/B8 (\url{https://sentiwiki.copernicus.eu/web/s2-mission} y \url{https://dataspace.copernicus.eu/}).
+[3] Gillies, S. et al. — Rasterio: Access to Geospatial Raster Data (\url{https://rasterio.readthedocs.io/}).
+\end{itemize}
+\end{document}
