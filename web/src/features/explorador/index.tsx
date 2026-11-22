@@ -18,9 +18,9 @@ export interface ExploradorStackCardProps {
 export function ExploradorFeature({ activeStackId, onSelectStack }: ExploradorStackCardProps) {
   const { t, localizeText } = useTranslation()
   return (
-    <section className="c4-module" aria-label={t('Explorador de Pilas GCOV y Capas C1 en Chiapas', 'GCOV stack and C1 layer explorer in Chiapas')}>
+    <section className="c4-module" aria-label={t('Explorador de pilas GCOV del caso de referencia Chiapas', 'GCOV stacks from the Chiapas reference case')}>
       <div className="c4-module__header">
-        <span className="c4-module__title">{t('Pilas NISAR L2 GCOV · ROI Chiapas', 'NISAR L2 GCOV stacks · Chiapas ROI')}</span>
+        <span className="c4-module__title">{t('Pilas NISAR L2 GCOV · Caso de referencia Chiapas', 'NISAR L2 GCOV stacks · Chiapas reference case')}</span>
         <span className="c4-module__tag">EPSG:32615 · 10×10 m</span>
       </div>
 

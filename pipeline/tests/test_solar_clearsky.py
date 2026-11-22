@@ -87,6 +87,24 @@ def test_intensity_scaling_and_bounds(monkeypatch, percent):
     assert result["intensity_percent"] == percent
 
 
+def test_idealized_reference_dni_is_date_free_reproducible_and_horizon_is_zero():
+    from pipeline.solar.clearsky import compute_reference_dni
+    horizon = compute_reference_dni(elevation_deg=0, altitude_m=100, pressure_pa=100000,
+                                   intensity_percent=100)
+    assert horizon['dni_adjusted_w_m2'] == 0
+    assert horizon['night'] is True
+    assert horizon['airmass_relative'] is None
+    first = compute_reference_dni(elevation_deg=45, altitude_m=100, pressure_pa=100000,
+                                  intensity_percent=100)
+    second = compute_reference_dni(elevation_deg=45, altitude_m=100, pressure_pa=100000,
+                                   intensity_percent=100)
+    assert first == second
+    assert first['dni_adjusted_w_m2'] > 0
+    assert first['dni_extra_w_m2'] == 1361.0
+    assert first['linke_turbidity'] == 3.0
+    assert 'no date' in first['reference_provenance']
+
+
 @pytest.mark.parametrize("percent", [True, False, "50", float("nan"), float("inf"), -1, 100.1, 10**1000])
 def test_invalid_intensity_rejected_before_phase_a(percent):
     def forbidden(**kwargs):
@@ -103,9 +121,24 @@ def test_invalid_intensity_rejected_before_phase_a(percent):
         clearsky.compute_solar_position = original
 
 
+def test_geometrically_below_horizon_returns_zero_despite_positive_refraction(monkeypatch):
+    position = dict(
+        _POSITION,
+        geometric_elevation_deg=-0.2,
+        apparent_elevation_deg=0.1,
+        apparent_zenith_deg=89.9,
+        night=False,
+    )
+    result, _ = _invoke(monkeypatch, percent=100, position=position)
+    assert result["night"] is True
+    assert result["dni_clear_sky_w_m2"] == 0.0
+    assert result["dni_adjusted_w_m2"] == 0.0
+
+
 def test_night_and_horizon_return_zero_without_linke_lookup(monkeypatch):
     for elevation in (-12.0, 0.0):
-        position = dict(_POSITION, apparent_elevation_deg=elevation, apparent_zenith_deg=90.0-elevation, night=True)
+        position = dict(_POSITION, geometric_elevation_deg=elevation, apparent_elevation_deg=elevation,
+                        apparent_zenith_deg=90.0-elevation, night=True)
         monkeypatch.setattr(clearsky, "compute_solar_position", lambda **kwargs: dict(position))
         monkeypatch.setattr(clearsky.pvlib.clearsky, "lookup_linke_turbidity", lambda *a, **k: pytest.fail("night must skip Linke LUT"))
         result = clearsky.compute_clear_sky_dni(

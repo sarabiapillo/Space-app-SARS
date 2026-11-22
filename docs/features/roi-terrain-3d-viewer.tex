@@ -1,0 +1,69 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\title{Visualizaci\'on aislada de relieve 3D de la ROI}
+\author{TerraPulse AI}
+\date{2026-11-19}
+\begin{document}
+\maketitle
+
+\section{Objetivo}
+Proveer un m\'odulo visual completamente aislado en el cliente (\texttt{web/}) que genere una maqueta 3D interactiva del relieve topogr\'afico de la regi\'on de inter\'es (ROI) activa con textura satelital o hipsom\'etrica, sin modificar \texttt{backend/} ni \texttt{pipeline/} y sin desmontar ni alterar el estado de MapLibre GL, las capas SAR NISAR, la simulaci\'on hidr\'aulica DG2, el simulador solar ni el simulador s\'ismico.
+
+\section{Uso}
+\begin{enumerate}
+  \item Confirmar o seleccionar una ROI en la interfaz (la ROI oficial de Chiapas, cualquiera de las 43 ROIs del cat\'alogo nacional, una ubicaci\'on buscada o un pol\'igono dibujado con la herramienta \emph{Recortar ROI}).
+  \item Hacer clic en el bot\'on \textbf{Relieve 3D} (\textbf{3D Relief} en ingl\'es) en la secci\'on \emph{Herramientas y M\'odulos} de la barra superior (\texttt{Header.tsx}). Si no hay ROI activa o si el rect\'angulo envolvente excede $3^\circ$ por lado, se emite un aviso transitorio de error.
+  \item Dentro del modal \textbf{Relieve 3D de la ROI}:
+  \begin{itemize}
+    \item Rotar $360^\circ$ e inclinar con clic izquierdo, desplazar con clic derecho y acercar/alejar con la rueda del rat\'on.
+    \item Ajustar el deslizador de \textbf{Exageraci\'on vertical} entre $1.0\times$ y $5.0\times$ (valor inicial $2.0\times$).
+    \item Alternar la \textbf{Textura superficial} entre \emph{Satelital (Esri)}, \emph{Hipsom\'etrico (Elevaci\'on)}, \emph{M\'ascara SAR (Geometr\'ia)} y \emph{Malla (Wireframe)}. En el modo \emph{M\'ascara SAR (Geometr\'ia)} se puede alternar entre \'orbita \emph{Ascendente (T62/F10)} y \emph{Descendente (T55/F80)} y consultar el desglose porcentual de la ROI en cuatro clases geom\'etricas.
+    \item Usar \textbf{Restablecer c\'amara} para volver a la vista isom\'etrica inicial o \textbf{Capturar vista 3D (PNG)} para descargar una imagen PNG de la maqueta.
+    \item Consultar el panel de \textbf{Telemetr\'ia de relieve} con elevaci\'on m\'inima, elevaci\'on m\'axima, desnivel ($\Delta z$ en metros), extensi\'on aproximada en kil\'ometros, nivel de zoom de teselas y fuentes (\texttt{AWS Terrarium / NASA SRTM} y \texttt{Esri World Imagery}).
+  \end{itemize}
+\end{enumerate}
+
+\section{Implementaci\'on}
+\begin{itemize}
+  \item \texttt{web/package.json}: incorpora \texttt{three} y \texttt{@types/three}.
+  \item \texttt{web/src/utils/terrain3d.ts}: calcula el rect\'angulo envolvente $[W, S, E, N]$ de cualquier geometr\'ia GeoJSON (\texttt{Polygon}, \texttt{MultiPolygon} o anillo de coordenadas) con \texttt{bboxFromGeometry}; selecciona el nivel de zoom $z \in [8, 13]$ seg\'un un presupuesto m\'aximo de teselas (\texttt{chooseZoom}); descarga y ensambla teselas abiertas de elevaci\'on AWS Terrarium (\texttt{/tiles-terrarium/\{z\}/\{x\}/\{y\}.png} con respaldo directo a \texttt{https://s3.amazonaws.com/elevation-tiles-prod/terrarium/\{z\}/\{x\}/\{y\}.png}) sin suavizado de color para preservar los bytes codificados y decodifica la altura en metros mediante:
+  \begin{equation}
+    h = \max\left(0,\; \left(256 R + G + \frac{B}{256}\right) - 32768\right).
+  \end{equation}
+  Cada tesela PNG de Terrarium se decodifica primero a su resoluci\'on nativa $1:1$ ($256 \times 256$, con \texttt{createImageBitmap(blob, \{ colorSpaceConversion: 'none' \})} cuando est\'a disponible) hacia una matriz de alturas en metros (\texttt{Float32Array}), y el remuestreo bilineal hacia la malla $161 \times 161$ se realiza directamente sobre metros (\texttt{resampleElevationBilinear}), nunca escalando en espacio RGB. Las muestras con $\alpha < 255$ o valores corruptos ($h > 9000\text{ m}$) se descartan, toda batimetr\'ia ($h < 0\text{ m}$) se nivela a $0\text{ m}$, y se aplica un filtro anti-picos $3 \times 3$ (\texttt{despikeElevationGrid}, umbral de $80\text{ m}$ respecto a la mediana de los 8 vecinos) antes de calcular $h_{\min}$, $h_{\max}$ y $\Delta z$. Descarga en paralelo las teselas correspondientes de \texttt{Esri World Imagery} recortadas exactamente al mismo rect\'angulo envolvente y genera adem\'as una textura hipsom\'etrica con azul costero para $h \le 0.5\text{ m}$ y sombreado direccional (hillshade Lambertiano desde el noroeste, \texttt{hypsometricCanvas}).
+  \item \textbf{M\'ascara Geom\'etrica SAR (\texttt{computeSarGeometricMask} y \texttt{sarMaskCanvas}):} a partir de las derivadas locales del terreno $(z_x = \partial z/\partial x,\; z_y = \partial z/\partial y)$ en metros por metro ($x$ hacia el Este, $y$ hacia el Norte), calcula la magnitud de pendiente $\tan\alpha = \sqrt{z_x^2 + z_y^2}$ y la pendiente proyectada hacia el sensor en funci\'on del vector unitario horizontal del haz lateral de NISAR $\vec l = (\sin\psi,\; \cos\psi)$ (mirada izquierda: $\psi \approx 260^\circ$ en \'orbita ascendente y $\psi \approx 100^\circ$ en \'orbita descendente) y del \'angulo de incidencia nominal $\theta_i \approx 43^\circ$:
+  \begin{equation}
+    s_{\mathrm{rad}} = z_x l_x + z_y l_y.
+  \end{equation}
+  Cada celda se clasifica en:
+  \begin{enumerate}
+    \item \emph{Layover / escorzo severo} (\texttt{\#EF4444}): $s_{\mathrm{rad}} \ge \tan\theta_i$.
+    \item \emph{Sombra radar} (\texttt{\#1E1B4B}): $-s_{\mathrm{rad}} \ge \tan(90^\circ - \theta_i)$.
+    \item \emph{Pendiente cr\'itica} (\texttt{\#F59E0B}): $\tan\alpha > \tan 15^\circ$ sin layover ni sombra.
+    \item \emph{Confiable} (\texttt{\#22C55E}): $\alpha \le 15^\circ$ sin layover ni sombra.
+  \end{enumerate}
+  \item \texttt{web/src/components/Terrain3DViewer.tsx}: construye una escena con \texttt{THREE.WebGLRenderer}, \texttt{PerspectiveCamera} y \texttt{OrbitControls}; genera una superficie \texttt{PlaneGeometry} de $160 \times 160$ segmentos ($161 \times 161$ v\'ertices) acompa\~nada de un z\'ocalo delgado en tono pizarra oscuro (\texttt{\#334155} / \texttt{\#1e293b}) con grosor fijo igual al $3.5\,\%$ del lado horizontal mayor de la maqueta, independiente de la exageraci\'on vertical. Al desmontar el componente, cancela el ciclo de animaci\'on, desconecta el \texttt{ResizeObserver}, libera controles, geometr\'ias, materiales y texturas, y ejecuta \texttt{renderer.dispose()} y \texttt{renderer.forceContextLoss()}.
+  \item \texttt{web/src/App.tsx} y \texttt{web/src/components/Header.tsx}: cargan \texttt{Terrain3DViewer} de forma diferida con \texttt{React.lazy} y \texttt{Suspense} para que el paquete de Three.js se descargue \'unicamente cuando el usuario abre el visor 3D.
+  \item \texttt{web/src/i18n/terrainMessages.ts} y \texttt{web/src/i18n/core.ts}: registran las cadenas biling\"ues en espa\~nol e ingl\'es.
+  \item \texttt{web/vite.config.ts}: agrega el proxy de desarrollo \texttt{/tiles-terrarium} hacia \texttt{https://s3.amazonaws.com/elevation-tiles-prod/terrarium} para lectura de p\'ixeles en \texttt{<canvas>} sin bloqueos CORS.
+\end{itemize}
+
+\section{Limitaciones}
+\begin{itemize}
+  \item Esta funcionalidad es exclusivamente una visualizaci\'on exploratoria del relieve del rect\'angulo que contiene la ROI, remuestreado a una malla de $161 \times 161$ muestras en proyecci\'on Web Mercator.
+  \item No sustituye al proveedor cient\'ifico NASADEM del pipeline (\texttt{pipeline/elevation/nasadem.py}) y sus valores de telemetr\'ia no se utilizan en ning\'un c\'alculo de retrodispersi\'on SAR, radiaci\'on solar, simulaci\'on hidr\'aulica DG2 ni sismolog\'ia.
+  \item Requiere conexi\'on a internet desde el cliente para obtener las teselas abiertas; si la red falla, el modal presenta un mensaje de error claro sin interrumpir el resto de la aplicaci\'on, y si solo falla la textura satelital cambia autom\'aticamente al modo hipsom\'etrico.
+\end{itemize}
+
+\section{Verificaci\'on}
+Desde la carpeta \texttt{web/}, se ejecutaron las siguientes comprobaciones reproducibles:
+\begin{enumerate}
+  \item \texttt{npx tsc -b}: salida 0 (0 errores de tipos TypeScript).
+  \item \texttt{npm run lint}: salida 0 (0 errores y 0 advertencias de ESLint).
+  \item \texttt{npm run build}: salida 0; Vite genera un chunk independiente \texttt{Terrain3DViewer-*.js} separado del paquete principal.
+  \item \texttt{node --test tests/*.test.mjs} (incluyendo \texttt{web/tests/terrain3d.test.mjs}): 140 pruebas ejecutadas, 140 aprobadas y 0 fallidas (salida 0).
+  \item \texttt{node tests/i18n-audit.mjs}: 0 cadenas sin traducir en \texttt{Terrain3DViewer.tsx}.
+\end{enumerate}
+\end{document}

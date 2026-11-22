@@ -125,7 +125,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8000',
-      '/admin': 'http://localhost:8000',
+      '/tiles-terrarium': {
+        target: 'https://s3.amazonaws.com',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/tiles-terrarium/, '/elevation-tiles-prod/terrarium'),
+      },
     },
   },
   optimizeDeps: {

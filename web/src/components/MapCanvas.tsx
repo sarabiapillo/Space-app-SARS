@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -12,6 +13,7 @@ import {
   ImageSource,
   Map as MapLibreMap,
   MapMouseEvent,
+  type MapLayerMouseEvent,
   NavigationControl,
   ScaleControl,
   type StyleSpecification,
@@ -25,7 +27,7 @@ import {
   Crosshair,
   Download,
   Droplets,
-  Flame,
+  Sun,
   GripHorizontal,
   Hand,
   Monitor,
@@ -50,8 +52,10 @@ import {
   type ExploreDateViewMode,
   type ExploreLayerId,
 } from '../mocks/initialWorkspaces'
-import { fetchExploreManifest, verifyExploreScaleMatch, type ExploreWebManifest } from '../api/client'
+import { fetchExploreManifest, getSolarSample, verifyExploreScaleMatch, type ExploreWebManifest, type SolarSampleResponse } from '../api/client'
 import { useRoiLayers } from '../hooks/useRoiLayers'
+import { CHANGE_GRADIENT_VERTICAL, pickChangeLayer, pickChangeMetrics } from '../utils/changeLayer.ts'
+import { ChangeControls } from './ChangeControls'
 import { FloodDepthLegend } from './FloodDepthLegend'
 import { RainOverlay } from './flood/RainOverlay'
 import type { FloodMapAnimation } from '../utils/floodDg2'
@@ -65,8 +69,10 @@ import {
 } from '../utils/colormapLut'
 import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
+import { loadHeatmap, renderHeatmap, scaleFor } from '../utils/solarHeatmap'
 import { SeismicSimulatorPanel } from './SeismicSimulatorPanel'
-import { runSeismicSimulation } from '../utils/seismic'
+import { runSeismicSimulation, generateGeodesicCircle, wavefrontSurfaceRadiusKm, VP_KM_S, VS_KM_S } from '../utils/seismic'
+import { regionCenter } from '../utils/seismicScenario'
 import type {
   DockWindow,
   DockWindowKind,
@@ -134,10 +140,17 @@ interface MapCanvasProps {
   locationPreview?: AdministrativeGeometry | null
   gcovFootprint?: unknown | null
   onNotify: (kind: ToastKind, text: string) => void
-  onSelectPresetROI?: (preset: CatalogRoiPreset) => void
+  onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { simulation?: 'solar' | 'seismic' }) => void
   onDuplicateWithHeatmap?: () => void
   onDuplicateForWater?: () => void
   onDuplicateForSeismic?: () => void
+}
+
+interface SolarSampleState {
+  coordinate: LngLat
+  loading: boolean
+  result: SolarSampleResponse | null
+  error: string | null
 }
 
 interface ViewportMetrics {
@@ -207,6 +220,45 @@ const CONFIRMED_ROI_SOURCE = 'confirmed-roi-source'
 const LOCATION_PREVIEW_SOURCE = 'location-preview-source'
 const GCOV_PREVIEW_SOURCE = 'gcov-preview-source'
 const SEISMIC_SOURCE = 'seismic-source'
+const SEISMIC_WAVE_SOURCE = 'seismic-wave-source'
+const SEISMIC_EPICENTER_LAYERS = [`${SEISMIC_SOURCE}-epicenter`, `${SEISMIC_SOURCE}-pulse`]
+
+/** Anillos de afectación, estación y epicentro del escenario como GeoJSON para MapLibre. */
+function seismicFeatureCollection(state: SeismicSimulationState) {
+  // Antes de "Ejecutar simulación" solo se dibujan el epicentro y la estación (sin anillos).
+  const results = !state.simulated ? { rings: [] } : runSeismicSimulation({
+    epicenter: state.epicenter,
+    magnitude: state.magnitude,
+    depthKm: state.depthKm,
+    name: state.name,
+    mechanism: state.mechanism,
+    soilType: state.soilType,
+    vs30: state.vs30,
+  })
+  const ringFeatures = results.rings.map((ring) => ({
+    type: 'Feature' as const,
+    geometry: { type: 'Polygon' as const, coordinates: [ring.polygon] },
+    properties: {
+      isEpicenter: false,
+      isRing: true,
+      level: ring.level,
+      color: ring.color,
+      fillColor: ring.fillColor,
+      mmi: ring.mmi,
+      radiusKm: ring.radiusKm,
+    },
+  }))
+  ringFeatures.sort((a, b) => b.properties.radiusKm - a.properties.radiusKm)
+  const stationFeatures = state.station
+    ? [{ type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: state.station }, properties: { isStation: true } }]
+    : []
+  const epicenterFeature = {
+    type: 'Feature' as const,
+    geometry: { type: 'Point' as const, coordinates: state.epicenter },
+    properties: { isEpicenter: true },
+  }
+  return { type: 'FeatureCollection' as const, features: [...ringFeatures, ...stationFeatures, epicenterFeature] }
+}
 
 const BASE_STYLE: StyleSpecification = {
   version: 8,
@@ -271,12 +323,13 @@ function computeHillshadeParams(solar: SolarSimulationState): {
   exaggeration: number
   highlightColor: string
 } {
-  const direction = Math.round(90 + (solar.sunAngle / 180) * 180)
-  const elevationFactor = 0.38 + 0.62 * Math.sin((solar.sunAngle * Math.PI) / 180)
+  const direction = solar.azimuthDeg ?? 180
+  const elevationFactor = Math.sin(((solar.elevationDeg ?? 45) * Math.PI) / 180)
   const exaggeration = solar.enabled
-    ? Number(Math.min(0.85, (solar.radiationIntensity / 100) * 0.85 * elevationFactor).toFixed(3))
+    ? Number(Math.min(0.85, 0.55 * elevationFactor).toFixed(3))
     : 0
-  const highlightColor = interpolateThermalHighlight(solar.radiationIntensity)
+  // Visualization is deliberately independent of the physical radiation factor.
+  const highlightColor = interpolateThermalHighlight(100)
   return { direction, exaggeration, highlightColor }
 }
 
@@ -331,9 +384,6 @@ export function MapCanvas({
   gcovFootprint = null,
   onNotify,
   onSelectPresetROI,
-  onDuplicateWithHeatmap,
-  onDuplicateForWater,
-  onDuplicateForSeismic,
 }: MapCanvasProps) {
   const { t, localizeText, language, locale } = useTranslation()
   const displayDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
@@ -344,11 +394,24 @@ export function MapCanvas({
   const svgOverlayRef = useRef<SVGSVGElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const [solarSample, setSolarSample] = useState<SolarSampleState | null>(null)
+  const [solarDisplay, setSolarDisplay] = useState<{ sourceUrl: string; dni: number; image: ImageData; range: [number, number] } | null>(null)
+  const [solarApplied, setSolarApplied] = useState<{ sourceUrl: string; dni: number; image: ImageData; range: [number, number] } | null>(null)
+  const [solarDisplayError, setSolarDisplayError] = useState<{ sourceUrl: string; dni: number; kind: 'contrast' | 'preview' } | null>(null)
+  const [selectedContourValue, setSelectedContourValue] = useState<number | null>(null)
+  const solarOpacity = solar.layerOpacity ?? 88
+  const solarDni = solar.simulationResult?.clear_sky.dni_adjusted_w_m2 ?? 0
+  const heatmapMode = solar.heatmapMode ?? 'estirado'
+  const activeSolarDisplay = solarDisplay && heatmapMode === 'estirado' && solarDisplay.sourceUrl === solar.rasterPreviewUrl && solarDisplay.dni === solarDni ? solarDisplay : null
+  const heatmapRange: [number, number] = activeSolarDisplay && solarApplied?.image === activeSolarDisplay.image && solarApplied.sourceUrl === activeSolarDisplay.sourceUrl && solarApplied.dni === solarDni && !(solarDisplayError?.sourceUrl === activeSolarDisplay.sourceUrl && solarDisplayError?.dni === solarDni) ? solarApplied.range : [0, solarDni]
+  const solarImageUrl = solar.rasterPreviewUrl
+  const solarSampleRequest = useRef(0)
   const navigationRef = useRef<NavigationControl | null>(null)
 
   const activeDockWindow = dockWindows.find((w) => w.id === activeDockWindowId) ?? dockWindows[0]
   const isDg2 = activeDockWindow?.kind === 'agua'
-  const isSeismic = activeDockWindow?.kind === 'sismo' || Boolean(seismic?.enabled)
+  const isSeismic = activeDockWindow?.kind === 'sismo'
+  const isActiveSolarMap = solar.enabled && activeDockWindow?.kind === 'solar'
   useEffect(() => {
     const nav = navigationRef.current
     if (!nav) return
@@ -482,6 +545,12 @@ export function MapCanvas({
   const annotationsRef = useRef(annotations)
   const croppedRegionRef = useRef(croppedRegion)
   const solarRef = useRef(solar)
+  // Estado sísmico vigente para el clic del mapa (el manejador se registra una sola vez).
+  const seismicRef = useRef(seismic)
+  const isSeismicRef = useRef(isSeismic)
+  const onSeismicChangeRef = useRef(onSeismicChange)
+  // Arrastre del epicentro: posición provisional mientras se mueve (null = sin arrastre).
+  const epicenterDragRef = useRef<{ coord: LngLat; moved: boolean; panWasEnabled: boolean } | null>(null)
   const draftFreehandRef = useRef<LngLat[]>([])
   const draftCircleRef = useRef<{
     kind: 'peligro' | 'advertencia'
@@ -501,6 +570,9 @@ export function MapCanvas({
     annotationsRef.current = annotations
     croppedRegionRef.current = croppedRegion
     solarRef.current = solar
+    seismicRef.current = seismic
+    isSeismicRef.current = isSeismic
+    onSeismicChangeRef.current = onSeismicChange
     onViewChangeRef.current = onViewChange
     onAnnotationsChangeRef.current = onAnnotationsChange
   })
@@ -600,7 +672,48 @@ export function MapCanvas({
       onViewChangeRef.current?.(current, { userInitiated: !programmatic })
     })
 
+    const hitsEpicenter = (point: MapMouseEvent['point']) => {
+      const layers = SEISMIC_EPICENTER_LAYERS.filter((id) => map.getLayer(id))
+      return layers.length > 0 && map.queryRenderedFeatures(point, { layers }).length > 0
+    }
+    // Cursor que tenía el lienzo antes de pasar por el epicentro (lo pone la herramienta activa).
+    let cursorBeforeEpicenter: string | null = null
+    const restoreCursor = () => {
+      if (cursorBeforeEpicenter !== null) map.getCanvas().style.cursor = cursorBeforeEpicenter
+      cursorBeforeEpicenter = null
+    }
+    const canDragEpicenter = () => {
+      const st = seismicRef.current
+      return Boolean(isSeismicRef.current && st && !st.pickingEpicenter && !st.pickingStation)
+    }
+    const finishEpicenterDrag = () => {
+      const drag = epicenterDragRef.current
+      if (!drag) return false
+      epicenterDragRef.current = null
+      if (drag.panWasEnabled) map.dragPan.enable()
+      restoreCursor()
+      window.removeEventListener('mouseup', finishEpicenterDrag)
+      const st = seismicRef.current
+      if (drag.moved && st) {
+        onSeismicChangeRef.current?.({
+          ...st, enabled: true, epicenter: drag.coord, name: tr('Epicentro personalizado', 'Custom epicenter'),
+        })
+      }
+      return true
+    }
+
     const onMouseDown = (e: MapMouseEvent) => {
+      // Arrastrar el epicentro tiene prioridad sobre las herramientas de dibujo.
+      if (canDragEpicenter() && hitsEpicenter(e.point)) {
+        e.preventDefault()
+        const panWasEnabled = map.dragPan.isEnabled()
+        if (panWasEnabled) map.dragPan.disable()
+        epicenterDragRef.current = { coord: seismicRef.current!.epicenter, moved: false, panWasEnabled }
+        if (cursorBeforeEpicenter === null) cursorBeforeEpicenter = map.getCanvas().style.cursor
+        map.getCanvas().style.cursor = 'grabbing'
+        window.addEventListener('mouseup', finishEpicenterDrag)
+        return
+      }
       if (!isEditingRef.current) return
       const tool = activeToolRef.current
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
@@ -623,6 +736,24 @@ export function MapCanvas({
     }
 
     const onMouseMove = (e: MapMouseEvent) => {
+      const drag = epicenterDragRef.current
+      if (drag) {
+        const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
+        epicenterDragRef.current = { ...drag, coord, moved: true }
+        const st = seismicRef.current
+        const source = map.getSource(SEISMIC_SOURCE) as GeoJSONSource | undefined
+        if (st && source) source.setData(seismicFeatureCollection({ ...st, epicenter: coord }))
+        return
+      }
+      if (canDragEpicenter()) {
+        const over = hitsEpicenter(e.point)
+        if (over && cursorBeforeEpicenter === null) {
+          cursorBeforeEpicenter = map.getCanvas().style.cursor
+          map.getCanvas().style.cursor = 'grab'
+        } else if (!over) {
+          restoreCursor()
+        }
+      }
       if (!isEditingRef.current || !isPointerDownRef.current) return
       const tool = activeToolRef.current
       const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
@@ -650,6 +781,7 @@ export function MapCanvas({
     }
 
     const finishPointerStroke = () => {
+      if (finishEpicenterDrag()) return
       if (!isPointerDownRef.current) return
       isPointerDownRef.current = false
       const tool = activeToolRef.current
@@ -683,9 +815,23 @@ export function MapCanvas({
     }
 
     const onMapClick = (e: MapMouseEvent) => {
+      const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
+      // Estación receptora del sismograma (manual sísmico §2, paso 6): un clic la coloca.
+      const currentSeismic = seismicRef.current
+      if (isSeismicRef.current && currentSeismic?.pickingStation) {
+        onSeismicChangeRef.current?.({ ...currentSeismic, station: coord, pickingStation: false })
+        return
+      }
+      // Epicentro libre: con el modo "Elegir en el mapa", cualquier clic lo coloca.
+      if (isSeismicRef.current && currentSeismic?.pickingEpicenter) {
+        onSeismicChangeRef.current?.({
+          ...currentSeismic, enabled: true, epicenter: coord, pickingEpicenter: false,
+          name: tr('Epicentro personalizado', 'Custom epicenter'),
+        })
+        return
+      }
       if (!isEditingRef.current) return
       const tool = activeToolRef.current
-      const coord: LngLat = [Number(e.lngLat.lng.toFixed(6)), Number(e.lngLat.lat.toFixed(6))]
 
       if (tool === 'mover') {
         setSelectedAnnotationId(null)
@@ -737,9 +883,9 @@ export function MapCanvas({
         }
       }
 
-      if (isSeismic && tool === 'mover') {
-        onSeismicChange?.({
-          ...(seismic || DEFAULT_SEISMIC),
+      if (isSeismicRef.current && tool === 'mover') {
+        onSeismicChangeRef.current?.({
+          ...(seismicRef.current || DEFAULT_SEISMIC),
           enabled: true,
           epicenter: coord,
         })
@@ -986,14 +1132,14 @@ export function MapCanvas({
           id: `${SEISMIC_SOURCE}-fill`,
           type: 'fill',
           source: SEISMIC_SOURCE,
-          filter: ['!=', ['get', 'isEpicenter'], true],
+          filter: ['==', ['get', 'isRing'], true],
           paint: { 'fill-color': ['get', 'fillColor'], 'fill-opacity': 0.35 },
         })
         map.addLayer({
           id: `${SEISMIC_SOURCE}-line`,
           type: 'line',
           source: SEISMIC_SOURCE,
-          filter: ['!=', ['get', 'isEpicenter'], true],
+          filter: ['==', ['get', 'isRing'], true],
           paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2] },
         })
         map.addLayer({
@@ -1006,6 +1152,37 @@ export function MapCanvas({
             'circle-color': 'rgba(239, 68, 68, 0.35)',
             'circle-stroke-width': 1.5,
             'circle-stroke-color': '#ef4444',
+          },
+        })
+        // Frentes de onda P y S animados (debajo de la estación y del epicentro).
+        map.addSource(SEISMIC_WAVE_SOURCE, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+        map.addLayer({
+          id: `${SEISMIC_WAVE_SOURCE}-s-fill`,
+          type: 'fill',
+          source: SEISMIC_WAVE_SOURCE,
+          filter: ['==', ['get', 'wave'], 'S'],
+          paint: { 'fill-color': '#dc2626', 'fill-opacity': 0.08 },
+        })
+        map.addLayer({
+          id: `${SEISMIC_WAVE_SOURCE}-line`,
+          type: 'line',
+          source: SEISMIC_WAVE_SOURCE,
+          paint: {
+            'line-color': ['match', ['get', 'wave'], 'P', '#2563eb', '#dc2626'],
+            'line-width': ['match', ['get', 'wave'], 'P', 2.5, 3.5],
+            'line-opacity': 0.95,
+          },
+        })
+        map.addLayer({
+          id: `${SEISMIC_SOURCE}-station`,
+          type: 'circle',
+          source: SEISMIC_SOURCE,
+          filter: ['==', ['get', 'isStation'], true],
+          paint: {
+            'circle-radius': 6,
+            'circle-color': '#0f766e',
+            'circle-stroke-width': 2.5,
+            'circle-stroke-color': '#ffffff',
           },
         })
         map.addLayer({
@@ -1071,57 +1248,80 @@ export function MapCanvas({
     if (!source) return
 
     const activeSeismic = seismic || DEFAULT_SEISMIC
-    const shouldShow = isSeismic || Boolean(seismic?.enabled)
+    const shouldShow = isSeismic && Boolean(seismic?.enabled)
 
-    if (shouldShow && activeSeismic) {
-      const results = runSeismicSimulation({
-        epicenter: activeSeismic.epicenter,
-        magnitude: activeSeismic.magnitude,
-        depthKm: activeSeismic.depthKm,
-        name: activeSeismic.name,
-        mechanism: activeSeismic.mechanism,
-        soilType: activeSeismic.soilType,
-      })
-
-      const ringFeatures = results.rings.map((ring) => ({
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [ring.polygon],
-        },
-        properties: {
-          isEpicenter: false,
-          level: ring.level,
-          color: ring.color,
-          fillColor: ring.fillColor,
-          mmi: ring.mmi,
-          radiusKm: ring.radiusKm,
-        },
-      }))
-      ringFeatures.sort((a, b) => b.properties.radiusKm - a.properties.radiusKm)
-
-      const epicenterFeature = {
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Point' as const,
-          coordinates: activeSeismic.epicenter,
-        },
-        properties: {
-          isEpicenter: true,
-        },
-      }
-
-      source.setData({
-        type: 'FeatureCollection',
-        features: [...ringFeatures, epicenterFeature],
-      })
-    } else {
-      source.setData({
-        type: 'FeatureCollection',
-        features: [],
-      })
-    }
+    source.setData(shouldShow && activeSeismic
+      ? seismicFeatureCollection(activeSeismic)
+      : { type: 'FeatureCollection', features: [] })
   }, [seismic, isSeismic, mapReady])
+
+  // Contorno de la región del mapa para el simulador sísmico: recorte manual o, si no, la ROI efectiva.
+  const seismicRegionRing = useMemo<LngLat[] | null>(() => {
+    if (croppedRegion && croppedRegion.length >= 3) return croppedRegion
+    if (!effectiveRoi) return null
+    const ring = effectiveRoi.type === 'Polygon' ? effectiveRoi.coordinates[0] : effectiveRoi.coordinates[0]?.[0]
+    return ring ? ring.map(([lng, lat]) => [lng, lat] as LngLat) : null
+  }, [croppedRegion, effectiveRoi])
+
+  // Animación de los frentes de onda P y S desde el epicentro (requestAnimationFrame, sin re-render de React).
+  const waveClockRef = useRef<HTMLDivElement>(null)
+  const waveAnimating = Boolean(isSeismic && seismic?.simulated && seismic?.animatingWaves)
+  const waveSpeed = seismic?.waveAnimationSpeed ?? 5
+  const waveEpicenter = seismic?.epicenter
+  const waveDepth = seismic?.depthKm ?? 20
+  useEffect(() => {
+    const map = mapRef.current
+    const source = map?.getSource(SEISMIC_WAVE_SOURCE) as GeoJSONSource | undefined
+    if (!map || !mapReady || !source) return
+    if (!waveAnimating || !waveEpicenter) {
+      source.setData({ type: 'FeatureCollection', features: [] })
+      return
+    }
+    // Hasta dónde llega la animación: un poco más allá del anillo de percepción débil (mín. 300 km).
+    const st = seismicRef.current
+    const rings = st ? runSeismicSimulation({ ...st, epicenter: waveEpicenter }).rings : []
+    const maxKm = Math.max(300, ...rings.map((r) => r.radiusKm * 1.1))
+    const endSec = Math.hypot(maxKm, waveDepth) / VS_KM_S
+    const pauseSec = 1.5
+    let raf = 0
+    const t0 = performance.now()
+    const tick = (now: number) => {
+      const realSec = (now - t0) / 1000
+      const cycle = endSec / waveSpeed + pauseSec
+      const tSim = Math.min(endSec, (realSec % cycle) * waveSpeed)
+      const rP = Math.min(wavefrontSurfaceRadiusKm(VP_KM_S, tSim, waveDepth), maxKm * 1.6)
+      const rS = wavefrontSurfaceRadiusKm(VS_KM_S, tSim, waveDepth)
+      const features = []
+      if (rS > 0) {
+        features.push({ type: 'Feature' as const, properties: { wave: 'S' },
+          geometry: { type: 'Polygon' as const, coordinates: [generateGeodesicCircle(waveEpicenter, rS, 96)] } })
+      }
+      if (rP > 0) {
+        features.push({ type: 'Feature' as const, properties: { wave: 'P' },
+          geometry: { type: 'LineString' as const, coordinates: generateGeodesicCircle(waveEpicenter, rP, 96) } })
+      }
+      source.setData({ type: 'FeatureCollection', features })
+      if (waveClockRef.current) {
+        waveClockRef.current.textContent =
+          `t = ${tSim.toFixed(1)} s · ${tr('Onda P', 'P wave')} ${rP.toFixed(0)} km · ${tr('Onda S', 'S wave')} ${rS.toFixed(0)} km · ×${waveSpeed}`
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelAnimationFrame(raf)
+      source.setData({ type: 'FeatureCollection', features: [] })
+    }
+  }, [waveAnimating, waveSpeed, waveEpicenter, waveDepth, mapReady])
+
+  // Cursor en cruz mientras se elige el epicentro o la estación en el mapa.
+  const seismicPicking = Boolean(isSeismic && (seismic?.pickingEpicenter || seismic?.pickingStation))
+  useEffect(() => {
+    const canvas = mapRef.current?.getCanvas()
+    if (!canvas || !mapReady) return
+    canvas.style.cursor = seismicPicking ? 'crosshair' : ''
+    return () => { canvas.style.cursor = '' }
+  }, [seismicPicking, mapReady])
 
   const displayScene = hasAnalysisRoi ? {
     ...escena,
@@ -1143,8 +1343,12 @@ export function MapCanvas({
   const layerKey = `${layerT1?.png}|${layerT2?.png}|${colormapId}`
   const imagesReady = colorizedKey === layerKey
 
+  // Mapa de cambio t2 − t1: misma polarización que la capa elegida; PNG ya coloreado (RdBu simétrico).
+  const isChangeView = dateViewMode === 'change'
+  const changeLayer = isChangeView && roiReady ? pickChangeLayer(roiLayers.change, exploreLayerId) : null
+  const changeMetrics = isChangeView && roiReady ? pickChangeMetrics(roiLayers.change, exploreLayerId) : null
   const activeManifest = dateViewMode === 't1' ? manifestT1 : manifestT2
-  const activeLayerEntry = dateViewMode === 't1' ? layerT1 : layerT2
+  const activeLayerEntry = isChangeView ? changeLayer : dateViewMode === 't1' ? layerT1 : layerT2
   useEffect(() => {
     if (!roiReady || activeLayerEntry) return
     const key = `${roiLayers.key}:${dateViewMode}:${exploreLayerId}`
@@ -1157,7 +1361,6 @@ export function MapCanvas({
     manifestT1 && manifestT2 ? verifyExploreScaleMatch(manifestT1, manifestT2, exploreLayerId) : null
 
   const activeColormapSpec = getColormapSpec(colormapId)
-  const infernoSpec = getColormapSpec('inferno')
 
   // Colorear dinámicamente los PNG oficiales en EPSG:3857 usando la tabla LUT de 256 colores (Inferno por defecto)
   useEffect(() => {
@@ -1177,27 +1380,20 @@ export function MapCanvas({
     }
   }, [layerT1, layerT2, colormapId, layerKey])
 
-  const activeColorizedUrl = dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
+  const activeColorizedUrl = isChangeView
+    ? (changeLayer ? `/${changeLayer.png}` : '')
+    : dateViewMode === 't1' ? colorizedT1Url : colorizedT2Url
+
+  const hideHeatmap = activeDockWindow?.kind !== 'map'
+  const hideSolar = activeDockWindow?.kind !== 'solar'
+  const hideNisar = hideHeatmap || isActiveSolarMap
+  const shouldShowNisar = !hideNisar && dateViewMode !== 'swipe' && Boolean(activeLayerEntry) && imagesReady && (!hasAnalysisRoi || !roiLayers.loading) && opacity > 0
 
   // Conectar slider de opacidad usando `map.setPaintProperty('nisar-layer', 'raster-opacity', opacidad / 100)`
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
     const alpha = opacity / 100
-
-    // Ocultar mapa de calor completamente en pestañas de simulación (Agua / DG2 y Sismo)
-    // para evitar que se quede pegado encima o debajo de las simulaciones.
-    const isWaterTab = activeDockWindow?.kind === 'agua'
-    const isSeismicTab = activeDockWindow?.kind === 'sismo'
-    const hideHeatmap = isWaterTab || isSeismicTab
-
-    const shouldShowNisar =
-      !hideHeatmap &&
-      dateViewMode !== 'swipe' &&
-      Boolean(activeLayerEntry) &&
-      imagesReady &&
-      (!hasAnalysisRoi || !roiLayers.loading) &&
-      opacity > 0
 
     const webglOpacity = shouldShowNisar ? alpha : 0
 
@@ -1206,9 +1402,11 @@ export function MapCanvas({
       map.setPaintProperty(NISAR_LAYER, 'raster-opacity', webglOpacity)
       map.setPaintProperty(NISAR_LAYER, 'raster-resampling', 'linear')
     }
+    if (map.getLayer(FOOTPRINT_LINE_LAYER)) map.setLayoutProperty(FOOTPRINT_LINE_LAYER, 'visibility', hideNisar ? 'none' : 'visible')
+    if (map.getLayer(`${GCOV_PREVIEW_SOURCE}-line`)) map.setLayoutProperty(`${GCOV_PREVIEW_SOURCE}-line`, 'visibility', hideNisar ? 'none' : 'visible')
     if (map.getLayer(FOOTPRINT_FILL_LAYER)) {
-      map.setLayoutProperty(FOOTPRINT_FILL_LAYER, 'visibility', hideHeatmap || opacity <= 0 ? 'none' : 'visible')
-      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', hideHeatmap || opacity <= 0 ? 0 : alpha * 0.03)
+      map.setLayoutProperty(FOOTPRINT_FILL_LAYER, 'visibility', hideNisar || opacity <= 0 ? 'none' : 'visible')
+      map.setPaintProperty(FOOTPRINT_FILL_LAYER, 'fill-opacity', hideNisar || opacity <= 0 ? 0 : alpha * 0.03)
     }
   }, [
     opacity,
@@ -1220,6 +1418,8 @@ export function MapCanvas({
     roiLayers.loading,
     imagesReady,
     activeDockWindow?.kind,
+    hideNisar,
+    shouldShowNisar,
   ])
 
   // Actualizar fuente `image` de MapLibre con el BlobURL/DataURL coloreado por LUT y `capa.esquinas_lonlat` (EPSG:3857)
@@ -1230,18 +1430,21 @@ export function MapCanvas({
     try {
       if (!imgSource && activeColorizedUrl) {
         map.addSource(NISAR_SOURCE, { type: 'image', url: activeColorizedUrl, coordinates: activeLayerEntry.esquinas_lonlat })
-        map.addLayer({ id: NISAR_LAYER, type: 'raster', source: NISAR_SOURCE, paint: { 'raster-opacity': opacityRef.current / 100, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } })
+        map.addLayer({ id: NISAR_LAYER, type: 'raster', source: NISAR_SOURCE, layout: { visibility: shouldShowNisar ? 'visible' : 'none' }, paint: { 'raster-opacity': shouldShowNisar ? opacityRef.current / 100 : 0, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } })
       } else if (imgSource && typeof imgSource.updateImage === 'function') {
         imgSource.updateImage({ url: activeColorizedUrl, coordinates: activeLayerEntry.esquinas_lonlat })
       }
       if (map.getSource(FOOTPRINT_SOURCE)) {
         (map.getSource(FOOTPRINT_SOURCE) as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...activeLayerEntry.esquinas_lonlat, activeLayerEntry.esquinas_lonlat[0]]] } } as never)
       }
-      if (map.getLayer(NISAR_LAYER)) map.setPaintProperty(NISAR_LAYER, 'raster-opacity', opacityRef.current / 100)
+      if (map.getLayer(NISAR_LAYER)) {
+        map.setLayoutProperty(NISAR_LAYER, 'visibility', shouldShowNisar ? 'visible' : 'none')
+        map.setPaintProperty(NISAR_LAYER, 'raster-opacity', shouldShowNisar ? opacityRef.current / 100 : 0)
+      }
     } catch (err) {
       console.warn('No se pudo actualizar la capa raster NISAR coloreada:', err)
     }
-  }, [activeLayerEntry, activeColorizedUrl, mapReady, imagesReady, opacity])
+  }, [activeLayerEntry, activeColorizedUrl, mapReady, imagesReady, opacity, shouldShowNisar])
 
   // Actualizar cursor y `map.dragPan.disable()` / `enable()` según la herramienta activa
   useEffect(() => {
@@ -1339,13 +1542,57 @@ export function MapCanvas({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady || !map.getLayer(SOLAR_THERMAL_LAYER)) return
+    map.setLayoutProperty(SOLAR_THERMAL_LAYER, 'visibility', isActiveSolarMap ? 'visible' : 'none')
     const hs = computeHillshadeParams(solar)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-illumination-direction', hs.direction)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-exaggeration', hs.exaggeration)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-highlight-color', hs.highlightColor)
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-accent-color', '#DD513A')
     map.setPaintProperty(SOLAR_THERMAL_LAYER, 'hillshade-shadow-color', '#420A68')
-  }, [solar, mapReady])
+  }, [solar, mapReady, isActiveSolarMap])
+
+  // Selección sobre el mapa: el valor siempre se consulta al GeoTIFF, nunca al PNG.
+  useEffect(() => {
+    const map = mapRef.current
+    const previewUrl = solar.rasterPreviewUrl
+    if (!map || !mapReady || !solar.enabled || hideSolar || solarOpacity <= 0 || !previewUrl || solar.showRasterOnMap === false) {
+      solarSampleRequest.current++
+      setSolarSample(null)
+      return
+    }
+    setSolarSample(null)
+    const onSolarMapClick = async (event: MapMouseEvent) => {
+      if (isEditing && activeTool !== 'mover') return
+      const coordinate: LngLat = [event.lngLat.lng, event.lngLat.lat]
+      const requestId = ++solarSampleRequest.current
+      setSolarSample({ coordinate, loading: true, result: null, error: null })
+      try {
+        const response = await getSolarSample(previewUrl.replace(/\/preview\/incident(?:\?.*)?$/, '/sample'), coordinate[0], coordinate[1])
+        if (requestId === solarSampleRequest.current) setSolarSample({ coordinate, loading: false, result: response, error: null })
+      } catch (error) {
+        if (requestId === solarSampleRequest.current) setSolarSample({ coordinate, loading: false, result: null, error: error instanceof Error ? error.message : 'Error al consultar el GeoTIFF' })
+      }
+    }
+    map.on('click', onSolarMapClick)
+    return () => {
+      map.off('click', onSolarMapClick)
+      solarSampleRequest.current++
+    }
+  }, [mapReady, solar.enabled, solar.rasterPreviewUrl, solar.showRasterOnMap, hideSolar, solarOpacity, isEditing, activeTool, JSON.stringify(croppedRegion)])
+
+  // La escala estirada es solo presentación: el TIFF y el PNG originales no se modifican.
+  useEffect(() => {
+    if (!solar.enabled || !solar.rasterPreviewUrl || heatmapMode !== 'estirado' || !(solarDni > 0)) return
+    let active = true
+    setSolarDisplayError(null)
+    loadHeatmap(solar.rasterPreviewUrl, solarDni).then(decoded => {
+      if (!active) return
+      const range = scaleFor(heatmapMode, decoded.stats, solarDni)
+      const image = renderHeatmap(decoded, ...range)
+      if (active) setSolarDisplay({ sourceUrl: solar.rasterPreviewUrl!, dni: solarDni, image: image.image, range })
+    }).catch(() => { if (active) setSolarDisplayError({ sourceUrl: solar.rasterPreviewUrl!, dni: solarDni, kind: 'contrast' }) })
+    return () => { active = false }
+  }, [solar.enabled, solar.rasterPreviewUrl, solarDni, heatmapMode])
 
   // Superponer en el mapa el ráster generado por la simulación solar de NASADEM (escala Inferno)
   useEffect(() => {
@@ -1357,10 +1604,13 @@ export function MapCanvas({
 
     const shouldShow =
       solar.enabled &&
+      !hideSolar &&
+      solarOpacity > 0 &&
       Boolean(solar.rasterPreviewUrl) &&
       Array.isArray(solar.rasterBounds) &&
       solar.rasterBounds.length === 4 &&
-      solar.showRasterOnMap !== false
+      solar.showRasterOnMap !== false &&
+      !(solarDisplayError?.kind === 'preview' && solarDisplayError.sourceUrl === solar.rasterPreviewUrl && solarDisplayError.dni === solarDni)
 
     if (!shouldShow) {
       if (map.getLayer(SOLAR_CALC_LAYER)) {
@@ -1377,51 +1627,105 @@ export function MapCanvas({
       [bounds[0], bounds[1]], // SW: [west, south]
     ]
 
-    // Opacidad fija: la intensidad ya está en los valores calculados; atarla a la opacidad
-    // hacía que una radiación baja se viera casi transparente y no se distinguiera.
-    const opacity = 0.88
-
-    const existingSource = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
-    if (existingSource) {
-      existingSource.updateImage({
-        url: solar.rasterPreviewUrl!,
-        coordinates: coords,
-      })
-      if (map.getLayer(SOLAR_CALC_LAYER)) {
+    const opacity = solarOpacity / 100
+    const stretch = activeSolarDisplay && !(solarDisplayError?.sourceUrl === solarImageUrl && solarDisplayError?.dni === solarDni) ? activeSolarDisplay : null
+    let active = true
+    const markLoaded = () => {
+      const source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
+      if (active && map.getLayer(SOLAR_CALC_LAYER) && source?.loaded() && (stretch || source.url === solarImageUrl)) {
         map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'visible')
+        if (stretch) setSolarApplied({ sourceUrl: stretch.sourceUrl, dni: stretch.dni, image: stretch.image, range: stretch.range })
+      }
+    }
+    const onSourceData = (event: { sourceId?: string }) => { if (event.sourceId === SOLAR_CALC_SOURCE) markLoaded() }
+    const onSourceError = () => {
+      if (!active) return
+      if (map.getLayer(SOLAR_CALC_LAYER)) map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'none')
+      setSolarApplied(null)
+      setSolarDisplayError({ sourceUrl: solarImageUrl!, dni: solarDni, kind: stretch ? 'contrast' : 'preview' })
+    }
+    map.on('sourcedata', onSourceData)
+    try {
+      let source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
+      if (!source) {
+        map.addSource(SOLAR_CALC_SOURCE, { type: 'image', coordinates: coords })
+        source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource
+      }
+      source.on('error', onSourceError)
+      if (map.getLayer(SOLAR_CALC_LAYER)) map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'none')
+      if (stretch) source.updateImage({ image: stretch.image, coordinates: coords })
+      else source.updateImage({ url: solarImageUrl!, coordinates: coords })
+      if (!map.getLayer(SOLAR_CALC_LAYER)) {
+        map.addLayer({
+          id: SOLAR_CALC_LAYER,
+          type: 'raster',
+          source: SOLAR_CALC_SOURCE,
+          paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' },
+        }, map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined)
+      } else {
         map.setPaintProperty(SOLAR_CALC_LAYER, 'raster-opacity', opacity)
       }
-    } else {
-      try {
-        map.addSource(SOLAR_CALC_SOURCE, {
-          type: 'image',
-          url: solar.rasterPreviewUrl!,
-          coordinates: coords,
-        })
-        map.addLayer(
-          {
-            id: SOLAR_CALC_LAYER,
-            type: 'raster',
-            source: SOLAR_CALC_SOURCE,
-            paint: {
-              'raster-opacity': opacity,
-              'raster-fade-duration': 150,
-              'raster-resampling': 'linear',
-            },
-          },
-          map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
-        )
-      } catch (err) {
-        console.warn('No se pudo superponer el ráster solar en el mapa:', err)
-      }
+      markLoaded()
+    } catch (err) {
+      console.warn('No se pudo superponer el ráster solar en el mapa:', err)
+      setSolarApplied(null)
+      setSolarDisplayError({ sourceUrl: solarImageUrl!, dni: solarDni, kind: stretch ? 'contrast' : 'preview' })
+    }
+    return () => {
+      active = false
+      map.off('sourcedata', onSourceData)
+      ;(map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined)?.off('error', onSourceError)
     }
   }, [
     mapReady,
     solar.enabled,
-    solar.rasterPreviewUrl,
+    solarImageUrl,
     solar.rasterBounds,
     solar.showRasterOnMap,
+    activeSolarDisplay,
+    solarDisplayError,
+    solarDni,
+    solarOpacity,
+    hideSolar,
   ])
+
+  // Mostrar isolíneas del GeoJSON de la corrida solar activa, sin mezclarlas con otras copias.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const sourceId = 'solar-contours-source'
+    const layerId = 'solar-contours-line'
+    const visible = solar.enabled && !hideSolar && solar.showContours !== false && Boolean(solar.contours)
+    const source = map.getSource(sourceId) as GeoJSONSource | undefined
+    if (!visible) {
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'none')
+      return
+    }
+    if (source) {
+      source.setData(solar.contours as never)
+      if (map.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', 'visible')
+      return
+    }
+    map.addSource(sourceId, { type: 'geojson', data: solar.contours as never })
+    map.addLayer({ id: layerId, type: 'line', source: sourceId, paint: { 'line-color': '#1f2937', 'line-width': 1, 'line-opacity': Math.min(0.48, solarOpacity / 200) } })
+  }, [mapReady, solar.enabled, solar.contours, solar.showContours, solarOpacity, hideSolar])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layerId = 'solar-contours-line'
+    setSelectedContourValue(null)
+    if (!map || !mapReady || hideSolar || !solar.enabled || solar.showContours === false || !solar.contours || !map.getLayer(layerId)) {
+      setSelectedContourValue(null)
+      return
+    }
+    const onContourClick = (event: MapLayerMouseEvent) => {
+      const value = event.features?.[0]?.properties?.value_w_m2
+      const numeric = typeof value === 'number' ? value : Number(value)
+      if (Number.isFinite(numeric)) setSelectedContourValue(numeric)
+    }
+    map.on('click', layerId, onContourClick)
+    return () => { map.off('click', layerId, onContourClick) }
+  }, [mapReady, solar.enabled, solar.contours, solar.showContours, hideSolar, viewKey])
 
   // Superponer en el mapa el ráster generado por la simulación de inundación / encharcamientos
   useEffect(() => {
@@ -1432,13 +1736,13 @@ export function MapCanvas({
     const FLOOD_CALC_LAYER = 'flood-calc-raster-layer'
 
     const shouldShow =
+      activeDockWindow?.kind === 'agua' &&
       hasCurrentFloodResult &&
       Boolean(activeFlood.rasterUrl) &&
       Array.isArray(activeFlood.rasterBounds) &&
       activeFlood.rasterBounds.length === 4 &&
       activeFlood.showRasterOnMap !== false &&
-      !floodAnimating &&
-      activeDockWindow?.kind !== 'sismo'
+      !floodAnimating
 
     if (!shouldShow) {
       if (map.getLayer(FLOOD_CALC_LAYER)) {
@@ -1964,7 +2268,9 @@ export function MapCanvas({
       ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: activeDockWindow.index })
       : activeDockWindow.kind === 'sismo'
         ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: activeDockWindow.index })
-        : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
+        : activeDockWindow.kind === 'solar'
+          ? t('Solar / Radiación {index}', 'Solar / Irradiance {index}', { index: activeDockWindow.index })
+          : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: activeDockWindow.index })
     : t('Gráficos / Mapa 1', 'Graphics / Map Plot 1')
 
   // Cerrar el menú de «+» al hacer clic fuera o con Escape.
@@ -1984,13 +2290,6 @@ export function MapCanvas({
       document.removeEventListener('keydown', onKeyDown)
     }
   }, [newWindowMenuOpen])
-
-  // Sombreado direccional de radiación solar con los stops exactos de Inferno
-  const showSolarOverlay = solar.enabled && solar.radiationIntensity > 0
-  const radRatio = solar.radiationIntensity / 100
-  const sunFocusX = 85 - (solar.sunAngle / 180) * 70
-  const sunFocusY = 54 - Math.sin((solar.sunAngle * Math.PI) / 180) * 20
-  const shadowSideX = 100 - sunFocusX
 
   // Captura la región seleccionada (o toda la vista) combinando WebGL + capa SVG de anotaciones
   const executeRegionCapture = useCallback(
@@ -2031,24 +2330,6 @@ export function MapCanvas({
         outCanvas.height,
       )
 
-      // 2. Superponer sombreado solar si está activo
-      if (solar.enabled && solar.radiationIntensity > 0) {
-        const rad = solar.radiationIntensity / 100
-        const grad = ctx.createRadialGradient(
-          outCanvas.width * (sunFocusX / 100),
-          outCanvas.height * (sunFocusY / 100),
-          10,
-          outCanvas.width * 0.5,
-          outCanvas.height * 0.5,
-          Math.max(outCanvas.width, outCanvas.height) * 0.75,
-        )
-        grad.addColorStop(0, `rgba(252, 255, 164, ${(0.24 * rad).toFixed(2)})`)
-        grad.addColorStop(0.55, `rgba(237, 105, 37, ${(0.18 * rad).toFixed(2)})`)
-        grad.addColorStop(1, `rgba(0, 0, 4, ${(0.26 * rad).toFixed(2)})`)
-        ctx.fillStyle = grad
-        ctx.fillRect(0, 0, outCanvas.width, outCanvas.height)
-      }
-
       // 3. Superponer la capa SVG (ROI, Swipe t1/t2 y anotaciones)
       const svgEl = svgOverlayRef.current
       if (svgEl) {
@@ -2086,7 +2367,9 @@ export function MapCanvas({
 
       const defaultFormat = 'png'
       const previewUrl = outCanvas.toDataURL('image/png')
-      const dateTag = dateViewMode === 'swipe' ? `${displayScene.t1}_vs_${displayScene.t2}` : dateViewMode === 't1' ? displayScene.t1 : displayScene.t2
+      const dateTag = dateViewMode === 'swipe' ? `${displayScene.t1}_vs_${displayScene.t2}`
+        : dateViewMode === 'change' ? `delta_${displayScene.t2}_menos_${displayScene.t1}`
+        : dateViewMode === 't1' ? displayScene.t1 : displayScene.t2
       setCaptureModal({
         canvas: outCanvas,
         previewUrl,
@@ -2103,10 +2386,6 @@ export function MapCanvas({
     [
       viewport.width,
       viewport.height,
-      solar.enabled,
-      solar.radiationIntensity,
-      sunFocusX,
-      sunFocusY,
       dateViewMode,
       displayScene.t1,
       displayScene.t2,
@@ -2151,15 +2430,18 @@ export function MapCanvas({
             const isActive = win.id === activeDockWindow?.id
             const isAgua = win.kind === 'agua'
             const isSismo = win.kind === 'sismo'
+            const isSolar = win.kind === 'solar'
             const label = isAgua
               ? t('Agua / DG2 {index}', 'Water / DG2 {index}', { index: win.index })
               : isSismo
                 ? t('Sismo / Terremoto {index}', 'Earthquake {index}', { index: win.index })
-                : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
+                : isSolar
+                  ? t('Solar / Radiación {index}', 'Solar / Irradiance {index}', { index: win.index })
+                  : t('Gráficos / Mapa {index}', 'Graphics / Map Plot {index}', { index: win.index })
             return (
               <div
                 key={win.id}
-                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${isSismo ? ' ws-panel-tab-group--seismic' : ''}${
+                className={`ws-panel-tab-group${isAgua ? ' ws-panel-tab-group--hydro' : ''}${isSismo ? ' ws-panel-tab-group--seismic' : ''}${isSolar ? ' ws-panel-tab-group--solar' : ''}${
                   isActive ? ' is-active' : ''
                 }`}
               >
@@ -2167,7 +2449,7 @@ export function MapCanvas({
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${isSismo ? ' ws-panel-tab--seismic' : ''}${
+                  className={`ws-panel-tab${isAgua ? ' ws-panel-tab--hydro' : ''}${isSismo ? ' ws-panel-tab--seismic' : ''}${isSolar ? ' ws-panel-tab--solar' : ''}${
                     isActive ? ' is-active' : ''
                   }`}
                   title={label}
@@ -2177,6 +2459,8 @@ export function MapCanvas({
                     <Droplets size={13} aria-hidden="true" />
                   ) : isSismo ? (
                     <Activity size={13} aria-hidden="true" />
+                  ) : isSolar ? (
+                    <Sun size={13} aria-hidden="true" />
                   ) : (
                     <Monitor size={13} aria-hidden="true" />
                   )}
@@ -2247,6 +2531,22 @@ export function MapCanvas({
                 <button
                   type="button"
                   role="menuitem"
+                  className="ws-window-menu__item"
+                  onClick={() => {
+                    onSolarChange({ ...solar, enabled: true })
+                    onOpenDockWindow('solar')
+                    setNewWindowMenuOpen(false)
+                  }}
+                >
+                  <Sun size={13} aria-hidden="true" />
+                  <span>
+                    {t('Ventana solar', 'Solar window')}
+                    <em>{t('Solar / Radiación', 'Solar / Irradiance')}</em>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   className="ws-window-menu__item ws-window-menu__item--seismic"
                   onClick={() => {
                     onOpenDockWindow('sismo')
@@ -2263,46 +2563,9 @@ export function MapCanvas({
             )}
           </div>
 
-          {hasAnalysisRoi && (
-            <div className="ws-panel-tab-actions">
-              {onDuplicateWithHeatmap && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--heat"
-                  onClick={onDuplicateWithHeatmap}
-                  title={t('Generar una copia de este mapa con el mapa de calor SAR activado', 'Generate a copy of this map with SAR heatmap enabled')}
-                >
-                  <Flame size={12} />
-                  <span>{t('Copia con Calor', 'Copy with Heatmap')}</span>
-                </button>
-              )}
-              {onDuplicateForWater && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--water"
-                  onClick={onDuplicateForWater}
-                  title={t('Generar copia limpia para simulación de agua (DG2) sin mapa de calor', 'Generate clean copy for water simulation (DG2) without heatmap')}
-                >
-                  <Droplets size={12} />
-                  <span>{t('Copia Agua (DG2)', 'Water Copy (DG2)')}</span>
-                </button>
-              )}
-              {onDuplicateForSeismic && (
-                <button
-                  type="button"
-                  className="ws-tab-action-btn ws-tab-action-btn--seismic"
-                  onClick={onDuplicateForSeismic}
-                  title={t('Generar copia limpia para simulación sísmica / terremoto', 'Generate clean copy for seismic / earthquake simulation')}
-                >
-                  <Activity size={12} />
-                  <span>{t('Copia Sismo', 'Seismic Copy')}</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
-        <div className="ws-panel-tabbar__summary">
+        {!isActiveSolarMap && <div className="ws-panel-tabbar__summary">
           <span className="ws-mono">
             {isEditing && activeMapName ? activeMapName : t('Mapa General (Solo lectura)', 'Overview map (read-only)')}
           </span>
@@ -2314,16 +2577,18 @@ export function MapCanvas({
           <span className="ws-mono">
             {dateViewMode === 'swipe'
               ? t('Deslizador t1 ({t1}) ↔ t2 ({t2})', 'Swipe t1 ({t1}) ↔ t2 ({t2})', { t1: displayDate(displayScene.t1), t2: displayDate(displayScene.t2) })
-              : dateViewMode === 't1'
-                ? `t1 = ${displayDate(displayScene.t1)}`
-                : `t2 = ${displayDate(displayScene.t2)}`}
+              : dateViewMode === 'change'
+                ? t('Cambio Δ = t2 ({t2}) − t1 ({t1})', 'Change Δ = t2 ({t2}) − t1 ({t1})', { t1: displayDate(displayScene.t1), t2: displayDate(displayScene.t2) })
+                : dateViewMode === 't1'
+                  ? `t1 = ${displayDate(displayScene.t1)}`
+                  : `t2 = ${displayDate(displayScene.t2)}`}
           </span>
           <span>·</span>
           <span className="ws-mono">
             {t('Centro', 'Center')}: [{viewport.centro[0].toFixed(4)}, {viewport.centro[1].toFixed(4)}] · z=
             {viewport.zoom.toFixed(2)}
           </span>
-        </div>
+        </div>}
       </div>
 
       <div
@@ -2395,24 +2660,6 @@ export function MapCanvas({
               }}
             />
 
-        {/* Efecto direccional de radiación del Simulador Solar con los stops de Inferno */}
-        {showSolarOverlay && (
-          <div
-            className="solar-thermal-overlay"
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              pointerEvents: 'none',
-              zIndex: 4,
-              background: `
-                radial-gradient(circle at ${sunFocusX.toFixed(1)}% ${sunFocusY.toFixed(1)}%, rgba(252, 255, 164, ${(radRatio * 0.46).toFixed(2)}) 0%, rgba(252, 165, 10, ${(radRatio * 0.38).toFixed(2)}) 26%, rgba(221, 81, 58, ${(radRatio * 0.30).toFixed(2)}) 50%, rgba(147, 38, 103, ${(radRatio * 0.22).toFixed(2)}) 72%, rgba(0, 0, 4, 0) 90%),
-                radial-gradient(circle at ${shadowSideX.toFixed(1)}% ${(100 - sunFocusY).toFixed(1)}%, rgba(66, 10, 104, ${(radRatio * 0.42).toFixed(2)}) 0%, rgba(0, 0, 4, ${(radRatio * 0.28).toFixed(2)}) 45%, rgba(0, 0, 4, 0) 75%)
-              `,
-            }}
-          />
-        )}
-
         {/* OVERLAY SVG SINCRONIZADO POR ENCIMA DEL MAPA (z-index: 5) */}
         <svg
           ref={svgOverlayRef}
@@ -2431,7 +2678,7 @@ export function MapCanvas({
           }}
         >
           {/* Deslizador Antes/Después (Swipe t1 ↔ t2) en EPSG:3857 con LUT coloreado */}
-          {dateViewMode === 'swipe' && imagesReady && layerT1 && layerT2 && opacity > 0 && roiLayers.comparable && (
+          {dateViewMode === 'swipe' && !hideNisar && imagesReady && layerT1 && layerT2 && opacity > 0 && roiLayers.comparable && (
             <g>
               <defs>
                 <clipPath id="explore-swipe-left">
@@ -2480,7 +2727,7 @@ export function MapCanvas({
           )}
 
           {/* Deslizador Comparativo: Inundación Simulada vs Terreno Original Base */}
-          {hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
+          {activeDockWindow?.kind === 'agua' && hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
             <g>
               <defs>
                 <clipPath id="flood-compare-clip">
@@ -2817,7 +3064,7 @@ export function MapCanvas({
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Antes/Después (Swipe t1 ↔ t2) */}
-        {dateViewMode === 'swipe' && imagesReady && roiLayers.comparable && (
+        {dateViewMode === 'swipe' && !hideNisar && imagesReady && roiLayers.comparable && (
           <div
             className="swipe-handle-overlay"
             style={{
@@ -2859,7 +3106,7 @@ export function MapCanvas({
         )}
 
         {/* Control interactivo sobre la ROI cuando está activo el Deslizador Comparativo de Inundación */}
-        {hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
+        {activeDockWindow?.kind === 'agua' && hasCurrentFloodResult && activeFlood.compareMode && activeFlood.rasterUrl && (
           <div
             className="swipe-handle-overlay swipe-handle-overlay--flood"
             style={{
@@ -2896,8 +3143,17 @@ export function MapCanvas({
           </div>
         )}
 
+        {waveAnimating && (
+          <div className="seismic-wave-clock" role="status" aria-live="off">
+            <span className="seismic-wave-clock__legend">
+              <i className="is-p" /> P (6.0 km/s) <i className="is-s" /> S (3.5 km/s)
+            </span>
+            <span ref={waveClockRef} />
+          </div>
+        )}
+
         {/* 4. BARRA DE ESCALA DE COLOR VERTICAL A LA DERECHA DEL LIENZO (`.comsol-colorbar`) */}
-        {((opacity > 0 && activeDockWindow?.kind === 'map') || solar.enabled) && (
+        {!isActiveSolarMap && shouldShowNisar && (
           <aside
             className="comsol-colorbar"
           aria-label={activeLayerEntry ? t('Escala radiométrica de la ROI', 'ROI radiometric scale') : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
@@ -2908,14 +3164,16 @@ export function MapCanvas({
                 {activeLayerEntry ? `${activeLayerEntry.simbolo} ${activeLayerEntry.capa}` : t('Sin datos', 'No data')}
               </span>
               <span className="comsol-colorbar__unit">
-                {activeLayerEntry ? `[${activeLayerEntry.unidades} · ${activeColormapSpec.shortLabel}]` : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
+                {activeLayerEntry
+                  ? `[${activeLayerEntry.unidades} · ${isChangeView ? 'RdBu · t2 − t1' : activeColormapSpec.shortLabel}]`
+                  : t('Sin datos calculados para una ROI', 'No computed data for an ROI')}
               </span>
             </div>
 
             <div className="comsol-colorbar__body">
               <div
                 className="comsol-colorbar__gradient"
-                style={{ background: activeColormapSpec.cssGradientVertical }}
+                style={{ background: isChangeView ? CHANGE_GRADIENT_VERTICAL : activeColormapSpec.cssGradientVertical }}
                 role="img"
                 aria-label={t('Rampa vertical {palette} de {min} dB a {max} dB', 'Vertical {palette} ramp from {min} dB to {max} dB', { palette: localizeText(activeColormapSpec.label), min: vmin, max: vmax })}
               />
@@ -2932,52 +3190,28 @@ export function MapCanvas({
             </div>
 
             <div className="comsol-colorbar__footer">
-              {activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}
+              {isChangeView && changeMetrics && roiLayers.change ? (
+                <>
+                  <span title={t('Área donde la señal bajó al menos el umbral (t2 − t1)', 'Area where the signal decreased by at least the threshold (t2 − t1)')}>
+                    ↓ ≥{roiLayers.change.umbral_dB} dB: {changeMetrics.area_disminucion_km2.toFixed(2)} km² ({changeMetrics.pct_disminucion.toFixed(1)} %)
+                  </span>
+                  <span title={t('Área donde la señal subió al menos el umbral (t2 − t1)', 'Area where the signal increased by at least the threshold (t2 − t1)')}>
+                    ↑ ≥{roiLayers.change.umbral_dB} dB: {changeMetrics.area_aumento_km2.toFixed(2)} km² ({changeMetrics.pct_aumento.toFixed(1)} %)
+                  </span>
+                  <span>{t('Mediana', 'Median')}: {changeMetrics.mediana_dB > 0 ? '+' : ''}{changeMetrics.mediana_dB.toFixed(2)} dB</span>
+                  <ChangeControls
+                    change={roiLayers.change}
+                    metrics={changeMetrics}
+                    busy={roiLayers.changeBusy}
+                    error={roiLayers.changeError}
+                    onRecompute={(multilook, umbralDb) => { void roiLayers.recomputeChange(multilook, umbralDb) }}
+                  />
+                  <span>{t('Exploratorio: no identifica la causa', 'Exploratory: does not identify the cause')}</span>
+                </>
+              ) : activeLayerEntry ? <><span>{t('Máx.', 'Max')}: {activeLayerEntry.rango_datos_dB[1].toFixed(1)}</span><span>{t('Mín.', 'Min')}: {activeLayerEntry.rango_datos_dB[0].toFixed(1)}</span></> : <span>{t('Sin datos calculados para una ROI', 'No computed data for an ROI')}</span>}
             </div>
           </div>
 
-          {solar.enabled && (
-            <div className="comsol-colorbar__column comsol-colorbar__column--solar">
-              <div className="comsol-colorbar__header">
-                <span className="comsol-colorbar__symbol">{t('Radiación', 'Irradiance')}</span>
-                <span className="comsol-colorbar__unit">[Inferno · {solar.radiationIntensity}%]</span>
-              </div>
-              <div className="comsol-colorbar__body">
-                <div
-                  className="comsol-colorbar__gradient"
-                  style={{ background: infernoSpec.cssGradientVertical }}
-                  role="img"
-                  aria-label={t('Escala vertical de irradiancia solar de menor a mayor (Inferno)', 'Vertical solar irradiance scale from lower to higher (Inferno)')}
-                />
-                <div className="comsol-colorbar__ticks">
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">{t('Mayor', 'Higher')}</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">80%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">60%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">40%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">20%</span>
-                  </div>
-                  <div className="comsol-colorbar__tick">
-                    <span className="comsol-colorbar__tick-line" />
-                    <span className="comsol-colorbar__tick-val">{t('Menor', 'Lower')}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </aside>
         )}
 
@@ -3022,7 +3256,7 @@ export function MapCanvas({
           </div>
         )}
 
-        {hasAnalysisRoi && (roiLayers.loading || roiLayers.error || !imagesReady) && (
+        {!isActiveSolarMap && hasAnalysisRoi && (roiLayers.loading || roiLayers.error || !imagesReady) && (
           <div className="roi-loading-backdrop">
             <section className="roi-loading-dialog" role="dialog" aria-modal="true" aria-label={t('Carga de ROI', 'Loading ROI')} aria-busy={roiLayers.loading}>
               <h3>{roiLayers.error ? t('No se pudo cargar la ROI', 'Could not load the ROI') : t('Preparando nueva ROI', 'Preparing new ROI')}</h3>
@@ -3067,7 +3301,7 @@ export function MapCanvas({
         )}
 
         {/* Cuadro Flotante Arrastrable para Herramientas de Dibujo */}
-        {floatingToolsOpen && (
+        {!hideHeatmap && !isActiveSolarMap && floatingToolsOpen && (
           <aside
             className="ws-floating-toolbox"
             style={{ left: `${toolboxPos.x}px`, top: `${toolboxPos.y}px` }}
@@ -3443,7 +3677,12 @@ export function MapCanvas({
           <SeismicSimulatorPanel
             seismic={seismic || DEFAULT_SEISMIC}
             onSeismicChange={onSeismicChange || (() => {})}
-            croppedRegion={croppedRegion}
+            croppedRegion={seismicRegionRing}
+            getRegionCenter={() => {
+              const c = mapRef.current?.getCenter()
+              const visible: LngLat = c ? [Number(c.lng.toFixed(4)), Number(c.lat.toFixed(4))] : view.centro
+              return regionCenter(effectiveRoi, croppedRegion, visible)
+            }}
             onSelectPresetROI={onSelectPresetROI}
             onFlyToEpicenter={(coord) => {
               if (mapRef.current) {
@@ -3459,22 +3698,39 @@ export function MapCanvas({
         )}
 
         {/* Panel derecho acoplable/flotante de Simulación Solar */}
-        {solar.enabled && !isDg2 && (
+        {solar.enabled && !hideSolar && selectedContourValue !== null && (
+          <div className="solar-contour-selection" role="status" aria-live="polite" style={{ position: 'absolute', right: 360, top: 18, zIndex: 20, padding: '6px 10px', borderRadius: 6, background: 'rgba(255,255,255,.95)', color: '#111827', boxShadow: '0 1px 5px #0003' }}>
+            {t('Isolínea seleccionada:', 'Selected isoline:')} {selectedContourValue.toFixed(2)} W/m²
+          </div>
+        )}
+        {solar.enabled && !hideSolar && (
           <RightPanel
+            key={viewKey}
             solar={solar}
             onSolarChange={onSolarChange}
-            onClose={() => onSolarChange({ ...solar, enabled: false })}
+            onClose={() => {
+              onSolarChange({ ...solar, enabled: false })
+              const mapTab = dockWindows.find((window) => window.kind === 'map')
+              if (mapTab) onActivateDockWindow(mapTab.id)
+              else onOpenDockWindow('map')
+            }}
             center={view.centro}
             croppedRegion={croppedRegion}
+            effectiveRoi={effectiveRoi}
             onFlyToZone={handleFlyToZone}
             onSelectPresetROI={onSelectPresetROI}
             roiLayers={roiLayers}
+            solarSample={solarSample}
+            heatmapRange={heatmapRange}
+            heatmapError={solarDisplayError?.sourceUrl === solar.rasterPreviewUrl && solarDisplayError?.dni === solarDni ? solarDisplayError.kind : null}
+            solarOpacity={solarOpacity}
+            onSolarOpacityChange={value => onSolarChange({ ...solar, layerOpacity: value })}
           />
         )}
       </div>
 
       {/* 5. PANEL INFERIOR COLAPSABLE DE BITÁCORA Y TRAZABILIDAD ("Messages / Progress / Traceability Log") */}
-      <section
+      {!isActiveSolarMap && <section
         className={`workstation-log-panel ${logPanelCollapsed ? 'is-collapsed' : ''}`}
         aria-label={t('Mensajes / Progreso / Registro de trazabilidad', 'Messages / Progress / Traceability Log')}
       >
@@ -3604,7 +3860,7 @@ export function MapCanvas({
               <div className="ws-log-grid">
                 <div className="ws-log-row">
                   <span className="ws-log-tag ws-log-tag--info">{t('CAPA ACTIVA', 'ACTIVE LAYER')}</span>
-                  <strong>{activeLayerEntry.id}:</strong> {localizeText(activeLayerOption.title)} · {t('Paleta LUT', 'LUT palette')}:{' '}
+                  <strong>{activeLayerEntry.id}:</strong> {localizeText(activeLayerOption.title)} · {t('Paleta SAR (solo SAR)', 'SAR palette (SAR only)')}:{' '}
                   <strong>{localizeText(activeColormapSpec.label)}</strong>
                 </div>
                 <div className="ws-log-row">
@@ -3641,7 +3897,7 @@ export function MapCanvas({
             )}
           </div>
         )}
-      </section>
+      </section>}
       </div>
     </main>
   )

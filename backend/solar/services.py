@@ -5,6 +5,7 @@ on Linux (servidor) and msvcrt.locking on Windows (desarrollo local). No backgro
 durable queue, authentication or distributed lock is provided.
 """
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -102,12 +103,46 @@ def manifest(run_id):
         raise NotFound() from None
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_incident_integrity(manifest_data, path, filename='incident.tif'):
+    """Check SHA-256 against stored bytes in O(file size) I/O and 1 MiB memory.
+
+    This detects accidental changes, not hostile replacement: without a signed manifest,
+    an attacker able to replace both the TIFF and its manifest hash can forge consistency.
+    Legacy manifests lacking this hash remain usable but are explicitly unverifiable.
+    """
+    files = manifest_data.get('files')
+    if not isinstance(files, dict) or filename not in files:
+        if 'analysis_summary' in manifest_data:
+            raise ValueError('new solar run is missing its artifact hash')
+        return False
+    expected = files[filename]
+    if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('invalid incident hash')
+    if not hmac.compare_digest(_sha256_file(path), expected):
+        raise ValueError('incident hash mismatch')
+    return True
+
+
 def _version():
     # Hash actual installed source bytes; no misleading claim that git HEAD is clean.
     base = Path(__file__).resolve().parents[2]
     digest = hashlib.sha256()
     for name in ('pipeline/solar/delivery.py', 'pipeline/solar/surface.py',
-                 'pipeline/solar/dem.py', 'pipeline/solar/position.py', 'pipeline/solar/clearsky.py'):
+                 'pipeline/solar/dem.py', 'pipeline/solar/position.py',
+                 'pipeline/solar/clearsky.py', 'pipeline/solar/time.py',
+                 'pipeline/solar/radiation.py', 'pipeline/solar/terrain.py',
+                 'pipeline/solar/nasadem.py', 'pipeline/elevation/nasadem.py',
+                 'pipeline/solar/acquire.py',
+                 'pipeline/solar/export.py', 'backend/solar/analysis.py',
+                 'backend/solar/services.py', 'backend/solar/serializers.py'):
         digest.update(name.encode()); digest.update((base / name).read_bytes())
     return 'sha256:' + digest.hexdigest()
 
@@ -142,23 +177,26 @@ def simulate(data):
                 from pipeline.solar.surface import compute_incident_irradiance
                 from pipeline.solar.delivery import export_incident
                 result = compute_incident_irradiance(
-                    roi=data['roi'], datetime_local=data['datetime_local'], timezone_name=data['timezone'],
-                    intensity_percent=data['intensity_percent'],
-                    # Preserve omission so phase A records the approved default as an assumption.
-                    temperature_c=data.get('_temperature_c_input', data['temperature_c']),
-                    pressure_hpa=data.get('pressure_hpa'), provider=NASADEMProvider(settings.SOLAR_NASADEM_CACHE),
+                    roi=data['roi'], elevation_deg=data['elevation_deg'],
+                    azimuth_deg=data['azimuth_deg'], intensity_percent=data['intensity_percent'],
+                    pressure_hpa=None, provider=NASADEMProvider(settings.SOLAR_NASADEM_CACHE),
                 )
                 exported = export_incident(result, staging, code_version=_version())
                 if not isinstance(exported, dict):
                     raise ValueError('invalid export manifest')
                 for name in ('run.json', 'incident.tif', 'preview.png'):
                     _regular(staging / name)
+                from .analysis import summarize_incident
+                exported['analysis_summary'] = summarize_incident(staging / 'incident.tif')
+                # Bind persisted statistics to the exact numerical raster bytes.
+                exported.setdefault('files', {})['incident.tif'] = _sha256_file(staging / 'incident.tif')
                 # Persist ROI and effective input parameters before the final public rename.
                 # POST and later GET must describe the same reproducible simulation.
                 effective_request = {key: data.get(key) for key in (
-                    'roi', 'datetime_local', 'timezone', 'intensity_percent', 'temperature_c', 'pressure_hpa')}
+                    'roi', 'elevation_deg', 'azimuth_deg', 'intensity_percent')}
                 effective_request['pressure_hpa'] = exported['position']['pressure_hpa']
                 effective_request['pressure_provenance'] = exported['position']['pressure_provenance']
+                effective_request['reference_provenance'] = exported['clear_sky'].get('reference_provenance')
                 exported = {**exported, 'request': effective_request}
                 manifest_path = staging / 'run.json'
                 manifest_path.write_text(json.dumps(exported, sort_keys=True, allow_nan=False) + '\n', encoding='utf-8')

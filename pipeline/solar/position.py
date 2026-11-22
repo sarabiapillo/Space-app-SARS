@@ -127,6 +127,41 @@ def acquire_provider_tile_paths(provider, roi):
     return zip_paths
 
 
+def idealized_position_from_prepared(prepared, *, roi, elevation_deg=45.0,
+                                     azimuth_deg=180.0, pressure_hpa=None):
+    """Build date-free geometry and representative-point atmospheric provenance."""
+    if not isinstance(roi, dict):
+        raise ValueError("roi must be a GeoJSON Polygon or MultiPolygon")
+    elevation = float(elevation_deg)
+    azimuth = float(azimuth_deg)
+    if not math.isfinite(elevation) or not 0 <= elevation <= 90:
+        raise ValueError("elevation_deg must be within [0, 90]")
+    if not math.isfinite(azimuth) or not 0 <= azimuth <= 360:
+        raise ValueError("azimuth_deg must be within [0, 360]")
+    row, col, longitude, latitude, altitude = _representative_pixel(prepared, roi)
+    if pressure_hpa is None:
+        pressure = 1013.25 * max(1.0 - 2.25577e-5 * altitude, 1e-6) ** 5.25588
+        provenance = ("dry standard atmosphere: p=1013.25*(max(1-2.25577e-5*h,1e-6)^5.25588) hPa; "
+                      "h is NASADEM EGM96 orthometric elevation in meters")
+    else:
+        pressure = float(pressure_hpa)
+        if not math.isfinite(pressure) or pressure <= 0:
+            raise ValueError("pressure_hpa must be finite and positive")
+        provenance = "caller-supplied reference pressure"
+    return {
+        "azimuth_deg": azimuth, "elevation_deg": elevation,
+        "geometric_elevation_deg": elevation, "geometric_zenith_deg": 90.0-elevation,
+        "night": elevation == 0.0, "point_method": _POINT_METHOD,
+        "row": row, "col": col,
+        "representative_point_lonlat": [float(longitude), float(latitude)],
+        "altitude_m": altitude, "altitude_datum": "EGM96",
+        "altitude_interpretation": "NASADEM HGT orthometric elevation in meters; no ellipsoidal conversion applied",
+        "dem_tile_ids": list(prepared.provenance), "pressure_hpa": pressure,
+        "pressure_pa": pressure*100.0, "pressure_provenance": provenance,
+        "geometry_model": "user-configured idealized solar geometry; no date or time",
+    }
+
+
 def solar_position_from_prepared(
     prepared, *, roi, datetime_local, timezone_name, temperature_c=None,
     pressure_hpa=None,
@@ -156,7 +191,7 @@ def solar_position_from_prepared(
         "apparent_elevation_deg": position["apparent_elevation"],
         "apparent_zenith_deg": position["apparent_zenith"],
         "geometric_zenith_deg": position["geometric_zenith"],
-        "night": position["apparent_elevation"] <= 0.0,
+        "night": position["geometric_elevation"] <= 0.0,
         "point_method": _POINT_METHOD,
         "row": row,
         "col": col,

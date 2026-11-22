@@ -1,0 +1,355 @@
+% TerraPulse AI — Mapa de cambio entre dos fechas NISAR (Chiapas y ROIs dibujadas en la web)
+% Compilar con: pdflatex mapa_cambio.tex  (o latexmk -pdf), desde docs/latex/
+\documentclass[11pt,a4paper]{article}
+\input{preambulo}
+\setlength{\parskip}{0.3em}
+
+\title{TerraPulse AI\\[2pt]\large Mapa de cambio $\Delta\gamma^0$ entre dos fechas NISAR:\\ método, implementación y resultados}
+\author{Documentación técnica del proyecto}
+\date{18 de noviembre de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+El mapa de cambio indica, píxel por píxel, cuántos decibeles cambió la retrodispersión del radar
+entre dos fechas comparables de NISAR. Este documento describe el método (máscaras, multilook en
+potencia lineal, conversión a dB, diferencia, z robusto y umbral), su implementación en
+\path{pipeline/change.py} y \path{pipeline/roi_explore.py}, el servicio web que lo recalcula para
+cualquier ROI dibujada y los resultados obtenidos con datos reales. Incluye el \emph{ruido de
+referencia} de cada ROI, que indica qué tan confiable es un umbral fijo en dB en esa región.
+\textbf{El resultado es exploratorio:} todavía no tiene validación independiente y no identifica
+la causa física de ningún cambio.
+\end{abstract}
+
+\section{Qué es y qué no es}
+
+\begin{itemize}
+  \item \textbf{Es} una medición: $\Delta = \text{dB}_{t_2} - \text{dB}_{t_1}$ en cada píxel. Azul
+        significa que en $t_2$ regresó menos señal; rojo, que regresó más; blanco, que no hubo cambio.
+  \item \textbf{No es} un mapa de inundación, deforestación ni daño. Un cambio en dB describe un
+        cambio en la \emph{respuesta del radar}. La misma subida puede deberse a humedad del suelo,
+        rugosidad, vegetación o geometría. Distinguir la causa requiere fuentes auxiliares
+        (paso~6 del plan de trabajo).
+  \item \textbf{No es} exacto en un sentido demostrado. Sin etiquetas independientes no se reporta
+        precisión, recall, F1 ni IoU; las cifras de área son \emph{conteos de píxeles sobre un
+        umbral}, no áreas validadas.
+\end{itemize}
+
+\section{Datos y comparabilidad}
+
+Se usan productos GCOV (nivel 2, retrodispersión geocodificada y corregida por terreno) de la
+\emph{Frequency A} (banda L). Dos escenas solo se comparan si coinciden en producto, trayectoria,
+marco, dirección de vuelo, polarización, resolución, CRID y madurez (\path{pipeline/compat.py}); no
+se mezcla BETA con PROVISIONAL. Además, ambas fechas deben compartir la misma malla píxel a píxel
+(CRS, transformación y forma). \textbf{Nunca se remuestrea para comparar}: si la malla difiere, el
+cálculo se rechaza.
+
+Las polarizaciones se leen de los metadatos de cada escena. En los casos de este documento son HH
+y HV (adquisición \texttt{DHDH}).
+
+\section{Cadena de procesamiento}
+\label{sec:cadena}
+
+Los pasos se aplican en este orden. Cada uno queda registrado en \path{change.json}.
+
+\subsection{Máscaras}
+
+Un píxel se descarta (NaN) si:
+\begin{enumerate}
+  \item la capa \texttt{mask} del producto vale 0 (no válido) o 255 (fuera de la adquisición);
+  \item su centro cae fuera del polígono de la ROI (EPSG:4326 transformado a la proyección del
+        producto, UTM).
+\end{enumerate}
+Todavía \textbf{no} se aplican máscaras de sombra, \emph{layover} ni pendiente con DEM.
+
+\subsection{Magnitud}
+
+GCOV entrega $\gamma^0$ en potencia lineal, normalizada por el área iluminada calculada con un
+modelo de elevación. Por defecto se usa $\gamma^0$. Opcionalmente (solo en la línea de comandos)
+se usa $\sigma^0 = \gamma^0 \cdot f$, con $f$ = \texttt{rtcGammaToSigmaFactor} del producto. Los
+archivos dicen qué magnitud se usó.
+
+\subsection{Multilook en potencia lineal}
+
+La imagen SAR tiene \emph{speckle}: un ruido granular propio de la medición coherente. Aunque el
+terreno no cambie, dos píxeles vecinos de la misma superficie pueden diferir varios dB. El
+multilook $n\times n$ promedia bloques de píxeles \textbf{en potencia lineal}, nunca en dB:
+\begin{equation}
+  \bar{P}(I,J) = \frac{1}{|V_{IJ}|} \sum_{(i,j)\in V_{IJ}} P(i,j),
+  \qquad
+  |V_{IJ}| \ge 0.5\, n^2 ,
+\end{equation}
+donde $V_{IJ}$ son los píxeles válidos del bloque $(I,J)$. Si el bloque tiene menos de la mitad de
+píxeles válidos, queda en NaN. Los bloques empiezan en la esquina superior izquierda del recorte y
+las filas o columnas sobrantes del borde se descartan. La malla de salida es $n$ veces más gruesa:
+con GCOV de 10\,m, $n=2$ da 20\,m, $n=5$ da 50\,m y $n=10$ da 100\,m.
+
+Promediar dB sería incorrecto: el promedio de logaritmos no es el logaritmo del promedio y sesga el
+resultado hacia valores bajos.
+
+\subsection{Decibeles y diferencia}
+
+\begin{align}
+  \text{dB}_t(x,y) &= 10\,\log_{10} \bar{P}_t(x,y) \qquad (\bar{P}_t \le 0 \Rightarrow \text{NaN}),\\
+  \Delta(x,y) &= \text{dB}_{t_2}(x,y) - \text{dB}_{t_1}(x,y).
+  \label{eq:delta}
+\end{align}
+Si falta cualquiera de las dos fechas, $\Delta$ es NaN. La diferencia de dB equivale al logaritmo
+de la razón de potencias: $\Delta = 10\log_{10}(\bar{P}_{t_2}/\bar{P}_{t_1})$.
+
+\subsection{Puntaje z robusto}
+
+Para describir cada píxel respecto al resto de la propia ROI se usa la mediana y la desviación
+absoluta mediana (MAD), menos sensibles que la media y la desviación estándar a los píxeles que sí
+cambiaron:
+\begin{equation}
+  s = 1.4826\cdot \operatorname{mediana}\bigl(|\Delta - \operatorname{mediana}(\Delta)|\bigr),
+  \qquad
+  z(x,y) = \frac{\Delta(x,y) - \operatorname{mediana}(\Delta)}{s}.
+  \label{eq:z}
+\end{equation}
+El factor 1.4826 hace que $s$ coincida con la desviación estándar si $\Delta$ fuera normal.
+
+\subsection{Clases por umbral fijo}
+
+Con un umbral $u$ en dB:
+\begin{equation}
+  c(x,y) =
+  \begin{cases}
+    -1 & \Delta \le -u \quad\text{(baja la señal)}\\
+    \phantom{-}0 & |\Delta| < u \quad\text{(estable)}\\
+    +1 & \Delta \ge u \quad\text{(sube la señal)}
+  \end{cases}
+  \qquad (-128 \text{ sin dato}).
+\end{equation}
+El umbral solo decide qué píxeles entran en las cifras de área y en el GeoTIFF de clases. El mapa
+de color muestra $\Delta$ continuo con la escala fija $\pm 6$\,dB, que no depende del umbral.
+
+\subsection{Métricas}
+
+Por polarización, sobre los píxeles válidos de la ROI: número de píxeles y área válida; media,
+mediana, desviación estándar, MAD robusta y percentiles 2 y 98 de $\Delta$; área y porcentaje que
+baja, sube o queda estable. El área de un píxel es $|a\cdot e|$ de la transformación afín (por
+ejemplo, $50\times 50$\,m $= 0.0025$\,km$^2$).
+
+\section{Umbral fijo y ruido de cada ROI}
+\label{sec:ruido}
+
+\subsection{El problema}
+
+Con el mismo umbral en dB, una ROI más ruidosa marca más falsas alarmas. El ruido depende del
+terreno (bosque, ciudad, agua, relieve), del par de fechas, del intervalo entre ellas y de la
+resolución. En las ROIs dibujadas y guardadas al 18 de noviembre de 2026, el ruido $s$ del $\Delta$ HH
+a 20\,m va de 1.09 a 1.53\,dB: el mismo umbral de 3\,dB equivale a entre 2.0 y 2.8 veces el ruido
+según la ROI.
+
+\subsection{Decisión}
+
+Se probaron dos alternativas:
+\begin{itemize}
+  \item \textbf{Umbral relativo} ($|z|>3$): se adapta a cada ROI, pero el mismo criterio equivale a
+        distintos dB en cada una, de modo que las cifras no se pueden comparar entre ROIs. Además, si
+        un cambio real cubre gran parte de la ROI, infla $s$ y se diluye.
+  \item \textbf{Umbral fijo en dB}: mide lo mismo en todas partes y es fácil de explicar, pero no
+        dice cuándo está cerca del ruido.
+\end{itemize}
+Se eligió el \textbf{umbral fijo en dB como control} y se agrega, para cada ROI y polarización, un
+\emph{ruido de referencia}:
+\begin{align}
+  \texttt{ruido\_dB} &= s \quad\text{(ecuación~\ref{eq:z})},\\
+  \texttt{umbral\_sobre\_ruido} &= u / s,\\
+  \texttt{umbral\_cerca\_del\_ruido} &= \bigl[\, u < 3\,s \,\bigr],\\
+  \texttt{pct\_abs\_z\_mayor\_3} &= 100 \cdot \frac{\#\{|z|>3\}}{\#\{\text{válidos}\}}.
+\end{align}
+Si $u < 3s$, el manifiesto agrega una advertencia y la web muestra un aviso: parte de lo marcado
+puede ser speckle, y conviene aumentar el multilook o el umbral. Estas cifras son una
+\emph{referencia} de confiabilidad, no una exactitud.
+
+\subsection{Efecto del multilook sobre el ruido}
+
+Promediar $N$ muestras independientes reduce la varianza de la intensidad en un factor $N$. Los
+píxeles de GCOV ya vienen promediados y están correlacionados entre vecinos, así que la reducción
+real es menor que $1/\sqrt{N}$. En la ROI de prueba (tabla~\ref{tab:roi}), pasar de $2\times 2$ a
+$5\times 5$ (6.25 veces más píxeles) bajó $s$ de 1.53 a 0.70\,dB, un factor de 2.2 frente al 2.5
+que daría la raíz. Pasar a $10\times 10$ (25 veces) lo bajó a 0.39\,dB, un factor de 3.9 frente a 5. El
+precio es la resolución: a 50\,m se pierden objetos de menos de unos 50\,m (caminos, casas
+aisladas, ríos angostos).
+
+\section{Implementación}
+
+\subsection{Módulos}
+
+\begin{longtable}{>{\raggedright}p{4.4cm} p{10.6cm}}
+\toprule
+Archivo & Función \\
+\midrule
+\endhead
+\path{pipeline/preprocess.py} & Lee un recorte C1 (\path{data/raw/<scene_id>/}), aplica la máscara del producto y el polígono, multilook lineal y dB. \\
+\path{pipeline/change.py} & $\Delta$, z robusto, clases, métricas, ruido de referencia, GeoTIFF y capas web. Entradas: recortes C1 (\texttt{run}), COG en dB (\texttt{change\_from\_db\_cogs}) o potencia lineal (\texttt{change\_from\_linear\_cogs}). \\
+\path{pipeline/roi_explore.py} & Para una ROI dibujada: elige el par, llama a \texttt{etapa1} por fecha y calcula el cambio (\texttt{build\_change}); recalcula con otro multilook o umbral (\texttt{recompute\_change}) y limpia la caché. \\
+\path{backend/scenes/roi_views.py} & Endpoints \texttt{/api/roi-jobs}; \texttt{RoiChange} recibe el recálculo. \\
+\path{web/src/utils/changeLayer.ts} & Tipos del manifiesto, capa y métricas según la polarización elegida, resolución en metros y resumen de ruido. \\
+\path{web/src/hooks/useRoiLayers.ts} & Carga la ROI y expone \texttt{recomputeChange}. \\
+\path{web/src/components/ChangeControls.tsx} & Selectores de resolución y umbral, ruido de la ROI, $|z|>3$ y aviso. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Caso de estudio fijo (Chiapas)}
+
+Desde la raíz del repositorio, con el par de \path{pipeline/config.yaml}:
+\begin{lstlisting}
+python -m pipeline.change                       # multilook 5, umbral 3 dB, gamma0
+python -m pipeline.change --multilook 5 --umbral 3 --magnitud sigma0
+\end{lstlisting}
+Escribe \path{data/processed/cambio_<producto>_T<tray>_F<marco>_<CRID>_<t1>_<t2>_<magnitud>/}.
+
+\subsection{ROIs dibujadas en la web}
+
+\begin{enumerate}
+  \item \texttt{POST /api/roi-jobs} prepara las capas de cada fecha (\texttt{etapa1}, multilook
+        $2\times 2$ para inspección). \texttt{etapa1} conserva además la potencia lineal enmascarada
+        a la resolución del producto en \path{layers/<granuleId>/geotiff/gamma0_<capa>.tif}.
+  \item Si el par es comparable y la malla coincide, \texttt{build\_change} calcula el cambio desde
+        esa potencia lineal con los valores por defecto: \textbf{multilook $5\times 5$ y umbral
+        $\pm 3$\,dB}. El manifiesto queda en \texttt{result.json} $\rightarrow$ \texttt{change}.
+  \item En la web, el botón \textbf{Cambio $\Delta$} muestra la capa de la polarización elegida (HH o
+        HV). La barra de color incluye los controles de resolución (20 / 50 / 100\,m) y umbral
+        ($\pm$1.5, 2, 2.5, 3, 4, 5, 6\,dB).
+  \item Cada cambio de control llama a
+\begin{lstlisting}
+POST /api/roi-jobs/{id}/change   {"multilook": 10, "umbral_dB": 2}
+\end{lstlisting}
+        que recalcula \textbf{solo} el $\Delta$ a partir de la potencia lineal guardada, sin volver a
+        ASF. Respuestas: 200 con el manifiesto; 400 si los valores no están permitidos o la ROI no
+        tiene par comparable; 409 si la ROI no está lista o esa combinación se está calculando; 404
+        si el trabajo no existe.
+\end{enumerate}
+
+Cada combinación queda en \path{layers/cambio/ml<n>_u<umbral>/} y se reutiliza. Se conservan la de
+por defecto (\texttt{ml5\_u3}) y las cuatro más recientes. Un directorio \texttt{.lock} evita
+calcular dos veces la misma combinación y se libera a los 5 minutos si quedó huérfano. Los valores
+permitidos están acotados para limitar el costo de cada petición y el disco por ROI.
+
+\subsection{Salidas y trazabilidad}
+
+\begin{longtable}{>{\raggedright}p{4.4cm} p{10.6cm}}
+\toprule
+Archivo & Contenido \\
+\midrule
+\endhead
+\path{delta_<pol>_dB.tif} & $\Delta$ en dB (float32, NaN sin dato), en la malla UTM tras el multilook. \\
+\path{zscore_<pol>.tif} & $z$ robusto. \\
+\path{cambio_<pol>.tif} & Clases $-1/0/+1$ ($-128$ sin dato). \\
+\path{change.json} & Escenas, parámetros (magnitud, fórmula, máscara, multilook y método, tamaño de píxel, umbral, definición de z y del ruido), métricas por polarización, rutas, advertencias y versión del código. \\
+\path{web/} & COG y PNG en EPSG:3857 (paleta azul--blanco--rojo, $\pm 6$\,dB) y \path{capas.json}. \\
+\bottomrule
+\end{longtable}
+Los PNG son solo para ver. \textbf{Nunca se calculan diferencias sobre ellos}: los valores están en
+los GeoTIFF y COG.
+
+\section{Resultados con datos reales}
+
+\subsection{Caso de estudio: Chiapas}
+
+Par T62/F10 ascendente, P05023 PROVISIONAL, 2026-06-18 $\rightarrow$ 2026-10-16 (120 días), ROI de
+\S4 de \path{AGENTS.md}. $\gamma^0$, multilook $5\times 5$ (50\,m), umbral $\pm 3$\,dB. Cifras de
+\path{data/processed/cambio_GCOV_T062_F010_P05023_20260618_20261016_gamma0/change.json}, generado con
+la versión \texttt{change-1} antes de agregar el ruido de referencia. La razón $u/s$ y el
+porcentaje con $|z|>3$ se calcularon a partir de ese mismo archivo.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrr}
+\toprule
+ & HH & HV \\
+\midrule
+Área válida & 1469.2\,km$^2$ & 1469.2\,km$^2$ \\
+Mediana de $\Delta$ & $+0.21$\,dB & $+0.24$\,dB \\
+Ruido $s$ (1.4826\,MAD) & 0.91\,dB & 0.91\,dB \\
+$u/s$ & 3.3 & 3.3 \\
+Baja $\ge 3$\,dB & 6.73\,km$^2$ (0.46\,\%) & 3.33\,km$^2$ (0.23\,\%) \\
+Sube $\ge 3$\,dB & 27.34\,km$^2$ (1.86\,\%) & 32.83\,km$^2$ (2.24\,\%) \\
+Estable & 97.68\,\% & 97.54\,\% \\
+$|z|>3$ & 2.71\,\% & 2.71\,\% \\
+\bottomrule
+\end{tabular}
+\caption{Mapa de cambio de Chiapas (exploratorio).}
+\end{table}
+
+\textbf{Observación:} en ambas polarizaciones, el área que sube es varias veces mayor que la que
+baja (unas 4 veces en HH y 10 en HV), y la mediana de $\Delta$ es positiva. El speckle tiende a
+repartirse por igual hacia arriba y hacia abajo, así que esa asimetría es \emph{compatible} con un
+cambio real de la respuesta radar, aunque no lo demuestra. El método
+\textbf{no} permite decir a qué se debe. El intervalo de junio a octubre abarca la temporada de lluvias,
+pero atribuirle el cambio sería una inferencia que requiere validación (por ejemplo, con GPM IMERG o
+HLS).
+
+\subsection{ROI dibujada: recálculo con distinta resolución}
+
+ROI de 9.3\,km$^2$ cerca de Tuxtla Gutiérrez (trabajo \texttt{574924\dots}). Par T62/F10
+ascendente, P05036, 2026-10-28 $\rightarrow$ 2026-11-09 (12 días), elegido por
+\texttt{select\_scenes} como el par comparable más reciente.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrrrc}
+\toprule
+Resolución & Umbral & Pol. & Ruido $s$ & $u/s$ & Baja / sube & Aviso \\
+\midrule
+20\,m ($2\times2$)   & 3\,dB   & HH & 1.53\,dB & 2.0 & 2.96 / 2.88\,\% & sí \\
+                    &         & HV & 1.61\,dB & 1.9 & 3.65 / 3.34\,\% & sí \\
+50\,m ($5\times5$)   & 3\,dB   & HH & 0.70\,dB & 4.3 & 0.00 / 0.03\,\% & no \\
+                    &         & HV & 0.74\,dB & 4.1 & 0.03 / 0.00\,\% & no \\
+100\,m ($10\times10$) & 3\,dB  & HH & 0.39\,dB & 7.7 & 0.00 / 0.00\,\% & no \\
+                    &         & HV & 0.40\,dB & 7.5 & 0.00 / 0.00\,\% & no \\
+50\,m ($5\times5$)   & 1.5\,dB & HH & 0.70\,dB & 2.2 & 2.06 / 1.90\,\% & sí \\
+                    &         & HV & 0.74\,dB & 2.0 & 2.94 / 2.30\,\% & sí \\
+\bottomrule
+\end{tabular}
+\caption{Misma ROI y mismo par con distintas combinaciones de multilook y umbral.}
+\label{tab:roi}
+\end{table}
+
+\textbf{Lectura:} a 20\,m con $\pm 3$\,dB se marca cerca del 3\,\% de la ROI en cada sentido, con
+porcentajes casi iguales de subida y bajada. Esa es la huella del speckle, y el sistema lo señala
+con el aviso. A 50\,m lo marcado prácticamente desaparece. Bajar el umbral a 1.5\,dB a 50\,m vuelve a
+acercarlo al ruido, y el aviso reaparece. Cada recálculo tardó entre 0.1 y 1.5\,s, y una combinación
+repetida se sirvió de la caché.
+
+\textbf{Verificación:} a 20\,m, el $\Delta$ calculado desde la potencia lineal es idéntico bit a bit
+al calculado antes desde los COG en dB de \texttt{etapa1} (misma malla, 23\,175 píxeles válidos,
+diferencia máxima 0.0\,dB).
+
+\section{Limitaciones y advertencias}
+
+\begin{itemize}
+  \item \textbf{Exploratorio:} sin validación independiente (paso~6 del plan). No se reporta exactitud.
+  \item \textbf{Sin causa:} un $\Delta$ describe la respuesta del radar, no su origen físico.
+  \item \textbf{Sin máscara topográfica:} no se excluyen sombra, \emph{layover} ni pendientes fuertes.
+  \item \textbf{Madurez:} los productos PROVISIONAL están calibrados y parcialmente validados, no
+        completamente validados.
+  \item \textbf{Ruido de referencia:} $s$ se calcula sobre toda la ROI. Si un cambio real cubre una
+        fracción grande de ella, $s$ crece y la referencia se vuelve conservadora.
+  \item \textbf{Comparación entre ROIs:} las cifras en km$^2$ con el mismo umbral son comparables en
+        dB, pero no en confiabilidad. Hay que leerlas junto con $s$ y $u/s$.
+  \item \textbf{Escala de color:} fija en $\pm 6$\,dB; los valores fuera de ese rango se saturan en el
+        PNG, pero no en los GeoTIFF.
+\end{itemize}
+
+\section{Pruebas}
+
+\begin{itemize}
+  \item \path{pipeline/tests/test_change.py}: diferencia y propagación de NaN, z robusto, clases,
+        áreas, malla distinta, multilook en potencia lineal antes del dB, ruido de referencia y
+        advertencia cuando el umbral está cerca del ruido (datos sintéticos).
+  \item \path{pipeline/tests/test_roi_explore.py}: cambio por defecto a $5\times5$ y $\pm3$\,dB,
+        recálculo con otra combinación, caché, validación de valores y limpieza de la caché.
+  \item \path{pipeline/tests/test_roi_http.py}: endpoint de recálculo (200, 400, 404, 409) y URLs de
+        los archivos.
+  \item \path{web/tests/changeLayer.test.mjs}: capa y métricas por polarización, resolución en
+        metros, opciones y resumen de ruido.
+\end{itemize}
+Las pruebas con datos sintéticos verifican el código, no la calidad del resultado sobre el terreno.
+
+\end{document}

@@ -411,7 +411,8 @@ export type ExploreLayerId =
   | 'sigma0_HHHH_ml2_dB'
   | 'sigma0_HVHV_ml2_dB'
 
-export type ExploreDateViewMode = 't1' | 't2' | 'swipe'
+/** `change`: mapa de cambio t2 − t1 de la ROI (solo con par comparable). */
+export type ExploreDateViewMode = 't1' | 't2' | 'swipe' | 'change'
 
 export interface ExploreLayerEntry {
   id: ExploreLayerId
@@ -624,7 +625,7 @@ export function createInitialCopies(now: number = Date.now()): WorkspaceMap[] {
   ]
 }
 
-export type CenterDockTab = 'map' | 'rain-dg2' | 'seismic'
+export type CenterDockTab = 'map' | 'rain-dg2' | 'seismic' | 'solar'
 
 
 /**

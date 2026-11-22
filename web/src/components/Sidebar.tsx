@@ -22,12 +22,14 @@ import {
   type Carpeta,
   type WorkspaceMap,
 } from '../types/workspace'
-import { RoiChartsSection } from './RoiChartsSection'
+import { RoiDetailsModal } from './RoiDetailsModal'
 import { formatRelative } from '../utils/time'
 import { useTranslation } from '../i18n/useTranslation'
 import { LocationSearch } from './LocationSearch'
 import { GcovCatalog } from './GcovCatalog'
+import type { GcovSearchScene } from '../api/client'
 import { RoiCatalogSection } from './RoiCatalogSection'
+import { PRESET_ROI_CATALOG } from '../utils/roiCatalog'
 import type { CatalogRoiPreset } from '../utils/roiCatalog'
 import type { AdministrativeGeometry, EffectiveRoiMetadata, RoiGeometry } from '../utils/roi'
 import type { ToastKind } from './Toast'
@@ -48,6 +50,7 @@ interface SidebarProps {
   onDrawLocationROI: () => void
   onGcovFootprint: (feature: unknown | null) => void
   confirmedROI: unknown | null
+  confirmedRoiMetadata?: EffectiveRoiMetadata | null
   onNotify: (kind: ToastKind, text: string) => void
   onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { withHeatmap?: boolean; simulation?: 'flood' | 'solar' | 'seismic' }) => void
   onOpenSimulation?: (mode: 'flood' | 'solar' | 'seismic', preset?: CatalogRoiPreset) => void
@@ -86,7 +89,7 @@ export function Sidebar({
   onSelectMap,
   onRenameMap,
   onDeleteMap,
-  onLocationPreview, onConfirmLocationROI, onDrawLocationROI, onGcovFootprint, confirmedROI, onNotify,
+  onLocationPreview, onConfirmLocationROI, onDrawLocationROI, onGcovFootprint, confirmedROI, confirmedRoiMetadata, onNotify,
   onSelectPresetROI, onOpenSimulation,
 }: SidebarProps) {
   const { t, localizeText } = useTranslation()
@@ -98,17 +101,24 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [openNodes, setOpenNodes] = useState<{
-    roiCatalog: boolean
+    selectRoi: boolean
+    catalog: boolean
     locationSearch: boolean
-    gcovCatalog: boolean
     savedMaps: boolean
   }>({
-    roiCatalog: true,
+    selectRoi: true,
+    catalog: true,
     locationSearch: false,
-    gcovCatalog: false,
     savedMaps: true,
   })
   const now = useNow(30_000)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [changingRoi, setChangingRoi] = useState(false)
+  const [catalogDetails, setCatalogDetails] = useState<{ key: string; scenes: GcovSearchScene[]; selectedId: string | null }>({ key: '', scenes: [], selectedId: null })
+  const gcovRoiKey = `${activeMapId ?? 'general'}:${JSON.stringify(confirmedROI)}`
+  const selectedPreset = PRESET_ROI_CATALOG.find(preset =>
+    preset.name === confirmedRoiMetadata?.name &&
+    confirmedRoiMetadata?.source === `catalog:${preset.countryCode.toLowerCase()}:${preset.state.toLowerCase()}`)
 
   useEffect(() => {
     try {
@@ -214,30 +224,30 @@ export function Sidebar({
         </div>
 
         <div className="tree-node">
-          <button type="button" className="tree-node__header" onClick={() => toggleNode('roiCatalog')} aria-expanded={openNodes.roiCatalog}>
-            <span className="tree-node__caret">{openNodes.roiCatalog ? '▾' : '▸'}</span>
-            <span className="tree-node__title">
-              {t('Catálogo de ROIs de México (32 Estados)', 'Mexico ROI Catalog (32 States)')}
-            </span>
+          <button type="button" className="tree-node__header" onClick={() => toggleNode('selectRoi')} aria-expanded={openNodes.selectRoi}>
+            <span className="tree-node__caret">{openNodes.selectRoi ? '▾' : '▸'}</span><span className="tree-node__title">{t('Seleccionar ROI', 'Select ROI')}</span>
           </button>
-          {openNodes.roiCatalog && (
-            <div className="tree-node__body">
-              <RoiCatalogSection
-                onSelectPreset={(preset, opts) => onSelectPresetROI?.(preset, opts)}
-                onOpenSimulation={onOpenSimulation}
-              />
+          <div hidden={!openNodes.selectRoi}>
+          {Boolean(confirmedROI) && <section className="roi-selection-summary" aria-label={t('ROI seleccionada', 'Selected ROI')}>
+            <span>{t('ROI seleccionada', 'Selected ROI')}</span>
+            <strong>{confirmedRoiMetadata?.name || t('Región de análisis', 'Analysis region')}</strong>
+            {selectedPreset ? <small>{selectedPreset.state}, {selectedPreset.country}</small> : confirmedRoiMetadata && <small>{confirmedRoiMetadata.center[1].toFixed(3)}, {confirmedRoiMetadata.center[0].toFixed(3)}</small>}
+            <div className="roi-selection-summary__actions"><button type="button" className="btn btn--sm" onClick={() => setDetailsOpen(true)}>{t('Ver detalles', 'View details')}</button><button type="button" className="btn btn--sm" onClick={() => { setChangingRoi(true); setOpenNodes(prev => ({ ...prev, selectRoi: true })) }}>{t('Cambiar ROI', 'Change ROI')}</button></div>
+          </section>}
+          {(!confirmedROI || changingRoi) && <div className="tree-node__body">
+            <div role="group" aria-label={t('Método de selección de ROI', 'ROI selection method')}>
+              <div className="roi-selection-methods">
+                <button type="button" className="btn btn--sm" aria-expanded={openNodes.catalog} onClick={() => toggleNode('catalog')}>{t('Explorar catálogos', 'Browse catalogs')}</button>
+                <button type="button" className="btn btn--sm" aria-expanded={openNodes.locationSearch} onClick={() => toggleNode('locationSearch')}>{t('Buscar ubicación', 'Search location')}</button>
+              </div>
+              {openNodes.catalog && <RoiCatalogSection onSelectPreset={(preset, opts) => { onSelectPresetROI?.(preset, opts); setChangingRoi(false) }} onOpenSimulation={onOpenSimulation} />}
+              {openNodes.locationSearch && <LocationSearch onPreview={onLocationPreview} onConfirmROI={(geometry, metadata) => { const accepted = onConfirmLocationROI(geometry, metadata); if (accepted !== false) setChangingRoi(false); return accepted }} onDrawROI={onDrawLocationROI} onNotify={onNotify} />}
             </div>
-          )}
+          </div>}
+          {Boolean(confirmedROI) && <div className="tree-node__body"><h3>{t('Catálogo GCOV · ASF', 'GCOV catalog · ASF')}</h3><GcovCatalog key={gcovRoiKey} roi={confirmedROI} start={gcovStart} end={gcovEnd} onStartChange={setGcovStart} onEndChange={setGcovEnd} onFootprint={onGcovFootprint} onNotify={onNotify} onScenesChange={scenes => setCatalogDetails(previous => ({ key: gcovRoiKey, scenes, selectedId: previous.key === gcovRoiKey && scenes.some(scene => scene.scene_id === previous.selectedId) ? previous.selectedId : null }))} onSceneSelect={selectedId => setCatalogDetails(previous => previous.key === gcovRoiKey ? { ...previous, selectedId } : previous)} /><button type="button" className="link-btn" onClick={() => onGcovFootprint(null)}>{t('Limpiar huella seleccionada', 'Clear selected footprint')}</button></div>}
+          </div>
         </div>
-
-        <div className="tree-node">
-          <button type="button" className="tree-node__header" onClick={() => toggleNode('locationSearch')} aria-expanded={openNodes.locationSearch}><span className="tree-node__caret">{openNodes.locationSearch ? '▾' : '▸'}</span><span className="tree-node__title">{t('Buscar ubicación', 'Search location')}</span></button>
-          {openNodes.locationSearch && <div className="tree-node__body"><LocationSearch key={activeMapId ?? 'general'} onPreview={onLocationPreview} onConfirmROI={onConfirmLocationROI} onDrawROI={onDrawLocationROI} onNotify={onNotify} /></div>}
-        </div>
-        <div className="tree-node">
-          <button type="button" className="tree-node__header" onClick={() => toggleNode('gcovCatalog')} aria-expanded={openNodes.gcovCatalog}><span className="tree-node__caret">{openNodes.gcovCatalog ? '▾' : '▸'}</span><span className="tree-node__title">{t('Catálogo GCOV · ASF', 'GCOV catalog · ASF')}</span></button>
-          {openNodes.gcovCatalog && <div className="tree-node__body"><GcovCatalog key={`${activeMapId ?? 'general'}:${JSON.stringify(confirmedROI)}`} roi={confirmedROI} start={gcovStart} end={gcovEnd} onStartChange={setGcovStart} onEndChange={setGcovEnd} onFootprint={onGcovFootprint} onNotify={onNotify} /><button type="button" className="link-btn" onClick={() => onGcovFootprint(null)}>{t('Limpiar huella seleccionada', 'Clear selected footprint')}</button></div>}
-        </div>
+        {detailsOpen && <RoiDetailsModal key={gcovRoiKey} roiLayers={roiLayers} roi={confirmedROI} metadata={confirmedRoiMetadata} catalogScenes={catalogDetails.key === gcovRoiKey ? catalogDetails.scenes : []} selectedCatalogSceneId={catalogDetails.key === gcovRoiKey ? catalogDetails.selectedId : null} onClose={() => setDetailsOpen(false)} />}
 
         {/* Nodo 1: Mis Mapas Guardados */}
         <div className="tree-node">
@@ -374,37 +384,6 @@ export function Sidebar({
               </ul>
             </div>
           )}
-        </div>
-
-        {roiLayers ? <section className="roi-scene-details" aria-label={t('Resultados de la ROI delimitada', 'Results for the delineated ROI')}>
-          <h3>{t('Escenas de la ROI seleccionada', 'Scenes for the selected ROI')}</h3>
-          <p role="status">{localizeText(roiLayers.error || roiLayers.message)}</p>
-          {roiLayers.manifests.map((manifest, i) => <article key={manifest.escena.granuleId}>
-            <h4>t{i + 1}: {manifest.escena.fecha_inicio.slice(0, 10)}</h4>
-            <p>{t('Trayectoria', 'Track')} {manifest.escena.trayectoria}/{t('Marco', 'Frame')} {manifest.escena.marco} · {manifest.escena.direccion === 'ASCENDING' ? t('Ascendente', 'Ascending') : manifest.escena.direccion === 'DESCENDING' ? t('Descendente', 'Descending') : manifest.escena.direccion}</p>
-            <p>{manifest.escena.crid} · {manifest.escena.madurez_catalogo ?? localizeText('Madurez desconocida')}</p>
-            <p>{t('Polarizaciones:', 'Polarizations:')} {manifest.escena.polarizaciones.join(', ')}</p>
-            <code>{manifest.escena.granuleId}</code>
-            {manifest.capas.map(layer => <p key={layer.id}>
-              {layer.simbolo} {layer.capa}: {layer.pct_pixeles_validos.toFixed(2)}% {t('de píxeles válidos en el recorte', 'valid pixels in the crop')} · {layer.pixel_m} m
-            </p>)}
-          </article>)}
-          {roiLayers.manifests.length > 0 && <><h3>{t('Gráficas NISAR de la ROI', 'NISAR ROI charts')}</h3>
-            <RoiChartsSection roiLayers={roiLayers} compact /></>}
-        </section> : <p className="roi-empty-state" role="status">{t('Sin datos calculados para una ROI todavía. Delimitá y confirmá una región para iniciar el análisis.', 'No calculated data for a region of interest yet. Delineate and confirm a region to start the analysis.')}</p>}
-      </div>
-
-      <div className="sidebar__footer">
-        <div className="sidebar-trace-box" aria-label={t('Metadatos de trazabilidad NISAR', 'NISAR provenance metadata')}>
-          <div className="sidebar-trace-box__line">
-            {roiLayers ? t('ROI del usuario · inspección exploratoria', 'User-defined ROI · exploratory inspection') : localizeText('Sin datos calculados para una ROI todavía.')}
-          </div>
-          <div
-            className="sidebar-trace-box__badge"
-            title={t('data/processed/ aún está vacío a la espera de preprocess.py y change.py (Rol P2).', 'data/processed/ is still empty pending preprocess.py and change.py (Role P2).')}
-          >
-            {t('⚠️ Etapa 1 (Inspección GCOV γ⁰/σ⁰ dB) · Δσ⁰ pendiente de Contrato C2', '⚠️ Stage 1 (GCOV γ⁰/σ⁰ dB inspection) · Δσ⁰ pending Contract C2')}
-          </div>
         </div>
       </div>
 

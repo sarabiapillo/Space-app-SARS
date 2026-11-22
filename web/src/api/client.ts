@@ -70,10 +70,10 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { Accept: 'application/json', ...(unsafe ? csrfHeaders() : {}), ...(init?.headers ?? {}) } })
   const body = await response.json().catch(() => ({})) as Record<string, unknown>
   if (!response.ok) {
-    const detail = ['detail', 'query', 'radius_km', 'place_id', 'geometry', 'q', 'roi', 'scene_id']
+    const detail = ['detail', 'error', 'query', 'radius_km', 'place_id', 'geometry', 'q', 'roi', 'scene_id']
       .map(key => body?.[key])
       .find(value => (typeof value === 'string' && value.length > 0) || (Array.isArray(value) && typeof value[0] === 'string' && value[0].length > 0))
-    const message = Array.isArray(detail) ? detail[0] : detail
+    const message = Array.isArray(body) && typeof body[0] === 'string' ? body[0] : Array.isArray(detail) ? detail[0] : detail
     throw new Error(typeof message === 'string' ? localizeText(message) : `Error HTTP ${response.status}`)
   }
   return body as T
@@ -333,29 +333,68 @@ export interface SolarSimulationRequest {
     type: 'Polygon' | 'MultiPolygon'
     coordinates: number[][][] | number[][][][]
   }
-  datetime_local: string
-  timezone: string
-  intensity_percent: number
-  temperature_c?: number
-  pressure_hpa?: number
+  elevation_deg?: number
+  azimuth_deg?: number
+  intensity_percent?: number
+}
+
+export interface SolarAnalysisResponse {
+  units: 'W/m2'
+  valid_cells: number
+  resolution: number[]
+  statistics: { min: number | null; max: number | null; mean: number | null; median: number | null }
+  histogram: { bin_edges: number[]; counts: number[] }
+}
+
+export interface SolarHistogramBar { start: number; end: number; count: number }
+
+export function histogramBars(histogram: SolarAnalysisResponse['histogram']): SolarHistogramBar[] {
+  const { bin_edges, counts } = histogram
+  if (bin_edges.length !== counts.length + 1 || !bin_edges.every(Number.isFinite) ||
+      !counts.every(count => Number.isSafeInteger(count) && count >= 0) ||
+      bin_edges.some((edge, index) => index > 0 && edge < bin_edges[index - 1])) {
+    throw new Error('Invalid solar histogram data')
+  }
+  return counts.map((count, index) => ({ start: bin_edges[index], end: bin_edges[index + 1], count }))
+}
+
+export async function getSolarAnalysis(runId: string): Promise<SolarAnalysisResponse> {
+  return apiJson(`/api/solar/simulations/${encodeURIComponent(runId)}/analysis`)
+}
+
+export interface SolarContoursResponse {
+  type: 'FeatureCollection'
+  features: Array<{ type: 'Feature'; geometry: unknown; properties: Record<string, unknown> }>
+}
+
+export async function getSolarContours(runId: string, contoursUrl?: string): Promise<SolarContoursResponse> {
+  return apiJson(contoursUrl ?? `/api/solar/simulations/${encodeURIComponent(runId)}/contours`)
+}
+
+export interface SolarSampleResponse { value_w_m2: number | null; status: 'valid' | 'nodata' | 'outside_coverage' }
+
+export async function getSolarSample(url: string, lon: number, lat: number): Promise<SolarSampleResponse> {
+  return apiJson(`${url}?${new URLSearchParams({ lon: String(lon), lat: String(lat) })}`)
 }
 
 export interface SolarSimulationResponse {
+  request?: SolarSimulationRequest
   id: string
   status: string
   model: string
   units: string
   position: {
-    azimuth_deg: number
-    apparent_elevation_deg: number
-    geometric_elevation_deg: number
+    azimuth_deg?: number
+    elevation_deg?: number
+    apparent_elevation_deg?: number
+    geometric_elevation_deg?: number
     altitude_m: number
     altitude_datum: string
     pressure_hpa: number
     pressure_provenance: string
     temperature_c: number
-    datetime_local: string
-    timezone: string
+    datetime_local?: string
+    timezone?: string
   }
   clear_sky: {
     dni_clear_sky_w_m2: number
@@ -367,6 +406,7 @@ export interface SolarSimulationResponse {
     incident: {
       preview_url: string
       export_url: string
+      contours_url?: string
     }
   }
   preview?: {
@@ -382,6 +422,11 @@ export interface SolarSimulationResponse {
 export async function runSolarSimulation(
   req: SolarSimulationRequest
 ): Promise<SolarSimulationResponse> {
+  const elevation = req.elevation_deg ?? 45
+  const azimuth = req.azimuth_deg ?? 180
+  if (!Number.isFinite(elevation) || elevation < 0 || elevation > 90) throw new RangeError('Solar elevation must be between 0 and 90 degrees')
+  if (!Number.isFinite(azimuth) || azimuth < 0 || azimuth > 360) throw new RangeError('Solar azimuth must be between 0 and 360 degrees')
+  if (req.intensity_percent !== undefined && (!Number.isFinite(req.intensity_percent) || req.intensity_percent < 0 || req.intensity_percent > 100)) throw new RangeError('Solar intensity must be between 0 and 100 percent')
   const res = await fetch('/api/solar/simulations', {
     method: 'POST',
     headers: {
@@ -389,11 +434,12 @@ export async function runSolarSimulation(
       Accept: 'application/json',
       ...csrfHeaders(),
     },
-    body: JSON.stringify(req),
+    body: JSON.stringify({ ...req, elevation_deg: elevation, azimuth_deg: azimuth }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `Error HTTP ${res.status}` }))
-    throw new Error(err.error || `Error HTTP ${res.status}`)
+    const detail = typeof err.detail === 'string' ? err.detail : Array.isArray(err.detail) ? err.detail[0] : undefined
+    throw new Error(res.status === 400 ? `HTTP 400: ${err.error || detail || 'Solicitud solar no válida'}` : err.error || detail || `Error HTTP ${res.status}`)
   }
   return res.json()
 }

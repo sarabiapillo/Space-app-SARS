@@ -1,5 +1,6 @@
 import type { GeoJSONFeatureCollection } from '../utils/geojson'
 import type { EffectiveRoiMetadata, RoiGeometry } from '../utils/roi'
+import type { SolarAnalysisResponse, SolarContoursResponse, SolarSimulationResponse } from '../api/client'
 
 /**
  * Tipos del espacio de trabajo de mapas de TerraPulse AI.
@@ -20,7 +21,7 @@ export type Footprint = [LngLat, LngLat, LngLat, LngLat]
 export type ViewMode = 'general' | 'editado'
 
 /** Tipo de ventana acoplable del área central. */
-export type DockWindowKind = 'map' | 'agua' | 'sismo'
+export type DockWindowKind = 'map' | 'agua' | 'sismo' | 'solar'
 
 /** Ventana acoplable del área central (pestaña de mapa o de agua/DG2). */
 export interface DockWindow {
@@ -58,8 +59,16 @@ export type MapAnnotation =
 export interface SolarSimulationState {
   /** Si el panel y el efecto térmico están visibles/activos. */
   enabled: boolean
-  /** Ángulo solar de 0° (06:00 Este) a 180° (18:00 Oeste). 90° = 12:00. */
+  /** Parámetros de geometría solar idealizada; azimut desde norte en sentido horario. */
+  elevationDeg?: number
+  azimuthDeg?: number
+  /** Compatibilidad con mapas históricos: posición angular ilustrativa anterior. */
   sunAngle: number
+  /** Resultado asociado a esta copia para restaurarlo al cambiar de pestaña. */
+  simulationResult?: SolarSimulationResponse | null
+  analysisResult?: SolarAnalysisResponse | null
+  contours?: SolarContoursResponse | null
+  showContours?: boolean
   /** Intensidad de calor / radiación proyectada (0 a 100%). */
   radiationIntensity: number
   /** ID de la zona o ROI seleccionada (ej. 'sumidero', 'chicoasen', 'tuxtla', 'sancristobal', 'custom_roi', 'current_view'). */
@@ -70,6 +79,8 @@ export interface SolarSimulationState {
   rasterBounds?: [number, number, number, number] | null
   /** Si se debe superponer la capa ráster calculada sobre el mapa. */
   showRasterOnMap?: boolean
+  /** Opacidad de la capa solar independiente por copia (0–100). */
+  layerOpacity?: number
   /** Radio de la zona de cálculo alrededor del centro elegido, en km (1 a 10). */
   radiusKm?: number
   /** Escala de color del mapa de calor: estirada a esta simulación o absoluta (0 a DNI). */
@@ -138,6 +149,24 @@ export interface SeismicSimulationState {
   name: string
   mechanism: 'subduction' | 'intraplate' | 'crustal'
   soilType: 'rock' | 'intermediate' | 'soft_lacustrine'
+  /** Vs30 (m/s) del escenario; si falta, el representativo de soilType. */
+  vs30?: number
+  /** Estación receptora del sismograma, elegida con un clic en el mapa. */
+  station?: LngLat | null
+  /** Vs30 (m/s) de la estación; si falta, el del escenario. */
+  stationVs30?: number | null
+  /** Mientras es true, el siguiente clic en el mapa coloca la estación. */
+  pickingStation?: boolean
+  /** Mientras es true, el siguiente clic en el mapa coloca el epicentro (sin depender de la herramienta). */
+  pickingEpicenter?: boolean
+  /** true tras pulsar "Ejecutar simulación": solo entonces se muestran resultados, gráficas y anillos. */
+  simulated?: boolean
+  /** true si el sistema lo colocó en la región del mapa y el usuario aún no lo ha editado. */
+  autoPlaced?: boolean
+  /** Animación de los frentes de onda P y S en el mapa (solo con la simulación ejecutada). */
+  animatingWaves?: boolean
+  /** Velocidad de la animación: segundos simulados por segundo real (p. ej. 20). */
+  waveAnimationSpeed?: number
 }
 
 /** Configuración de la Simulación de Inundación y Encharcamientos guardada por mapa. */

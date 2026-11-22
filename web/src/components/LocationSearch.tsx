@@ -89,6 +89,7 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
     } finally { if (id === requestId.current) setBusy(false) }
   }
   const lookup = async (searchQuery: string) => {
+    if (!searchQuery.trim()) return
     clearSuggestions()
     invalidate()
     const id = ++requestId.current
@@ -112,7 +113,7 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (activeSuggestion >= 0 && suggestions[activeSuggestion]) selectSuggestion(suggestions[activeSuggestion])
-    else void lookup(query.trim())
+    else if (query.trim()) void lookup(query.trim())
   }
   const onQueryKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') { clearSuggestions(); return }
@@ -139,13 +140,13 @@ export function LocationSearch({ onPreview, onConfirmROI, onDrawROI, onNotify }:
       <div className="geo-search__row"><input id="location-query" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="location-suggestions" aria-activedescendant={activeSuggestion >= 0 ? `location-suggestion-${activeSuggestion}` : undefined} value={query} onKeyDown={onQueryKeyDown} onChange={event => { clearSuggestions(); suppressNextSuggestion.current = false; setQuery(event.target.value); setSearchedQuery(''); setSelected(null); setResults([]); invalidate() }} placeholder={t('Ej. Tuxtla Gutiérrez, Chiapas', 'E.g. Tuxtla Gutiérrez, Chiapas')} maxLength={200} autoComplete="off" /><button className="btn btn--primary" disabled={busy || !query.trim()}>{busy ? t('Buscando…', 'Searching…') : t('Buscar', 'Search')}</button></div>
     </form>
     {suggestions.length > 0 && <ul id="location-suggestions" className="geo-search__results" role="listbox" aria-label={t('Sugerencias de ubicación', 'Location suggestions')}>{suggestions.map((suggestion, index) => <li key={suggestion.query} id={`location-suggestion-${index}`} role="option" aria-selected={activeSuggestion === index}><button type="button" onMouseDown={event => event.preventDefault()} onClick={() => selectSuggestion(suggestion)}>{suggestion.name}</button></li>)}</ul>}
-    {suggestionError && <small role="status">{localizeText(suggestionError)}</small>}
+    {suggestionError && query.trim().length >= 3 && <small className="geo-search__error" role="status">{localizeText(suggestionError)}</small>}
     {visibleResults.length > 0 && <ul className="geo-search__results" aria-label={t('Resultados geográficos', 'Geographic results')}>{visibleResults.map((result) => {
       const label = formatLocationResultLabel(result)
       return <li key={getLocationResultKey(result)}><button type="button" aria-pressed={selected === result} onClick={() => select(result)}><strong>{label.primary}</strong></button></li>
     })}</ul>}
-    {error && <p role="alert">{localizeText(error)}</p>}
-    {!busy && searchedQuery === query.trim() && visibleResults.length === 0 && !error && <p role="status">{t('Sin resultados para “{query}”. Prueba un nombre más específico.', 'No results for “{query}”. Try a more specific name.', { query })}</p>}
+    {error && <small className="geo-search__error" role="alert">{localizeText(error)}</small>}
+    {!busy && Boolean(searchedQuery.trim()) && searchedQuery === query.trim() && visibleResults.length === 0 && !error && <p className="geo-search__error" role="status">{t('Sin resultados para “{query}”. Prueba un nombre más específico.', 'No results for “{query}”. Try a more specific name.', { query })}</p>}
     {selected && <div className="geo-search__selection"><label htmlFor="roi-radius">{t('Radio máximo: {radius} km', 'Maximum radius: {radius} km', { radius })}</label><input id="roi-radius" type="range" min={MIN_LOCATION_RADIUS_KM} max={MAX_LOCATION_RADIUS_KM} step="1" value={radius} onChange={event => updateRadius(Number(event.target.value))} /><div className="geo-search__radius"><span>1 km</span><span>{MAX_LOCATION_RADIUS_KM} km</span></div>{busy && <p role="status">{t('Actualizando región…', 'Updating region…')}</p>}<button type="button" className="btn btn--primary" disabled={busy} onClick={confirm}>{t('Confirmar región de análisis', 'Confirm analysis region')}</button><button type="button" className="link-btn" onClick={onDrawROI}>{t('Dibujar o editar región', 'Draw or edit region')}</button></div>}
     <small>© OpenStreetMap contributors · ODbL 1.0</small>
   </section>

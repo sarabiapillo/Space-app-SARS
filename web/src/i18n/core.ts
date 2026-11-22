@@ -2,6 +2,7 @@ import { shellMessages } from './shellMessages.ts'
 import { mapMessages } from './mapMessages.ts'
 import { chartMessages } from './chartMessages.ts'
 import { simulationMessages } from './simulationMessages.ts'
+import { terrainMessages } from './terrainMessages.ts'
 
 export type Language = 'es' | 'en'
 export type TranslationValues = Record<string, string | number>
@@ -40,7 +41,7 @@ export function translate(es: string, en: string, values: TranslationValues = {}
 /** Curated display-only translations for API messages and scientific labels. */
 export function localizeText(value: string | null | undefined): string {
   if (value == null) return ''
-  const messages: Record<string, string> = { ...shellMessages, ...mapMessages, ...chartMessages, ...simulationMessages }
+  const messages: Record<string, string> = { ...shellMessages, ...mapMessages, ...chartMessages, ...simulationMessages, ...terrainMessages }
   if (Object.hasOwn(messages, value)) return language === 'en' ? messages[value] : value
   for (const [spanish, english] of Object.entries(messages)) {
     const [source, target] = language === 'en' ? [spanish, english] : [english, spanish]

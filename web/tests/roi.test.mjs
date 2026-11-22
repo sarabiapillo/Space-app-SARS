@@ -271,6 +271,16 @@ test('same-name different entities render distinguishable non-technical labels',
   assert.notEqual(getLocationResultKey(city), getLocationResultKey(municipality))
 })
 
+test('ROI timing is reset on a new job and visible after images load', () => {
+  const hook = readFileSync(new URL('../src/hooks/useRoiLayers.ts', import.meta.url), 'utf8')
+  const modal = readFileSync(new URL('../src/components/RoiDetailsModal.tsx', import.meta.url), 'utf8')
+  assert.match(hook, /const started = performance\.now\(\)/)
+  assert.match(hook, /preparationSeconds: Number\(\(\(performance\.now\(\) - started\) \/ 1000\)/)
+  assert.match(hook, /update\(\{ loading: true,[^}]*preparationSeconds: null/)
+  assert.match(modal, /roiLayers\.preparationSeconds/)
+  assert.match(modal, /roiLayers\.timings\.scene_processing_seconds/)
+})
+
 test('axes exceeding 0.6° are rejected before confirm for any generation', () => {
   const tooWide = {
     type: 'Polygon',

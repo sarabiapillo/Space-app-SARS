@@ -1,0 +1,22 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,mexico]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\title{Tiempos de preparación de una ROI}
+\author{TerraPulse AI}
+\date{}
+\begin{document}
+\maketitle
+\section{Objetivo}
+Registrar duraciones de las fases de preparación de una región de interés (ROI) para facilitar su diagnóstico y comparación. Las duraciones no describen desempeño medido en una ejecución real de Acapulco.
+\section{Uso}
+Al consultar \texttt{GET /api/roi-jobs/\{id\}} cuando el trabajo está listo, el objeto \texttt{timings} informa segundos para búsqueda ASF, procesamiento individual por escena, comparación de mallas, copia de gráficas y preparación total en servidor. El campo \texttt{copia.timings.database\_copy\_seconds} informa el tiempo empleado en la copia a base de datos. En el hook \texttt{useRoiLayers}, \texttt{preparationSeconds} mide desde el inicio del POST hasta que las imágenes se cargan. La barra lateral muestra este tiempo y ofrece un desglose desplegable de las fases del servidor; una nueva ROI o un reintento borra las mediciones previas.
+\section{Implementación}
+El servidor usa reloj monotónico y serializa duraciones numéricas. La fase por escena agrupa lectura H5 y exportación: no se reporta un desglose que no se mide. Con dos fechas, cada escena se procesa en un proceso OS independiente (máximo dos); los resultados y sus duraciones conservan el orden seleccionado, aunque los procesos terminen en otro orden. Una sola fecha conserva el flujo existente. El presupuesto compartido de 25 minutos se calcula desde el inicio de \\texttt{prepare} e incluye la búsqueda ASF; si vence antes del lanzamiento, no se inicia ningún hijo. Durante la ejecución se revisan todos los hijos, y ante fallo o vencimiento se detienen y recolectan los pendientes. El margen restante permite limpiar antes del límite de 30 minutos del proceso padre; se comunica un error genérico. El navegador también usa reloj monotónico. Los tiempos se agregan sin alterar los productos científicos ni los estados existentes.
+\section{Limitaciones}
+Los valores dependen del entorno, la ROI, la red y la disponibilidad de servicios. No se incluyen URLs, credenciales ni valores por píxel. El consumo de RAM y el rendimiento de ASF bajo concurrencia en producción no están verificados; no se afirma una mejora de velocidad. La medición real de Acapulco permanece pendiente y no se sustituye por cifras simuladas.
+\section{Verificación}
+En la verificación de la implementación, \texttt{pytest -q pipeline/tests/test\_roi\_explore.py pipeline/tests/test\_roi\_http.py} aprobó 20 pruebas (51 advertencias de Rasterio), incluidas pruebas de orden, limpieza ante fallo y vencimiento, par seleccionado con una entrada adicional en catálogo y ejecución de worker con H5 local en un proceso real. \texttt{node --test web/tests/roi.test.mjs} aprobó 20 pruebas. \texttt{cd web \&\& npm run build} compiló con advertencias de Vite y tamaño de bundle. La ejecución real de ASF/Earthdata, la RAM de producción y la mejora de tiempo no están verificadas; no se afirma una ganancia de rendimiento.
+\end{document}

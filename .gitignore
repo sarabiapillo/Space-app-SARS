@@ -6,6 +6,7 @@
 _netrc
 *.pem
 *.key
+/references
 
 # --- Datos NISAR y resultados (pesados, no van a git) ---
 data/**
@@ -50,3 +51,6 @@ Thumbs.db
 
 # --- Salidas de herramientas ---
 graphify-out/
+
+# Marca de Windows en archivos descargados (aparece como archivo al copiar a WSL)
+*:Zone.Identifier

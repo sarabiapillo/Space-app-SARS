@@ -1,0 +1,28 @@
+# Opt-in overlay; never start or replace other services merely to verify solar.
+services:
+  solar:
+    image: ${SOLAR_IMAGE:?Set the locally verified or GHCR digest-pinned image}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Provide via host environment or private Compose env file}
+      DJANGO_DEBUG: "false"
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?Set trusted hosts}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-}
+      POSTGRES_DB: ${POSTGRES_DB:?Set database name}
+      POSTGRES_USER: ${POSTGRES_USER:?Set database user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set database password}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+    ports:
+      - "127.0.0.1:${SOLAR_PORT:-18080}:8000"
+    volumes:
+      # Existing directories, not image layers or Docker-managed anonymous volumes.
+      - ${SOLAR_NASADEM_HOST_DIR:?Set existing absolute NASADEM cache directory}:/solar-data/nasadem-cache
+      - ${SOLAR_RUNS_HOST_DIR:?Set existing absolute solar runs directory}:/solar-data/solar-runs

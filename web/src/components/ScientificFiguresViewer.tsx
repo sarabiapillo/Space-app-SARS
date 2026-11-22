@@ -8,9 +8,13 @@ import {
   ZoomOut,
   X,
 } from 'lucide-react'
+
 import { RAW_SCENE_IDS } from '../mocks/initialWorkspaces'
 import { useTranslation } from '../i18n/useTranslation'
-import { SCIENTIFIC_FIGURES, type ScientificFigure } from './scientificFigures'
+import {
+  SCIENTIFIC_FIGURES,
+  type ScientificFigure,
+} from './scientificFigures'
 
 interface ScientificFiguresViewerProps {
   sceneId?: string

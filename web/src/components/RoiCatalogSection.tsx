@@ -42,6 +42,7 @@ export function RoiCatalogSection({
   const { t } = useTranslation()
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<RiskCategory | 'ALL'>('ALL')
+  const [expandedCountries, setExpandedCountries] = useState<Record<string, boolean>>({ México: true })
   const [expandedStates, setExpandedStates] = useState<Record<string, boolean>>({
     'México:Guerrero': true,
     'México:Ciudad de México': true,
@@ -73,6 +74,8 @@ export function RoiCatalogSection({
       )
     })
   }, [searchTerm, selectedCategory])
+
+  const toggleCountry = (country: string) => setExpandedCountries(prev => ({ ...prev, [country]: !(prev[country] ?? false) }))
 
   const toggleState = (key: string) => {
     setExpandedStates((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -191,14 +194,15 @@ export function RoiCatalogSection({
         <div className="roi-catalog-groups">
           {grouped.map((countryGroup) => (
             <div key={countryGroup.country} className="roi-country-group">
-              <div className="roi-country-header">
+              <button type="button" className="roi-country-header" onClick={() => toggleCountry(countryGroup.country)} aria-expanded={expandedCountries[countryGroup.country] ?? false}>
+                {expandedCountries[countryGroup.country] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 <span className="roi-country-flag">{countryGroup.flag}</span>
                 <span className="roi-country-name">
                   {countryGroup.country} ({countryGroup.states.length} {t('Estados Federales', 'Federal States')})
                 </span>
-              </div>
+              </button>
 
-              <div className="roi-country-states">
+              {(expandedCountries[countryGroup.country] ?? false) && <div className="roi-country-states">
                 {countryGroup.states.map(({ state, presets }) => {
                   const stateKey = `${countryGroup.country}:${state}`
                   const isExpanded = expandedStates[stateKey] ?? false
@@ -242,7 +246,7 @@ export function RoiCatalogSection({
                     </div>
                   )
                 })}
-              </div>
+              </div>}
             </div>
           ))}
         </div>

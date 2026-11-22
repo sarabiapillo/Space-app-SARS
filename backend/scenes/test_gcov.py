@@ -55,6 +55,60 @@ class GcovApiTests(SimpleTestCase):
         self.client = APIClient()
         self.worker_threads = []
 
+    @patch("scenes.gcov_views._scene_dict")
+    @patch("scenes.gcov_views.ASFSource.search")
+    def test_default_search_keeps_all_products_from_two_latest_acquisition_dates(self, search, scene_dict):
+        from pipeline.sources.base import SceneMeta
+        scenes = [
+            SceneMeta(scene_id="old", source="asf", product="GCOV", track=1, frame=1,
+                      direction="ASCENDING", polarizations=(), crid=None, maturity=None,
+                      start_time="2026-01-01T01:00:00Z"),
+            SceneMeta(scene_id="recent-a", source="asf", product="GCOV", track=1, frame=1,
+                      direction="ASCENDING", polarizations=(), crid=None, maturity=None,
+                      start_time="2026-01-03T01:00:00Z"),
+            SceneMeta(scene_id="recent-b", source="asf", product="GCOV", track=2, frame=1,
+                      direction="DESCENDING", polarizations=(), crid=None, maturity=None,
+                      start_time="2026-01-03T12:00:00Z"),
+            SceneMeta(scene_id="second-date", source="asf", product="GCOV", track=1, frame=2,
+                      direction="ASCENDING", polarizations=(), crid=None, maturity=None,
+                      start_time="2026-01-02T01:00:00Z"),
+        ]
+        search.return_value = scenes
+        scene_dict.side_effect = lambda scene, roi: {"scene_id": scene.scene_id,
+            "start_time": scene.start_time, "coverage_pct": None}
+        from scenes.gcov_views import search_gcov
+        result = search_gcov(ROI)
+        self.assertEqual({item["scene_id"] for item in result}, {"recent-a", "recent-b", "second-date"})
+        search.assert_called_once_with(__import__("pipeline.roi_explore", fromlist=["validate_roi"]).validate_roi(ROI),
+                                       "GCOV", start=None, end=None)
+
+    @patch("scenes.gcov_views.ASFSource")
+    def test_default_search_does_not_cap_products_before_date_selection(self, source):
+        from scenes.gcov_views import search_gcov
+        source.return_value.search.return_value = []
+        self.assertEqual(search_gcov(ROI), [])
+        source.assert_called_once_with(max_results=None)
+        source.return_value.search.assert_called_once()
+        source.reset_mock()
+        self.assertEqual(search_gcov(ROI, start="2026-01-01"), [])
+        source.assert_called_once_with(max_results=None)
+
+    @patch("scenes.gcov_views._scene_dict")
+    @patch("scenes.gcov_views.ASFSource.search")
+    def test_explicit_date_search_is_not_truncated(self, search, scene_dict):
+        from pipeline.sources.base import SceneMeta
+        scenes = [SceneMeta(scene_id=f"scene-{i}", source="asf", product="GCOV", track=1, frame=1,
+                    direction="ASCENDING", polarizations=(), crid=None, maturity=None,
+                    start_time=f"2026-01-{i:02d}T01:00:00Z") for i in range(1, 5)]
+        search.return_value = scenes
+        scene_dict.side_effect = lambda scene, roi: {"scene_id": scene.scene_id,
+            "start_time": scene.start_time, "coverage_pct": None}
+        from scenes.gcov_views import search_gcov
+        result = search_gcov(ROI, start="2026-01-01", end="2026-01-04")
+        self.assertEqual(len(result), 4)
+        search.assert_called_once_with(__import__("pipeline.roi_explore", fromlist=["validate_roi"]).validate_roi(ROI),
+                                       "GCOV", start="2026-01-01", end="2026-01-04")
+
     @patch("scenes.gcov_views.search_gcov")
     def test_search_returns_metadata_and_intersection_coverage(self, search):
         search.return_value = [{"scene_id": "NISAR_GCOV_TEST", "footprint": ROI, "coverage_pct": 100.0}]

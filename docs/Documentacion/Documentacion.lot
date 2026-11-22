@@ -1,0 +1,33 @@
+\babel@toc {spanish}{}\relax 
+\contentsline {table}{\numberline {1}{\ignorespaces Qué entra, qué sale y qué se comprueba en cada eslabón de la cadena de observación.}}{18}{table.caption.5}%
+\contentsline {table}{\numberline {2}{\ignorespaces Los tres niveles de afirmación y cómo se distinguen.}}{19}{table.caption.7}%
+\contentsline {table}{\numberline {3}{\ignorespaces Longitudes de onda representativas y su interacción cualitativa con la vegetación. Los valores son órdenes de magnitud de uso común, no especificaciones de una misión.}}{23}{table.caption.9}%
+\contentsline {table}{\numberline {4}{\ignorespaces Moteado ideal en dB para $L$ looks independientes (ecuación~\eqref {eq:db-gamma}). El sesgo es la diferencia entre la media de los valores en dB y el dB de la media lineal.}}{25}{table.caption.11}%
+\contentsline {table}{\numberline {5}{\ignorespaces Lo que sí y lo que no se puede deducir del brillo de un píxel SAR.}}{27}{table.caption.15}%
+\contentsline {table}{\numberline {6}{\ignorespaces Sensibilidad de la potencia recibida a cada factor de la ecuación~\eqref {eq:radar} (los demás constantes). Se obtiene de $10\log _{10}$ de la razón.}}{29}{table.caption.16}%
+\contentsline {table}{\numberline {7}{\ignorespaces Los tres coeficientes y sus áreas de referencia. Dividir entre un área menor produce un coeficiente mayor.}}{30}{table.caption.18}%
+\contentsline {table}{\numberline {8}{\ignorespaces Equivalencias de decibeles a razón de potencia. Cada $+3$\,dB multiplica por $\approx 2$; cada $+10$\,dB, por 10.}}{31}{table.caption.21}%
+\contentsline {table}{\numberline {9}{\ignorespaces Tendencias cualitativas habituales. Las magnitudes dependen del sitio, de la geometría y de la estación; esta tabla no es un criterio de clasificación.}}{38}{table.caption.29}%
+\contentsline {table}{\numberline {10}{\ignorespaces Resultado del multilook del ejemplo de la figura~\ref {fig:multilook_bloques}. El bloque inferior derecho tiene $N_v=1<2$ y se marca como NaN.}}{44}{table.caption.46}%
+\contentsline {table}{\numberline {14}{\ignorespaces Estadísticas de $\gamma ^0$ en dB para la ROI de la Etapa 1 (HH y HV, resolución completa). Valores tomados de \texttt {metadatos.json} de la carpeta de figuras.}}{53}{table.caption.65}%
+\contentsline {table}{\numberline {15}{\ignorespaces Fuentes independientes para contrastar un cambio de respuesta radar.}}{55}{table.caption.68}%
+\contentsline {table}{\numberline {16}{\ignorespaces Traducción de cada término de la ecuación~\eqref {eq:conserv} a su significado físico.}}{57}{table.caption.70}%
+\contentsline {table}{\numberline {17}{\ignorespaces Cada módulo responde una pregunta acotada. Confundirlas es la fuente de interpretaciones erróneas más frecuente.}}{62}{table.caption.81}%
+\contentsline {table}{\numberline {20}{\ignorespaces De un resultado técnicamente correcto a uno científicamente defendible.}}{75}{table.caption.82}%
+\contentsline {table}{\numberline {21}{\ignorespaces Sensibilidades cualitativas esperadas del simulador.}}{77}{table.caption.88}%
+\contentsline {table}{\numberline {22}{\ignorespaces Plantilla de registro de una prueba de verificación.}}{78}{table.caption.89}%
+\contentsline {table}{\numberline {23}{\ignorespaces Fuentes de error de la irradiancia directa calculada y su dirección.}}{83}{table.caption.95}%
+\contentsline {table}{\numberline {24}{\ignorespaces Irradiancia directa sobre superficies al mediodía del 15 de noviembre (ilustrativo, $T_L=3$).}}{85}{table.caption.97}%
+\contentsline {table}{\numberline {25}{\ignorespaces Categorías de la máscara geométrica SAR en el visor 3D (\texttt {computeSarGeometricMask}).}}{92}{table.caption.101}%
+\contentsline {table}{\numberline {26}{\ignorespaces Valores lineales de $\gamma ^0_{HH}$ de la región de ejemplo (inventados).}}{105}{table.caption.140}%
+\contentsline {table}{\numberline {27}{\ignorespaces Los mismos valores en dB y su diferencia píxel a píxel $\Delta =\mathrm {B}-\mathrm {A}$.}}{105}{table.caption.141}%
+\contentsline {table}{\numberline {29}{\ignorespaces Conversiones que aparecen con frecuencia en el documento.}}{109}{table.caption.149}%
+\contentsline {table}{\numberline {30}{\ignorespaces Índice temático de las figuras (los números exactos aparecen en la lista de figuras).}}{110}{table.caption.158}%
+\contentsline {table}{\numberline {31}{\ignorespaces Fórmulas de radar de uso frecuente.}}{112}{table.caption.192}%
+\contentsline {table}{\numberline {32}{\ignorespaces Fórmulas de aguas someras de uso frecuente.}}{113}{table.caption.194}%
+\contentsline {table}{\numberline {33}{\ignorespaces Fórmulas solares de uso frecuente.}}{113}{table.caption.196}%
+\contentsline {table}{\numberline {34}{\ignorespaces Categorías de la máscara geométrica SAR en el visor 3D (\texttt {computeSarGeometricMask}).}}{121}{table.caption.201}%
+\contentsline {table}{\numberline {35}{\ignorespaces Comparación de las clases de suelo por $V_{s30}$ implementadas en \nolinkurl {web/src/utils/seismic.ts} (\texttt {SOIL\_VS30} y \texttt {siteWaveParams}). El usuario también puede introducir cualquier $V_{s30}\in [80,1500]\,\mathrm {m/s}$ personalizado tanto para el escenario como para la estación receptora.}}{125}{table.caption.208}%
+\contentsline {table}{\numberline {36}{\ignorespaces Contratos de datos entre los subsistemas de TerraPulse AI.}}{132}{table.caption.216}%
+\contentsline {table}{\numberline {37}{\ignorespaces Catálogo completo de endpoints REST de TerraPulse AI.}}{137}{table.caption.217}%
+\contentsline {table}{\numberline {38}{\ignorespaces Modelo relacional y espacial implementado en PostgreSQL 16 + PostGIS 3.4.}}{142}{table.caption.223}%

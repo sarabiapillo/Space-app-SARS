@@ -1345,6 +1345,16 @@ button:disabled {
   border-top-color: #0ea5e9;
 }
 
+.ws-panel-tab-group--solar { background: #fff7ed; }
+.ws-panel-tab-group--solar.is-active { background: #ffedd5; border-top-color: #ea580c; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar { background: transparent; color: #c2410c; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar:hover:not(.is-active) { background: #ffedd5; color: #9a3412; }
+.ws-panel-tab-group--solar .ws-panel-tab--solar.is-active { background: transparent; color: #9a3412; border-top-color: #ea580c; }
+.ws-panel-tab-group--solar .ws-panel-tab__close { color: #c2410c; }
+.ws-panel-tab-group--solar .ws-panel-tab__close:hover:not(:disabled) { background: #fed7aa; color: #9a3412; }
+.ws-panel-tab-group--solar .ws-panel-tab__close:focus-visible,
+.ws-panel-tab-group--solar .ws-panel-tab--solar:focus-visible { outline: 2px solid #c2410c; outline-offset: -2px; }
+
 .ws-panel-tab__close {
   display: grid;
   place-items: center;
@@ -2193,6 +2203,49 @@ button:disabled {
   color: var(--color-text-muted);
 }
 
+/* Controles del mapa de cambio (resolución, umbral y ruido de la ROI) dentro de la barra de color. */
+.change-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed var(--color-border);
+  max-width: 190px;
+}
+
+.change-controls__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.change-controls__field select {
+  font: inherit;
+  font-size: 10px;
+  padding: 0 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  background: #ffffff;
+  color: var(--color-text);
+}
+
+.change-controls__status {
+  color: var(--color-text);
+}
+
+.change-controls__error {
+  color: #b91c1c;
+  white-space: normal;
+}
+
+.change-controls__warning {
+  color: #92400e;
+  white-space: normal;
+  line-height: 1.25;
+}
+
 /* ---------- 5. PANEL INFERIOR COLAPSABLE ("Messages / Progress / Traceability Log") ---------- */
 
 .workstation-log-panel {
@@ -2565,7 +2618,9 @@ button:disabled {
   top: 12px;
   left: 12px;
   width: 284px;
-  max-height: calc(100vh - 120px);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  box-sizing: border-box;
   overflow-y: auto;
   padding: 10px 12px;
   border: 1px solid var(--color-border-strong);
@@ -2583,6 +2638,18 @@ button:disabled {
   padding-bottom: 5px;
   border-bottom: 1px solid var(--color-border);
 }
+
+.solar-card__header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.solar-card__collapse:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.solar-card.is-collapsed { width: min(284px, calc(100% - 24px)); max-height: none; overflow: visible; }
+.solar-card.is-collapsed .solar-card__header { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.solar-card__body[hidden] { display: none; }
 
 .solar-card__title {
   display: inline-flex;
@@ -3739,7 +3806,7 @@ button:disabled {
 
 .ws-chart-stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 8px;
 }
 
@@ -3789,7 +3856,7 @@ button:disabled {
 
 .ws-charts-two-col {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
   gap: 12px;
 }
 
@@ -4043,7 +4110,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 5px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ws-hist-legend__line {
@@ -5076,7 +5144,12 @@ button:disabled {
 .roi-coordinate-form input { min-width: 0; width: 100%; padding: 7px; border: 1px solid #94a3b8; border-radius: 5px; }
 .roi-coordinate-form [role=alert] { color: #b91c1c; }
 .roi-scene-details { padding: 14px; font-size: 12px; overflow-wrap: anywhere; }
+.geo-search .geo-search__error { display: block; color: #b91c1c; font-size: 11px; }
+.roi-selection-summary { padding: 8px 10px; overflow-wrap: anywhere; display: grid; gap: 5px; }
+.roi-selection-summary__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.roi-selection-methods { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .roi-scene-details article { padding: 10px 0; border-bottom: 1px solid #cbd5e1; }
+@media (max-width: 640px) { .roi-details-modal .solar-api-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---- Gráficas automáticas por ROI (NISAR) y del simulador de inundación ---- */
 @keyframes roi-spin { to { transform: rotate(360deg); } }
@@ -5116,30 +5189,30 @@ button:disabled {
 .solar-api-stale { margin: 4px 0; padding: 4px 6px; border-radius: 3px; background: rgba(252, 165, 10, 0.15); color: var(--color-text); font-size: 10.5px; }
 
 /* T3: cinta compacta en grupos; la navegación permanece visible sin desbordar la ventana. */
-.ws-menubar { min-width: 0; gap: 8px; }
-.ws-menubar__menus { flex: 0 0 auto; }
+.ws-menubar { min-width: 0; height: auto; min-height: 27px; gap: 8px; flex-wrap: wrap; }
+.ws-menubar__menus { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
 .ws-menubar__title { flex: 1 1 180px; min-width: 80px; }
 .ws-menubar__status { font-size: 10px; }
-.ws-ribbon { align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 3px 6px; max-height: 94px; overflow-y: auto; }
+.ws-ribbon { align-items: center; flex-wrap: wrap; gap: 2px 4px; padding: 3px 6px; overflow: visible; }
 /* El menú flotante no puede sobresalir de un ancestro con overflow auto. */
 .ws-ribbon.ws-ribbon--layer-menu-open { overflow: visible; max-height: none; }
 .ws-ribbon__top-groups,
 .ws-ribbon__bottom-groups { display: flex; width: 100%; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
 .ws-ribbon__group { gap: 1px; padding: 0 3px; }
-.ws-ribbon__controls { min-height: 25px; gap: 3px; }
+.ws-ribbon__controls { min-height: 25px; gap: 3px; flex-wrap: wrap; }
 .ws-ribbon__label { font-size: 9px; line-height: 1.1; }
-.ws-ribbon__btn { height: 24px; padding: 0 6px; gap: 4px; font-size: 10.5px; }
+.ws-ribbon__btn { height: 24px; min-height: 24px; padding: 0 6px; gap: 4px; font-size: 10.5px; }
 .ws-ribbon__inline-field { height: 24px; padding: 0 4px; gap: 3px; }
 .ws-ribbon__range { width: 52px; }
 .ws-floating-toolbox { max-width: min(280px, calc(100vw - 24px)); }
 .gcov-catalog { container-type: inline-size; min-width: 0; }
-.gcov-catalog__filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 10px; }
-.gcov-catalog__filters > label { display: grid; min-width: 0; gap: 5px; font-weight: 600; }
+.gcov-catalog__filters { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.gcov-catalog__filters > label { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; min-width: 0; gap: 6px; font-weight: 600; }
 .gcov-catalog__date-control { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .gcov-catalog__date-control input { flex: 1; width: 100%; min-width: 0; height: 32px; padding: 4px 6px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: var(--color-panel); }
 .gcov-catalog__clear { flex: 0 0 auto; min-height: 32px; padding: 4px 6px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-panel); color: var(--color-text-muted); }
 .gcov-catalog__clear:disabled { opacity: .55; }
-@container (max-width: 460px) { .gcov-catalog__filters { grid-template-columns: minmax(0, 1fr); } .gcov-catalog__filters > .btn { grid-column: auto; } }
+@container (max-width: 300px) { .gcov-catalog__filters > label { grid-template-columns: minmax(0, 1fr); } }
 .gcov-catalog__filters > .btn { grid-column: 1 / -1; }
 .gcov-catalog__date-error { margin: 2px 0; color: #b42318; }
 .gcov-catalog__metadata-warning { padding: 7px 8px; border-left: 3px solid var(--color-warn); background: #fffbeb; color: #78350f; line-height: 1.45; }
@@ -5147,10 +5220,13 @@ button:disabled {
 .gcov-catalog__pair legend { font-weight: 700; }
 .gcov-catalog__pair p { margin: 4px 0; }
 .gcov-catalog__pair ul { margin: 4px 0; padding-left: 18px; }
-.gcov-catalog__candidate { display: flex; align-items: center; gap: 4px; padding: 0 5px; font-size: 10px; white-space: nowrap; }
+.gcov-catalog__candidate { display: flex; align-items: center; gap: 4px; padding: 0 5px; white-space: nowrap; }
 .gcov-catalog__candidate input { accent-color: var(--color-primary); }
-.gcov-catalog__rows > li { display: flex; align-items: stretch; gap: 4px; }
-.gcov-catalog__rows .gcov-catalog__scene { min-width: 0; flex: 1; }
+.gcov-catalog__rows { min-width: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.gcov-catalog__rows > li { display: flex; flex-direction: column; min-width: 0; gap: 4px; }
+.gcov-catalog__rows .gcov-catalog__scene { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-width: 0; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.gcov-catalog__actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.gcov-catalog__comparison { margin-top: 8px; }
 @media (max-width: 900px) { .ws-menubar__menus { overflow-x: auto; max-width: 48vw; } .ws-menubar__right { display: none; } .ws-ribbon { max-height: 112px; } .ws-ribbon__divider { display: none; } }
 @media (prefers-reduced-motion: reduce) { .ws-ribbon *, .ws-floating-toolbox * { scroll-behavior: auto; transition-duration: 0.01ms !important; } }
 
@@ -5377,6 +5453,7 @@ button:disabled {
 .roi-card {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 5px;
   padding: 8px 10px;
   background: #ffffff;
@@ -5401,12 +5478,14 @@ button:disabled {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .roi-card__title-row {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 4px;
 }
 
@@ -5416,6 +5495,8 @@ button:disabled {
 }
 
 .roi-card__title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 11.5px;
   font-weight: 700;
   color: var(--color-text, #0f172a);
@@ -5431,7 +5512,8 @@ button:disabled {
 .roi-card__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 4px;
   padding-top: 4px;
@@ -5464,6 +5546,8 @@ button:disabled {
 .roi-card__quick-sims {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 4px;
 }
 
@@ -5703,8 +5787,8 @@ button:disabled {
   top: 42px;
   left: 16px;
   width: 480px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 120px);
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 54px);
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(8px);
   border: 1px solid #cbd5e1;
@@ -5719,7 +5803,7 @@ button:disabled {
 
 .seismic-panel.is-expanded-full {
   width: 680px;
-  max-height: calc(100vh - 90px);
+  max-height: calc(100% - 54px);
 }
 
 .seismic-panel.is-collapsed {
@@ -6054,8 +6138,293 @@ button:disabled {
 }
 
 .seismic-chart-card__body {
-  height: 185px;
+  height: 260px;
   width: 100%;
+}
+
+.seismic-chart-card__header {
+  position: relative;
+}
+
+/* Espacio para el botón de ampliar, que no debe tapar la última pestaña. */
+.seismic-chart-card:not(.seismic-chart-card--modal) .seismic-chart-card__header {
+  padding-right: 30px;
+}
+
+.seismic-chart-expand {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+}
+
+.seismic-chart-expand:hover {
+  background: #f1f5f9;
+}
+
+.seismic-chart-clickable {
+  cursor: zoom-in;
+}
+
+.seismic-scenario-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 11.5px;
+  color: #334155;
+}
+
+.seismic-scenario-name em {
+  color: #64748b;
+}
+
+/* Animación de ondas P y S */
+.seismic-wave-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.seismic-run-btn.is-wave {
+  border-color: #1d4ed8;
+  background: #2563eb;
+}
+
+.seismic-run-btn.is-wave:hover {
+  background: #1d4ed8;
+}
+
+.seismic-wave-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #334155;
+}
+
+.seismic-wave-clock {
+  position: absolute;
+  left: 12px;
+  bottom: 40px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #0f172a;
+  pointer-events: none;
+}
+
+.seismic-wave-clock__legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #475569;
+}
+
+.seismic-wave-clock__legend i {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.seismic-wave-clock__legend i.is-p {
+  background: #2563eb;
+}
+
+.seismic-wave-clock__legend i.is-s {
+  background: #dc2626;
+}
+
+/* Ejecutar / limpiar simulación y editar parámetros */
+.seismic-run-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.seismic-run-btn {
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  border: 1px solid #b91c1c;
+  border-radius: 4px;
+  background: #dc2626;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.seismic-run-btn:hover {
+  background: #b91c1c;
+}
+
+.seismic-run-btn.is-secondary {
+  border-color: #94a3b8;
+  background: #ffffff;
+  color: #334155;
+}
+
+.seismic-run-btn.is-secondary:hover {
+  background: #f1f5f9;
+}
+
+.seismic-modal__run {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.seismic-empty-results {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.seismic-empty-results--modal {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 300px;
+  text-align: center;
+  font-size: 14px;
+}
+
+/* Modal de gráficas sísmicas */
+.seismic-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.seismic-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1320px, 100%);
+  height: min(92vh, 1000px);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.seismic-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.seismic-modal__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.seismic-modal__sub {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.seismic-modal__body {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.seismic-modal__params,
+.seismic-modal__chart {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.seismic-modal__kpis {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.seismic-chart-card--modal .seismic-chart-card__body {
+  height: min(62vh, 640px);
+}
+
+@media (max-width: 820px) {
+  .seismic-modal__body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+}
+
+/* Epicentro por coordenadas y aviso de selección en el mapa */
+.seismic-coord-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+.seismic-coord-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.seismic-coord-field input {
+  width: 84px;
+  font: inherit;
+  font-family: var(--font-mono);
+}
+
+.seismic-pick-banner {
+  margin: 0 8px;
+  padding: 5px 8px;
+  border: 1px solid #f59e0b;
+  border-radius: 3px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 11px;
 }
 
 .seismic-risk-zones-legend {
@@ -6156,6 +6525,164 @@ button:disabled {
   background: #dc2626;
   border-color: #b91c1c;
   color: #ffffff;
+}
+
+.seismic-vs30-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.seismic-vs30-input {
+  width: 64px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.seismic-vs30-site {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #64748b;
+}
+
+.seismic-gmpe-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+  padding: 4px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  background: #f8fafc;
+  font-size: 10.5px;
+  color: #334155;
+}
+
+.seismic-gmpe-note__warning {
+  color: #92400e;
+}
+
+.seismic-station-map-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+
+.seismic-station-map-row .seismic-waveform-metric-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* Sismograma + espectrograma (canvas) y comparación con registro real */
+.seismo-spectro {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.seismo-spectro canvas {
+  display: block;
+}
+
+.real-record {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #f8fafc;
+  font-size: 11px;
+}
+
+.real-record__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.real-record__file input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.real-record__file span {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid #94a3b8;
+  border-radius: 3px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.real-record__file:focus-within span {
+  outline: 2px solid #2563eb;
+}
+
+.real-record__hint {
+  margin: 4px 0;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.real-record__error {
+  margin: 4px 0;
+  color: #b91c1c;
+}
+
+.real-record__header pre {
+  max-height: 120px;
+  overflow: auto;
+  font-size: 10px;
+  background: #ffffff;
+  padding: 4px;
+}
+
+.real-record__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.real-record__controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.real-record__controls input[type="number"] {
+  width: 70px;
+}
+
+.real-record__meta {
+  color: #64748b;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.real-record__table {
+  width: 100%;
+  margin-top: 6px;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.real-record__table th,
+.real-record__table td {
+  padding: 2px 6px;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
 }
 
 .seismic-waveform-metrics-strip {
@@ -6407,6 +6934,216 @@ button:disabled {
   font-family: var(--font-mono, monospace);
 }
 
+
+/* ===== Relieve 3D de la ROI (módulo aislado, Terrain3DViewer) ===== */
+.terrain3d-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+.terrain3d-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1280px, 96vw);
+  height: min(820px, 92vh);
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.35);
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+}
+.terrain3d-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+.terrain3d-title { display: flex; align-items: center; gap: 8px; }
+.terrain3d-roi {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0f2f1;
+  color: #0f766e;
+  font-size: 12px;
+}
+.terrain3d-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+.terrain3d-icon-btn:hover { background: #f1f5f9; }
+.terrain3d-body { display: flex; flex: 1; min-height: 0; }
+.terrain3d-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: radial-gradient(ellipse at 50% 35%, #ffffff 0%, #e2e8f0 70%, #cbd5e1 100%);
+}
+.terrain3d-stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.terrain3d-stage canvas:active { cursor: grabbing; }
+.terrain3d-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: #334155;
+}
+.terrain3d-overlay > .terrain3d-status { position: static; background: #ffffff; border-radius: 8px; }
+.terrain3d-status--error { color: #9f1239; }
+.terrain3d-status code {
+  max-width: 80%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #fff1f2;
+  font-size: 11px;
+  word-break: break-word;
+}
+.terrain3d-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #475569;
+  font-size: 11px;
+  pointer-events: none;
+}
+.terrain3d-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 290px;
+  padding: 12px;
+  border-left: 1px solid #e2e8f0;
+  background: #ffffff;
+  overflow-y: auto;
+}
+.terrain3d-panel section { display: flex; flex-direction: column; gap: 6px; }
+.terrain3d-panel input[type='range'] { width: 100%; accent-color: #0f766e; }
+.terrain3d-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #475569;
+}
+.terrain3d-seg { display: flex; flex-direction: column; gap: 4px; }
+.terrain3d-seg button,
+.terrain3d-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.terrain3d-seg button:hover:not(:disabled),
+.terrain3d-actions button:hover:not(:disabled) { background: #f1f5f9; }
+.terrain3d-seg button.is-active { border-color: #0f766e; background: #e0f2f1; color: #0f766e; font-weight: 600; }
+.terrain3d-seg button:disabled,
+.terrain3d-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.terrain3d-telemetry dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  margin: 0;
+}
+.terrain3d-telemetry dt { color: #64748b; }
+.terrain3d-telemetry dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+.terrain3d-source { margin: 4px 0 0; font-size: 11px; color: #334155; }
+.terrain3d-note { margin: 0; font-size: 11px; color: #64748b; line-height: 1.4; }
+
+.terrain3d-sar-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.terrain3d-orbit-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.terrain3d-orbit-toggle button {
+  padding: 5px 6px;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+}
+.terrain3d-orbit-toggle button:hover {
+  background: #f1f5f9;
+}
+.terrain3d-orbit-toggle button.is-active {
+  border-color: #0f766e;
+  background: #e0f2f1;
+  color: #0f766e;
+  font-weight: 600;
+}
+.terrain3d-sar-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.terrain3d-sar-legend li {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 7px;
+  color: #1e293b;
+}
+.terrain3d-sar-legend strong {
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+}
+.terrain3d-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+.terrain3d-swatch--reliable { background: #22c55e; }
+.terrain3d-swatch--steep { background: #f59e0b; }
+.terrain3d-swatch--layover { background: #ef4444; }
+.terrain3d-swatch--shadow { background: #1e1b4b; }
 /* ---------- Friendlier DG2 flood panel: steps, fields, chips, collapsibles and result cards ---------- */
 .ws-rain-overlay { width: min(400px, calc(100% - 24px)); }
 .ws-rain-overlay__actions { display: flex; gap: 4px; align-items: center; }

@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 """Django's command-line utility for administrative tasks."""
 import os
+from pathlib import Path
 import sys
+
+ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 
 
 def main():
