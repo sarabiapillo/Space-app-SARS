@@ -44,6 +44,8 @@ interface SolarPanelProps {
   onSelectPresetROI?: (preset: CatalogRoiPreset, options?: { simulation?: 'solar' }) => void
   roiLayers?: RoiLayersState
   solarSample?: { coordinate: LngLat; loading: boolean; result: SolarSampleResponse | null; error: string | null } | null
+  heatmapRange?: [number, number]
+  heatmapError?: 'contrast' | 'preview' | null
   solarOpacity?: number
   onSolarOpacityChange?: (opacity: number) => void
 }
@@ -58,6 +60,8 @@ export function RightPanel({
   onFlyToZone,
   onSelectPresetROI,
   solarSample,
+  heatmapRange,
+  heatmapError = null,
   solarOpacity = 88,
   onSolarOpacityChange,
 }: SolarPanelProps) {
@@ -163,7 +167,8 @@ export function RightPanel({
   }, [analysisOpen])
   const solarLayerVisible = solar.showRasterOnMap !== false && solarOpacity > 0
   const upperWm2 = simulationResult?.clear_sky.dni_adjusted_w_m2 ?? 0
-  const ticks = simulationResult ? [0, ...legendTicks(0, upperWm2).filter(value => value > 0 && value < upperWm2), upperWm2] : []
+  const [vmin, vmax] = heatmapRange ?? [0, upperWm2]
+  const ticks = simulationResult ? [vmin, ...legendTicks(vmin, vmax).filter(value => value > vmin && value < vmax), vmax] : []
 
   const elevationId = useId()
   const azimuthId = useId()
@@ -437,7 +442,13 @@ export function RightPanel({
       <div className="solar-legend">
         <div className="solar-legend__head">
           <span className="solar-legend__title">{t('Irradiancia incidente (Inferno)', 'Incident irradiance (Inferno)')}</span>
-
+          <label>
+            {t('Contraste', 'Contrast')}{' '}
+            <select className="ws-rain-select" value={solar.heatmapMode ?? 'estirado'} onChange={event => onSolarChange({ ...solar, heatmapMode: event.target.value as 'estirado' | 'absoluto' })}>
+              <option value="estirado">{t('Local', 'Local')}</option>
+              <option value="absoluto">{t('Absoluto', 'Absolute')}</option>
+            </select>
+          </label>
         </div>
         <div
           className="solar-legend__bar"
@@ -446,16 +457,21 @@ export function RightPanel({
         {simulationResult && upperWm2 > 0 ? (
           <>
             <div className="solar-legend__ticks">
-              {ticks.map((t) => (
-                <span key={t} style={{ left: `${(t / upperWm2) * 100}%` }}>
-                  {t.toFixed(0)}
+              {ticks.map((tick) => (
+                <span key={tick} style={{ left: `${(tick - vmin) / (vmax - vmin || 1) * 100}%` }}>
+                  {tick.toFixed(0)}
                 </span>
               ))}
             </div>
             <small className="solar-legend__note">
               W/m² ·{' '}
-              {t('0 a DNI ajustado ({max}); los valores exactos se consultan en el mapa', '0 to adjusted DNI ({max}); exact values can be sampled on the map', { max: upperWm2.toFixed(0) })}
+              {vmin > 0
+                ? t('Contraste local {min}–{max}; valores exactos en el GeoTIFF', 'Local contrast {min}–{max}; exact values in the GeoTIFF', { min: vmin.toFixed(0), max: vmax.toFixed(0) })
+                : t('0 a DNI ajustado ({max}); los valores exactos se consultan en el mapa', '0 to adjusted DNI ({max}); exact values can be sampled on the map', { max: upperWm2.toFixed(0) })}
             </small>
+            {heatmapError && <small className="solar-legend__note" role="status">{heatmapError === 'preview'
+              ? t('No se pudo cargar el PNG original; la capa solar no está disponible.', 'Original PNG could not load; solar layer unavailable.')
+              : t('No se pudo aplicar contraste local; se intenta cargar el PNG original.', 'Local contrast unavailable; attempting to load the original PNG.')}</small>}
           </>
         ) : simulationResult ? <small className="solar-legend__note">{t('0 W/m² en todos los píxeles válidos', '0 W/m² in every valid pixel')}</small> : <small className="solar-legend__note">{t('Escala disponible después del cálculo', 'Scale available after simulation')}</small>}
       </div>

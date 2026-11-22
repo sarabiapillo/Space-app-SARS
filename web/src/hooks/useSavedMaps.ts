@@ -91,7 +91,7 @@ function normalizeAnnotation(raw: unknown): MapAnnotation | null {
 function safeLocalApiUrl(value: unknown, runId?: string): string | null {
   if (typeof value !== 'string') return null
   if (runId === undefined) return /^\/api\/[a-zA-Z0-9/_.-]+(?:\?[a-zA-Z0-9_=&.%-]*)?$/.test(value) ? value : null
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) return null
+  if (!/^[0-9a-f]{32}$/.test(runId)) return null
   return new RegExp(`^/api/solar/simulations/${runId}/(?:preview/incident|export/incident|contours|sample)$`, 'i').test(value) ? value : null
 }
 
@@ -202,7 +202,12 @@ function normalizeMap(value: unknown): WorkspaceMap | null {
     typeof (rawMetadata as Record<string, unknown>).generation === 'string'
       ? rawMetadata as WorkspaceMap['effectiveRoiMetadata'] : null
 
-  const solarRoi = effectiveRoi ?? (croppedRegion ? { type: 'Polygon', coordinates: [[...croppedRegion, croppedRegion[0]]] } : null)
+  const solarRoi = effectiveRoi ?? (croppedRegion ? {
+    type: 'Polygon',
+    coordinates: [croppedRegion[0][0] === croppedRegion[croppedRegion.length - 1][0] &&
+      croppedRegion[0][1] === croppedRegion[croppedRegion.length - 1][1]
+      ? croppedRegion : [...croppedRegion, croppedRegion[0]]],
+  } : null)
 
   return {
     id: m.id,

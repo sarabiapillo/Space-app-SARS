@@ -37,7 +37,7 @@ export interface DecodedHeatmap {
 }
 
 export interface RenderedHeatmap {
-  dataUrl: string
+  image: ImageData
   vmin: number
   vmax: number
 }
@@ -173,26 +173,7 @@ export async function loadHeatmap(url: string, upperWm2: number): Promise<Decode
   return decodeInfernoPixels(data, canvas.width, canvas.height, upperWm2)
 }
 
-/**
- * Dibuja el mapa con la escala pedida. Se amplía con interpolación suave (hasta ~1600 px de lado)
- * para que en el mapa no se vean bloques de 30 m; la ampliación no agrega información.
- */
+/** Colorea valores de los píxeles originales; MapLibre recibe ImageData sin interpolar colores ni cargar otra URL. */
 export function renderHeatmap(decoded: DecodedHeatmap, vmin: number, vmax: number): RenderedHeatmap {
-  const base = document.createElement('canvas')
-  base.width = decoded.width
-  base.height = decoded.height
-  const bctx = base.getContext('2d')
-  if (!bctx) throw new Error('El navegador no permite dibujar el mapa de calor.')
-  bctx.putImageData(new ImageData(colorize(decoded.values, vmin, vmax), decoded.width, decoded.height), 0, 0)
-
-  const k = Math.max(1, Math.min(8, Math.floor(1600 / Math.max(decoded.width, decoded.height))))
-  const big = document.createElement('canvas')
-  big.width = decoded.width * k
-  big.height = decoded.height * k
-  const ctx = big.getContext('2d')
-  if (!ctx) throw new Error('El navegador no permite dibujar el mapa de calor.')
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(base, 0, 0, big.width, big.height)
-  return { dataUrl: big.toDataURL('image/png'), vmin, vmax }
+  return { image: new ImageData(colorize(decoded.values, vmin, vmax), decoded.width, decoded.height), vmin, vmax }
 }

@@ -43,11 +43,12 @@ test('solar rehydration security rejects external and cross-run URLs and mismatc
   const source = savedMaps.slice(savedMaps.indexOf('function safeLocalApiUrl'), savedMaps.indexOf('/** Normaliza cada copia'))
   const js = ts.transpile(source, { module: ts.ModuleKind.None })
   const { safeLocalApiUrl, solarSimulationMatchesCopy } = new Function(`${js}; return { safeLocalApiUrl, solarSimulationMatchesCopy }`)()
-  const id = 'b7b3ac41-2771-4e72-8c21-abc5bb3a7931'
+  const id = 'b7b3ac4127714e728c21abc5bb3a7931'
   assert.equal(safeLocalApiUrl(`/api/solar/simulations/${id}/export/incident`, id), `/api/solar/simulations/${id}/export/incident`)
   assert.equal(safeLocalApiUrl('https://attacker.example/file', id), null)
   assert.equal(safeLocalApiUrl('javascript:alert(1)', id), null)
-  assert.equal(safeLocalApiUrl(`/api/solar/simulations/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/export/incident`, id), null)
+  assert.equal(safeLocalApiUrl(`/api/solar/simulations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/export/incident`, id), null)
+  assert.equal(safeLocalApiUrl(`/api/solar/simulations/b7b3ac41-2771-4e72-8c21-abc5bb3a7931/export/incident`, id), null)
   assert.equal(solarSimulationMatchesCopy({ id, request: { roi: { type: 'Polygon', coordinates: [[[0, 0]]] } } }, { type: 'Polygon', coordinates: [[[0, 0]]] }), true)
   assert.equal(solarSimulationMatchesCopy({ id, request: { roi: { type: 'Polygon', coordinates: [[[1, 1]]] } } }, { type: 'Polygon', coordinates: [[[0, 0]]] }), false)
 })
@@ -61,6 +62,13 @@ test('rehydration normalizes and retains each simulator result and map overlay s
   assert.match(savedMaps, /solarSimulationMatchesCopy/)
   assert.match(savedMaps, /simulations\/\$\{runId\}/)
   assert.match(savedMaps, /\.roi\) === JSON\.stringify\(roi\)/)
+  const roiStart = savedMaps.indexOf('  const solarRoi = effectiveRoi ??')
+  const roiExpression = savedMaps.slice(roiStart, savedMaps.indexOf('\n\n  return {', roiStart))
+  const restoredRoi = new Function('effectiveRoi', 'croppedRegion', `${ts.transpile(roiExpression, { module: ts.ModuleKind.None })}; return solarRoi`)
+  const openRing = [[0, 0], [1, 0], [0, 1]]
+  const closedRing = [...openRing, openRing[0]]
+  assert.deepEqual(restoredRoi(null, openRing), { type: 'Polygon', coordinates: [closedRing] })
+  assert.deepEqual(restoredRoi(null, closedRing), { type: 'Polygon', coordinates: [closedRing] })
   assert.match(savedMaps, /flood: normalizeFlood\(m\.flood\)/)
   assert.match(savedMaps, /seismic: normalizeSeismic\(m\.seismic\)/)
   assert.match(savedMaps, /catch \{\s*\/\/ Sin persistencia: sigue funcionando en memoria/)
