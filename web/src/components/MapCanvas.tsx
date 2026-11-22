@@ -67,6 +67,7 @@ import {
 } from '../utils/colormapLut'
 import { RainDg2Panel } from './RainDg2Panel'
 import { RightPanel } from './RightPanel'
+import { loadHeatmap, renderHeatmap, scaleFor } from '../utils/solarHeatmap'
 import { SeismicSimulatorPanel } from './SeismicSimulatorPanel'
 import { runSeismicSimulation, generateGeodesicCircle, wavefrontSurfaceRadiusKm, VP_KM_S, VS_KM_S } from '../utils/seismic'
 import { regionCenter } from '../utils/seismicScenario'
@@ -390,8 +391,16 @@ export function MapCanvas({
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
   const [solarSample, setSolarSample] = useState<SolarSampleState | null>(null)
+  const [solarDisplay, setSolarDisplay] = useState<{ sourceUrl: string; dni: number; image: ImageData; range: [number, number] } | null>(null)
+  const [solarApplied, setSolarApplied] = useState<{ sourceUrl: string; dni: number; image: ImageData; range: [number, number] } | null>(null)
+  const [solarDisplayError, setSolarDisplayError] = useState<{ sourceUrl: string; dni: number; kind: 'contrast' | 'preview' } | null>(null)
   const [selectedContourValue, setSelectedContourValue] = useState<number | null>(null)
   const solarOpacity = solar.layerOpacity ?? 88
+  const solarDni = solar.simulationResult?.clear_sky.dni_adjusted_w_m2 ?? 0
+  const heatmapMode = solar.heatmapMode ?? 'estirado'
+  const activeSolarDisplay = solarDisplay && heatmapMode === 'estirado' && solarDisplay.sourceUrl === solar.rasterPreviewUrl && solarDisplay.dni === solarDni ? solarDisplay : null
+  const heatmapRange: [number, number] = activeSolarDisplay && solarApplied?.image === activeSolarDisplay.image && solarApplied.sourceUrl === activeSolarDisplay.sourceUrl && solarApplied.dni === solarDni && !(solarDisplayError?.sourceUrl === activeSolarDisplay.sourceUrl && solarDisplayError?.dni === solarDni) ? solarApplied.range : [0, solarDni]
+  const solarImageUrl = solar.rasterPreviewUrl
   const solarSampleRequest = useRef(0)
   const navigationRef = useRef<NavigationControl | null>(null)
 
@@ -1542,6 +1551,20 @@ export function MapCanvas({
     }
   }, [mapReady, solar.enabled, solar.rasterPreviewUrl, solar.showRasterOnMap, hideSolar, solarOpacity, isEditing, activeTool, JSON.stringify(croppedRegion)])
 
+  // La escala estirada es solo presentación: el TIFF y el PNG originales no se modifican.
+  useEffect(() => {
+    if (!solar.enabled || !solar.rasterPreviewUrl || heatmapMode !== 'estirado' || !(solarDni > 0)) return
+    let active = true
+    setSolarDisplayError(null)
+    loadHeatmap(solar.rasterPreviewUrl, solarDni).then(decoded => {
+      if (!active) return
+      const range = scaleFor(heatmapMode, decoded.stats, solarDni)
+      const image = renderHeatmap(decoded, ...range)
+      if (active) setSolarDisplay({ sourceUrl: solar.rasterPreviewUrl!, dni: solarDni, image: image.image, range })
+    }).catch(() => { if (active) setSolarDisplayError({ sourceUrl: solar.rasterPreviewUrl!, dni: solarDni, kind: 'contrast' }) })
+    return () => { active = false }
+  }, [solar.enabled, solar.rasterPreviewUrl, solarDni, heatmapMode])
+
   // Superponer en el mapa el ráster generado por la simulación solar de NASADEM (escala Inferno)
   useEffect(() => {
     const map = mapRef.current
@@ -1557,7 +1580,8 @@ export function MapCanvas({
       Boolean(solar.rasterPreviewUrl) &&
       Array.isArray(solar.rasterBounds) &&
       solar.rasterBounds.length === 4 &&
-      solar.showRasterOnMap !== false
+      solar.showRasterOnMap !== false &&
+      !(solarDisplayError?.kind === 'preview' && solarDisplayError.sourceUrl === solar.rasterPreviewUrl && solarDisplayError.dni === solarDni)
 
     if (!shouldShow) {
       if (map.getLayer(SOLAR_CALC_LAYER)) {
@@ -1575,47 +1599,63 @@ export function MapCanvas({
     ]
 
     const opacity = solarOpacity / 100
-
-    const existingSource = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
-    if (existingSource) {
-      existingSource.updateImage({
-        url: solar.rasterPreviewUrl!,
-        coordinates: coords,
-      })
-      if (map.getLayer(SOLAR_CALC_LAYER)) {
+    const stretch = activeSolarDisplay && !(solarDisplayError?.sourceUrl === solarImageUrl && solarDisplayError?.dni === solarDni) ? activeSolarDisplay : null
+    let active = true
+    const markLoaded = () => {
+      const source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
+      if (active && map.getLayer(SOLAR_CALC_LAYER) && source?.loaded() && (stretch || source.url === solarImageUrl)) {
         map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'visible')
+        if (stretch) setSolarApplied({ sourceUrl: stretch.sourceUrl, dni: stretch.dni, image: stretch.image, range: stretch.range })
+      }
+    }
+    const onSourceData = (event: { sourceId?: string }) => { if (event.sourceId === SOLAR_CALC_SOURCE) markLoaded() }
+    const onSourceError = () => {
+      if (!active) return
+      if (map.getLayer(SOLAR_CALC_LAYER)) map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'none')
+      setSolarApplied(null)
+      setSolarDisplayError({ sourceUrl: solarImageUrl!, dni: solarDni, kind: stretch ? 'contrast' : 'preview' })
+    }
+    map.on('sourcedata', onSourceData)
+    try {
+      let source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined
+      if (!source) {
+        map.addSource(SOLAR_CALC_SOURCE, { type: 'image', coordinates: coords })
+        source = map.getSource(SOLAR_CALC_SOURCE) as ImageSource
+      }
+      source.on('error', onSourceError)
+      if (map.getLayer(SOLAR_CALC_LAYER)) map.setLayoutProperty(SOLAR_CALC_LAYER, 'visibility', 'none')
+      if (stretch) source.updateImage({ image: stretch.image, coordinates: coords })
+      else source.updateImage({ url: solarImageUrl!, coordinates: coords })
+      if (!map.getLayer(SOLAR_CALC_LAYER)) {
+        map.addLayer({
+          id: SOLAR_CALC_LAYER,
+          type: 'raster',
+          source: SOLAR_CALC_SOURCE,
+          paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' },
+        }, map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined)
+      } else {
         map.setPaintProperty(SOLAR_CALC_LAYER, 'raster-opacity', opacity)
       }
-    } else {
-      try {
-        map.addSource(SOLAR_CALC_SOURCE, {
-          type: 'image',
-          url: solar.rasterPreviewUrl!,
-          coordinates: coords,
-        })
-        map.addLayer(
-          {
-            id: SOLAR_CALC_LAYER,
-            type: 'raster',
-            source: SOLAR_CALC_SOURCE,
-            paint: {
-              'raster-opacity': opacity,
-              'raster-fade-duration': 0,
-              'raster-resampling': 'nearest',
-            },
-          },
-          map.getLayer(CROP_MASK_FILL_LAYER) ? CROP_MASK_FILL_LAYER : undefined,
-        )
-      } catch (err) {
-        console.warn('No se pudo superponer el ráster solar en el mapa:', err)
-      }
+      markLoaded()
+    } catch (err) {
+      console.warn('No se pudo superponer el ráster solar en el mapa:', err)
+      setSolarApplied(null)
+      setSolarDisplayError({ sourceUrl: solarImageUrl!, dni: solarDni, kind: stretch ? 'contrast' : 'preview' })
+    }
+    return () => {
+      active = false
+      map.off('sourcedata', onSourceData)
+      ;(map.getSource(SOLAR_CALC_SOURCE) as ImageSource | undefined)?.off('error', onSourceError)
     }
   }, [
     mapReady,
     solar.enabled,
-    solar.rasterPreviewUrl,
+    solarImageUrl,
     solar.rasterBounds,
     solar.showRasterOnMap,
+    activeSolarDisplay,
+    solarDisplayError,
+    solarDni,
     solarOpacity,
     hideSolar,
   ])
@@ -3580,6 +3620,8 @@ export function MapCanvas({
             onSelectPresetROI={onSelectPresetROI}
             roiLayers={roiLayers}
             solarSample={solarSample}
+            heatmapRange={heatmapRange}
+            heatmapError={solarDisplayError?.sourceUrl === solar.rasterPreviewUrl && solarDisplayError?.dni === solarDni ? solarDisplayError.kind : null}
             solarOpacity={solarOpacity}
             onSolarOpacityChange={value => onSolarChange({ ...solar, layerOpacity: value })}
           />
