@@ -78,7 +78,8 @@ def _public(run):
 def _progress(run):
     """Solver progress while the run is `running` (or its outputs are summarized), null otherwise: simulated time
     reached of the total, complete frames so far and the newest one's live preview URL, the solver of the attempt (a
-    DG2 -> FV1 switch restarts from zero, `restarted_from`), and the gross rain (mm/h) at the simulated time."""
+    DG2 -> FV1 switch restarts from zero, `restarted_from`), the gross rain (mm/h) at the simulated time and the gross
+    rain fallen so far and in the whole storm (mm, ROI mean; null without a recorded hyetograph)."""
     try:
         progress = solver_progress(Path(_root()) / str(run['id']), run)
     except (OSError, ValueError, KeyError, TypeError):
@@ -91,7 +92,14 @@ def _progress(run):
     t = progress['simulated_s']
     progress['rain_mm_h'] = None if not segments else next(
         (item['intensity_mm_h'] for item in segments if item['start_s'] <= t < item['end_s']), 0.0)
+    progress['rain_accumulated_mm'] = None if not segments else _rain_so_far_mm(segments, t)
+    progress['rain_total_mm'] = None if not segments else _rain_so_far_mm(segments, float('inf'))
     return progress
+
+
+def _rain_so_far_mm(segments, t):
+    """Rain (mm) of the hyetograph segments (mm/h over [start_s, end_s)) fallen between their start and `t` seconds."""
+    return sum(item['intensity_mm_h'] * max(0.0, min(t, item['end_s']) - item['start_s']) / 3600 for item in segments)
 
 
 def _terrain(run):
@@ -278,15 +286,17 @@ _PREVIEW_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_MAX_SOURCE_CELLS = 8_000_000
 _PREVIEW_MAX_EDGE = 2048
 _PREVIEW_MAX_CELLS = 4_000_000
-_PREVIEW_PALETTE = 'depth-classes-blues-v4'
-# Lower bound (m) and colour of each depth class, light to dark blue (ColorBrewer Blues); below 0.002 m is
-# transparent. 0.002-0.01 m shows the runoff sheets during the rain (very light and semi-transparent, alpha in
-# _DEPTH_CLASS_ALPHA), 0.01-0.03 m the thin sheets of water. Keep in sync with DEPTH_CLASSES in
-# web/src/utils/floodDg2.ts (the map legend) and DEPTH_CLASS_BOUNDS_M in pipeline/hydrology/results.py.
-_DEPTH_CLASSES = [(.002, (236, 245, 253)), (.01, (222, 235, 247)), (.03, (198, 219, 239)), (.15, (107, 174, 214)),
-                  (.5, (33, 113, 181)), (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
+_PREVIEW_PALETTE = 'depth-classes-wet-cyan-blues-v5'
+# Lower bound (m) and colour of each depth class; below 0.0005 m is transparent. Sheets thinner than 3 cm are
+# semi-transparent cyan, more opaque the thicker they are (alpha in _DEPTH_CLASS_ALPHA): 0.0005-0.002 m is the wet
+# surface the rain leaves over most of the area, 0.002-0.01 m the runoff sheets and 0.01-0.03 m the thin sheets.
+# Ponded water (>= 0.03 m, the flooded area) is opaque ColorBrewer Blues, light to dark, so it stays stronger than
+# any sheet on a satellite basemap. Keep in sync with DEPTH_CLASSES in web/src/utils/floodDg2.ts (the map legend)
+# and DEPTH_CLASS_BOUNDS_M in pipeline/hydrology/results.py.
+_DEPTH_CLASSES = [(.0005, (103, 232, 249)), (.002, (34, 211, 238)), (.01, (6, 182, 212)), (.03, (107, 174, 214)),
+                  (.15, (66, 146, 198)), (.5, (33, 113, 181)), (1.0, (8, 81, 156)), (2.0, (8, 48, 107))]
 # PNG alpha of the classes that are not opaque (255).
-_DEPTH_CLASS_ALPHA = {.002: 140}
+_DEPTH_CLASS_ALPHA = {.0005: 115, .002: 165, .01: 210}
 
 
 def _render_preview(values, mask, src_transform, src_crs, nodata):

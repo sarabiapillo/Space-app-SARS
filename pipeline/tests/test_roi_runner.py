@@ -248,7 +248,7 @@ def test_native_run_stores_where_the_rain_went(root):
     last = result['frames'][-1]['stats']
     assert budget['sheet_m3'] == last['sheet_volume_m3'] and budget['ponded_m3'] == last['ponded_volume_m3']
     assert last['sheet_volume_m3'] + last['ponded_volume_m3'] == pytest.approx(last['volume_m3'])
-    assert result['depth_classes_m'] == [.002, .01, .03, .15, .5, 1, 2] and len(last['depth_class_cells']) == 7
+    assert result['depth_classes_m'] == [.0005, .002, .01, .03, .15, .5, 1, 2] and len(last['depth_class_cells']) == 8
 
 
 def failing_on(solver, error):

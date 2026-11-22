@@ -226,9 +226,22 @@ class RoiHttpTests(SimpleTestCase):
         from analyses.roi_flood_runs import _DEPTH_CLASSES, _DEPTH_CLASS_ALPHA
         from pipeline.hydrology.results import DEPTH_CLASS_BOUNDS_M
         self.assertEqual(tuple(lower for lower, _ in _DEPTH_CLASSES), DEPTH_CLASS_BOUNDS_M)
-        # The 0.002-0.01 m runoff-sheet class is the lightest and the only semi-transparent one; 0.01-0.03 m follows.
-        self.assertEqual(_DEPTH_CLASSES[:2], [(.002, (236, 245, 253)), (.01, (222, 235, 247))])
-        self.assertEqual(_DEPTH_CLASS_ALPHA, {.002: 140})
+        # Sheets thinner than 3 cm are semi-transparent cyan, more opaque the thicker they are: the 0.5-2 mm wet surface
+        # (a film over most of the area while it rains), the 2-10 mm runoff sheet and the 1-3 cm thin sheet. Ponds
+        # (>= 3 cm) are opaque blues, so they stay stronger than any sheet on the satellite basemap.
+        self.assertEqual(_DEPTH_CLASSES, [(.0005, (103, 232, 249)), (.002, (34, 211, 238)), (.01, (6, 182, 212)),
+                                          (.03, (107, 174, 214)), (.15, (66, 146, 198)), (.5, (33, 113, 181)),
+                                          (1.0, (8, 81, 156)), (2.0, (8, 48, 107))])
+        self.assertEqual(_DEPTH_CLASS_ALPHA, {.0005: 115, .002: 165, .01: 210})
+
+    def test_rain_so_far_sums_each_interval_up_to_the_simulated_time(self):
+        from analyses.roi_flood_runs import _rain_so_far_mm
+        segments = [{'start_s': 0, 'end_s': 600, 'intensity_mm_h': 10}, {'start_s': 600, 'end_s': 1200, 'intensity_mm_h': 60}]
+        # 10 mm/h for 600 s = 1.667 mm, then 60 mm/h for 300 s = 5 mm; the whole storm is 1.667 + 10 mm.
+        self.assertAlmostEqual(_rain_so_far_mm(segments, 900), 10 * 600 / 3600 + 60 * 300 / 3600)
+        self.assertEqual([_rain_so_far_mm(segments, 0), _rain_so_far_mm(segments, -5)], [0, 0])
+        self.assertAlmostEqual(_rain_so_far_mm(segments, 5000), 10 * 600 / 3600 + 60 * 600 / 3600)  # after the rain
+        self.assertAlmostEqual(_rain_so_far_mm(segments, float('inf')), 10 * 600 / 3600 + 60 * 600 / 3600)
 
     def running(self, frames=(), fallback=True):
         """Seeded run put back to `running` in its FV1 fallback attempt, with the given frame files written so far."""
@@ -257,6 +270,9 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(progress['latest_frame_url'], f'/api/flood-roi-runs/{run_id}/live/0/preview/')
         # Gross rain at the simulated time (the seeded synthetic profile has no losses: 0.002 m/s in its first half second).
         self.assertAlmostEqual(progress['rain_mm_h'], 0.002000978706862038 * 3.6e6)
+        # Gross rain fallen so far (none at t = 0) of the whole storm: 0.5 s at each intensity, 2 mm in total.
+        self.assertEqual(progress['rain_accumulated_mm'], 0)
+        self.assertAlmostEqual(progress['rain_total_mm'], (0.002000978706862038 + 0.001999021293137962) * 0.5 * 1000)
         # Terminal runs and runs not yet started carry no progress.
         state.update(state='failed', stage='failed', error='solver_timeout')
         (directory / 'state.json').write_text(json.dumps(state))
@@ -276,12 +292,12 @@ class RoiHttpTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([response['Content-Type'], response['X-Preview-CRS'], response['X-Preview-Units'], response['Cache-Control']],
                          ['image/png', 'EPSG:3857', 'm', 'no-store'])
-        self.assertEqual(response['X-Preview-Classes'], '0.002,0.01,0.03,0.15,0.5,1,2')
+        self.assertEqual(response['X-Preview-Classes'], '0.0005,0.002,0.01,0.03,0.15,0.5,1,2')
         bounds = [float(v) for v in response['X-Preview-Bounds'].split(',')]
         self.assertTrue(-93.1 < bounds[0] < bounds[2] < -92.9 and 16.7 < bounds[1] < bounds[3] < 16.9)
         image = Image.open(io.BytesIO(response.content))
         alphas = sorted({pixel[3] for pixel in image.convert('RGBA').getdata()})
-        self.assertEqual(alphas, [0, 140, 255])  # nodata, the 2-10 mm sheet, deeper water
+        self.assertEqual(alphas, [0, 165, 210, 255])  # nodata, the 2-10 mm and 1-3 cm sheets, ponded water
         self.assertEqual(self.alice.get(f'/api/flood-roi-runs/{run_id}/live/7/preview/').status_code, 404)
         # A symlinked output directory is never followed; a finished run uses the stored previews instead.
         shutil.move(outputs, directory / 'elsewhere'); outputs.symlink_to(directory / 'elsewhere')

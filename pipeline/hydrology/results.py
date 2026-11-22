@@ -30,11 +30,12 @@ CHANNEL_MIN_UPSLOPE_KM2 = .12
 FLOW_METHOD = ('overflow only: depth-weighted block mean of LISFLOOD-FP voutput Vx/Vy (HU/H) over cells at '
                'least min_depth_m deep, outside the D8 channel network of the solver DEM (upslope area >= '
                'channel_min_upslope_km2) and outside the initial sea; Vx positive east, Vy positive north')
-# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts. The 0.002-0.01 m
-# class shows the runoff sheets during the rain (a few mm on the slopes) and 0.01-0.03 m the thin sheets; the
-# flooded area of the panel still counts from 0.03 m. Runs store their own list (depth_classes_m), so results made
-# with the earlier (.03, .15, .5, 1, 2) or (.01, .03, ...) bounds stay readable.
-DEPTH_CLASS_BOUNDS_M = (.002, .01, .03, .15, .5, 1, 2)
+# Lower bounds (m) of the depth classes used by the preview palette, the map legend and the charts. The 0.0005-0.002 m
+# class is the wet surface (a film left by the rain over most of the area), 0.002-0.01 m the runoff sheets during the
+# rain (a few mm on the slopes) and 0.01-0.03 m the thin sheets; the flooded area of the panel still counts from
+# 0.03 m. Runs store their own list (depth_classes_m), so results made with the earlier (.03, .15, .5, 1, 2),
+# (.01, .03, ...) or (.002, .01, ...) bounds stay readable.
+DEPTH_CLASS_BOUNDS_M = (.0005, .002, .01, .03, .15, .5, 1, 2)
 # Water at least this deep is ponded (the panel's flooded area); thinner water is a runoff sheet on the slopes.
 PONDED_MIN_DEPTH_M = .03
 # DG2 wet/dry fronts on steep terrain can leave negative cell-average depths even with dg2depththresh.
@@ -511,7 +512,8 @@ def flow_arrows(depth, vx, vy, *, crs, eligible=None, max_arrows=FLOW_MAX_ARROWS
 
 
 def _depth_class_cells(data):
-    """Valid cells per depth class: [0.002, 0.01), [0.01, 0.03), [0.03, 0.15), [0.15, 0.5), [0.5, 1), [1, 2), >= 2 m."""
+    """Valid cells per depth class: [0.0005, 0.002), [0.002, 0.01), [0.01, 0.03), [0.03, 0.15), [0.15, 0.5), [0.5, 1),
+    [1, 2) and >= 2 m."""
     values = data['values'][data['values'] != data['nodata']]
     edges = [*DEPTH_CLASS_BOUNDS_M, math.inf]
     return [int(np.count_nonzero((values >= low) & (values < high))) for low, high in zip(edges, edges[1:])]

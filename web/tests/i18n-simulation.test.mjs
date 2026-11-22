@@ -194,6 +194,23 @@ test('animation controls, rain badge and water budget are shown in the selected 
   for (const text of [/¿A dónde fue la lluvia\?/, /Infiltrada o retenida/, /Láminas &lt; 3 cm/, /Encharcada ≥ 3 cm/, /Salió por las fronteras/, /número de curva/, /04:00/, /no validado/]) assert.match(esBudget, text)
   assert.match(render(RainOverlay, { mmPerHour: 36 }), /Lloviendo 36 mm\/h/)
   assert.equal(render(RainOverlay, { mmPerHour: 0 }), '')
+  // Badge with the rain so far; tint and drops clipped to the domain on screen; reduced motion keeps tint and badge only.
+  const area = [[100, 50], [700, 50], [700, 450], [100, 450]]
+  const raining = render(RainOverlay, { mmPerHour: 22.7, soFarMm: 31.2, totalMm: 55.99, area, mapSize: [960, 640] })
+  assert.match(raining, /Lloviendo 22.7 mm\/h · acumulado 31 mm de 56 mm/)
+  assert.match(raining, /class="ws-flood-rain__area" style="left:100px;top:50px;width:600px;height:400px;clip-path:polygon\(0px 0px, 600px 0px, 600px 400px, 0px 400px\)"/)
+  assert.match(raining, /class="ws-flood-rain__tint" style="opacity:0.17"/)
+  assert.match(raining, /ws-flood-rain__canvas/)
+  assert.match(raining, /class="ws-flood-rain__badge is-anchored" role="status" style="left:400px;top:16px"/)  // above the domain
+  const still = render(RainOverlay, { mmPerHour: 22.7, soFarMm: 3.24, totalMm: 8, area, mapSize: [960, 640], reducedMotion: true })
+  assert.match(still, /ws-flood-rain__tint/)
+  assert.match(still, /Lloviendo 22.7 mm\/h · acumulado 3.2 mm de 8 mm/)
+  assert.doesNotMatch(still, /ws-flood-rain__canvas/)
+  const offscreen = render(RainOverlay, { mmPerHour: 22.7, area: [[2000, 50], [2600, 50], [2600, 450], [2000, 450]], mapSize: [960, 640] })
+  assert.match(offscreen, /Lloviendo 22.7 mm\/h/)
+  assert.doesNotMatch(offscreen, /ws-flood-rain__tint|ws-flood-rain__canvas/)
+  assert.match(render(FloodPlaybackControls, { playback: { ...playback, rainSoFarMm: 12.4, rainTotalMm: 56 }, onShowMaximum: noop }),
+    /Lluvia bruta en este instante: 36 mm\/h · acumulado 12 mm de 56 mm/)
   assert.match(render(FloodPlaybackControls, { playback: { ...playback, available: false, total: 1 }, onShowMaximum: noop }), /menos de dos cuadros/)
   setLanguage('en')
   const en = render(FloodPlaybackControls, { playback: { ...playback, playing: false }, onShowMaximum: noop })
@@ -203,6 +220,22 @@ test('animation controls, rain badge and water budget are shown in the selected 
   for (const text of [/Where did the rain go\?/, /Infiltrated or retained/, /Sheets &lt; 3 cm/, /Ponded ≥ 3 cm/, /Left through the boundaries/, /Curve Number/, /not validated/]) assert.match(enBudget, text)
   assert.doesNotMatch(enBudget, /lluvia|Infiltrada|Encharcada|fronteras/)
   assert.match(render(RainOverlay, { mmPerHour: 36 }), /Raining 36 mm\/h/)
+  assert.match(render(RainOverlay, { mmPerHour: 22.7, soFarMm: 31.2, totalMm: 55.99 }), /Raining 22.7 mm\/h · 31 mm of 56 mm so far/)
+  assert.match(render(FloodPlaybackControls, { playback: { ...playback, rainSoFarMm: 12.4, rainTotalMm: 56 }, onShowMaximum: noop }),
+    /Gross rain at this instant: 36 mm\/h · 12 mm of 56 mm so far/)
+  setLanguage('es')
+})
+
+test('depth legend names the wet surface and the sheets in the selected language only', async () => {
+  const { FloodDepthLegend } = await import('../src/components/FloodDepthLegend.tsx')
+  setLanguage('es')
+  const es = render(FloodDepthLegend, {})
+  assert.equal((es.match(/<li/g) || []).length, 8)
+  for (const text of [/0.0005 – 0.002/, /superficie mojada/, /escurrimiento/, /lámina delgada/, /Menos de 0.0005 m: transparente/, /encharcada/]) assert.match(es, text)
+  setLanguage('en')
+  const en = render(FloodDepthLegend, {})
+  for (const text of [/wet surface/, /runoff/, /thin sheet/, /Below 0.0005 m: transparent/, /ponded/]) assert.match(en, text)
+  assert.doesNotMatch(en, /mojada|escurrimiento|transparente/)
   setLanguage('es')
 })
 

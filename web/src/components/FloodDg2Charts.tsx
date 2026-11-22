@@ -200,6 +200,8 @@ export function FloodDg2Charts({ result, frameIndex, cursorS }: Props) {
               options={axes(t('profundidad (m)', 'depth (m)'), 'ha', locale)}
             />
           </div>
+          {data.distribution.labels[0]?.startsWith('0.0005') && <small>{t('0.0005–0.002 m es la superficie mojada: la película de agua que deja la lluvia en casi toda la zona. Las clases hasta 0.03 m son láminas; desde 0.03 m, agua encharcada.',
+            '0.0005–0.002 m is the wet surface: the film of water the rain leaves over most of the area. Classes up to 0.03 m are sheets; from 0.03 m, ponded water.')}</small>}
         </figure>
       )}
     </section>

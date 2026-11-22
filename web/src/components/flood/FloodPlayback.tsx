@@ -1,5 +1,5 @@
 import { Loader2, Pause, Play, Repeat, SkipBack } from 'lucide-react'
-import { PLAYBACK_BASE_FPS, PLAYBACK_SPEEDS, simulatedTimeLabel } from '../../utils/floodDg2'
+import { PLAYBACK_BASE_FPS, PLAYBACK_SPEEDS, rainSoFarSuffix, simulatedTimeLabel } from '../../utils/floodDg2'
 import { useTranslation } from '../../i18n/useTranslation'
 import type { FloodPlayback } from './useFloodPlayback'
 
@@ -11,7 +11,7 @@ interface ControlsProps {
 
 /** Play/pause, time slider labelled with the simulated time, speed, loop and the rain toggle. */
 export function FloodPlaybackControls({ playback, onShowMaximum }: ControlsProps) {
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
   if (!playback.available) {
     return <p className="ws-rain-help">{playback.total < 2
       ? t('Esta corrida tiene menos de dos cuadros: no hay animación.', 'This run has fewer than two frames: there is no animation.')
@@ -54,6 +54,7 @@ export function FloodPlaybackControls({ playback, onShowMaximum }: ControlsProps
       </div>
       {playback.active && rain != null && <p className="ws-rain-help ws-flood-playback__rain" role="status">
         {rain > 0 ? t(`Lluvia bruta en este instante: ${Math.round(rain * 10) / 10} mm/h`, `Gross rain at this instant: ${Math.round(rain * 10) / 10} mm/h`)
+            + rainSoFarSuffix(playback.rainSoFarMm, playback.rainTotalMm, t, locale)
           : t('Sin lluvia en este instante', 'No rain at this instant')}
       </p>}
       {playback.error && <p role="alert" className="ws-rain-error"><span>{t('No se pudieron cargar los cuadros:', 'The frames could not be loaded:')} {playback.error}</span></p>}

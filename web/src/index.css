@@ -4132,7 +4132,9 @@ button:disabled {
 .ws-flood-legend ul { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 2px; }
 .ws-flood-legend li { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .ws-flood-legend__swatch { width: 14px; height: 10px; border: 1px solid var(--color-border-strong); }
-.ws-flood-legend small { display: block; max-width: 190px; line-height: 1.35; color: var(--color-text-muted); }
+.ws-flood-legend small { display: block; max-width: 210px; line-height: 1.35; color: var(--color-text-muted); }
+.ws-flood-legend__name { font-style: normal; color: var(--color-text-muted); }
+.ws-flood-legend__name::before { content: '· '; }
 
 .ws-rain-overlay {
   position: absolute;
@@ -6510,8 +6512,12 @@ button:disabled {
 .ws-flood-playback__rain { margin: 0; }
 
 .ws-flood-rain { position: absolute; inset: 0; z-index: 7; overflow: hidden; pointer-events: none; }
+/* Rained box: the simulated domain projected on the map (inline left/top/size and clip-path), the whole map otherwise. */
+.ws-flood-rain__area { position: absolute; inset: 0; overflow: hidden; }
+/* Rain curtain: a translucent overcast tint over the domain; its opacity follows the gross intensity (inline style). */
+.ws-flood-rain__tint { position: absolute; inset: 0; background: linear-gradient(180deg, rgb(30, 41, 59) 0%, rgb(30, 58, 95) 100%); }
 .ws-flood-rain__canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.ws-flood-rain__badge { position: absolute; left: 50%; bottom: 36px; transform: translateX(-50%); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; font-size: 11.5px; font-weight: 600; color: #0c4a6e; background: rgba(240, 249, 255, 0.94); border: 1px solid #38bdf8; border-radius: 2px; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18); }
+.ws-flood-rain__badge { position: absolute; left: 50%; bottom: 36px; transform: translateX(-50%); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; color: #0c4a6e; background: rgba(240, 249, 255, 0.96); border: 1px solid #0ea5e9; border-radius: 2px; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.25); }
 
 .ws-flood-budget { margin: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px; background: #ffffff; border: 1px solid #bae6fd; border-radius: 3px; }
 .ws-flood-budget figcaption { font-size: 11.5px; font-weight: 700; color: #0f172a; }
@@ -6525,7 +6531,9 @@ button:disabled {
 .ws-flood-budget__legend small { color: #475569; text-align: right; font-variant-numeric: tabular-nums; }
 .ws-flood-budget__swatch { width: 10px; height: 10px; border-radius: 2px; }
 .ws-flood-budget .ws-rain-help { margin: 0; }
-@media (max-width: 640px) { .ws-flood-rain__badge { top: 8px; bottom: auto; } }
+/* Anchored above the rained domain (inline left/top of its centre); the default place is the bottom of the map. */
+.ws-flood-rain__badge.is-anchored { bottom: auto; }
+@media (max-width: 640px) { .ws-flood-rain__badge { top: 8px; bottom: auto; max-width: calc(100% - 24px); white-space: normal; text-align: center; } }
 .ws-flood-progress { display: flex; flex-direction: column; gap: 4px; }
 .ws-rain-progressbar.is-determinate { height: 8px; }
 .ws-rain-progressbar.is-determinate span { inset: 0 auto 0 0; animation: none; transition: width 0.6s ease; }

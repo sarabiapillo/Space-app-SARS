@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FloodRoiRun } from '../../api/client'
-import { liveFrameToFetch, type AnimationFrame, type FloodMapAnimation } from '../../utils/floodDg2'
+import { liveFrameToFetch, liveRain, type AnimationFrame, type FloodMapAnimation } from '../../utils/floodDg2'
 import { usePrefersReducedMotion } from './useFloodPlayback'
 
 type LivePreview = (id: string, frameIndex: number, signal: AbortSignal) => Promise<{blob: Blob; bounds: [number, number, number, number]}>
@@ -66,9 +66,11 @@ export function useLiveRunFrames({ run, preview, showRain }: { run: FloodRoiRun 
     return own.filter(item => (item.attempt ?? 0) === (shown ?? 0)).map(item => item.frame)
   }, [fetchedFrames, runId, state, currentAttempt])
   const seen = fetchedFrames.some(item => item.runId === runId)
-  const rainMmH = IN_PROGRESS.includes(state ?? '') ? progress?.rain_mm_h ?? null : null
+  // Rain at the simulated time reached (not at the newest frame's time): intensity, fallen so far and storm total.
+  const rain = liveRain(IN_PROGRESS.includes(state ?? '') ? progress : null)
+  const { mmPerHour: rainMmH, soFarMm: rainSoFarMm, totalMm: rainTotalMm } = rain
   const animation = useMemo<FloodMapAnimation | null>(() => (frames.length
-    ? { frames, index: frames.length - 1, fadeMs: reducedMotion ? 0 : LIVE_FADE_MS, flowArrows: null, rainMmH, showRain, live: true }
-    : null), [frames, reducedMotion, rainMmH, showRain])
+    ? { frames, index: frames.length - 1, fadeMs: reducedMotion ? 0 : LIVE_FADE_MS, flowArrows: null, rainMmH, rainSoFarMm, rainTotalMm, showRain, live: true }
+    : null), [frames, reducedMotion, rainMmH, rainSoFarMm, rainTotalMm, showRain])
   return { animation, frames, seen, current: frames.at(-1) ?? null }
 }

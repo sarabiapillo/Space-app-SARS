@@ -192,14 +192,30 @@ test('map legend depth classes match the backend preview palette exactly', async
   const python = readFileSync(new URL('../../backend/analyses/roi_flood_runs.py', import.meta.url), 'utf8')
   const block = python.match(/_DEPTH_CLASSES = \[([\s\S]*?)\]\n/)[1]
   const backend = [...block.matchAll(/\(([\d.]+), \((\d+), (\d+), (\d+)\)\)/g)].map(m => [Number(m[1]), [Number(m[2]), Number(m[3]), Number(m[4])]])
-  assert.equal(backend.length, 7)
+  assert.equal(backend.length, 8)
   assert.deepEqual(DEPTH_CLASSES.map(c => [c.min, c.rgb]), backend)
-  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.01, .03, .15, .5, 1, 2, null])
-  // The 0.002-0.01 m runoff-sheet class is the lightest and the only semi-transparent one (same alpha as the PNG).
+  assert.deepEqual(DEPTH_CLASSES.map(c => c.max), [.002, .01, .03, .15, .5, 1, 2, null])
+  // Same alpha as the PNG: the three sheet classes (< 3 cm) are semi-transparent cyan, more opaque the thicker they
+  // are, from the 0.5-2 mm wet surface; ponded water (>= 3 cm) is opaque, so it stays stronger than any sheet.
   const alpha = Object.fromEntries([...python.match(/_DEPTH_CLASS_ALPHA = \{([^}]*)\}/)[1].matchAll(/([\d.]+): (\d+)/g)].map(m => [Number(m[1]), Number(m[2])]))
   assert.deepEqual(DEPTH_CLASSES.map(c => Math.round((c.alpha ?? 1) * 255)), DEPTH_CLASSES.map(c => alpha[c.min] ?? 255))
-  assert.deepEqual({...DEPTH_CLASSES[0], alpha: Math.round(DEPTH_CLASSES[0].alpha * 255)}, {min:.002, max:.01, rgb:[236,245,253], alpha:140})
-  assert.deepEqual(DEPTH_CLASSES[1], {min:.01, max:.03, rgb:[222,235,247]})
+  assert.deepEqual(DEPTH_CLASSES.map(c => Math.round((c.alpha ?? 1) * 255)), [115, 165, 210, 255, 255, 255, 255, 255])
+  assert.deepEqual({...DEPTH_CLASSES[0], alpha: Math.round(DEPTH_CLASSES[0].alpha * 255)}, {min:.0005, max:.002, rgb:[103,232,249], alpha:115})
+  assert.deepEqual(DEPTH_CLASSES[3], {min:.03, max:.15, rgb:[107,174,214]})
+})
+
+test('depth classes of a run: new runs chart the 0.5-2 mm wet surface, counted with the sheets and never as flooded', async () => {
+  const { dg2ChartData, dg2Summary } = await import('../src/utils/floodDg2.ts')
+  const eight = { grid: { cellsize_m: 30 }, rainfall_segments: null, mass_balance: null, depth_classes_m: [.0005, .002, .01, .03, .15, .5, 1, 2],
+    frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 532, depth_class_cells: [256, 62, 46, 25, 3, 0, 0, 0] } }],
+    maximum: { stats: { max_m: .2, valid_cells: 532, depth_class_cells: [200, 80, 60, 30, 5, 0, 0, 0] } } }
+  const chart = dg2ChartData(eight, 0)
+  assert.deepEqual(chart.distribution.labels, ['0.0005–0.002', '0.002–0.01', '0.01–0.03', '0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
+  assert.deepEqual(chart.distribution.colors.slice(0, 4), ['rgba(103,232,249,0.45)', 'rgba(34,211,238,0.65)', 'rgba(6,182,212,0.82)', 'rgb(107,174,214)'])
+  // Real urban run 21f845bd at the storm peak (frame 18): 364 cells of sheets (wet surface included), 28 flooded.
+  assert.deepEqual([chart.evolution.wetAreaHa, chart.evolution.sheetAreaHa], [[28 * 900 / 1e4], [364 * 900 / 1e4]])
+  const summary = dg2Summary(eight, 0)
+  assert.deepEqual([summary.floodedHa, summary.thinSheetHa], [28 * 900 / 1e4, 364 * 900 / 1e4])
 })
 
 test('depth classes of a run: new runs chart the 2-10 mm sheet class, older six- and five-class runs keep their own bounds', async () => {
@@ -210,7 +226,7 @@ test('depth classes of a run: new runs chart the 2-10 mm sheet class, older six-
     maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [20, 50, 8, 4, 0, 0, 0] } } }
   const sevenChart = dg2ChartData(seven, null)
   assert.deepEqual(sevenChart.distribution.labels, ['0.002–0.01', '0.01–0.03', '0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
-  assert.equal(sevenChart.distribution.colors[0], 'rgba(236,245,253,0.55)')
+  assert.equal(sevenChart.distribution.colors[0], 'rgba(34,211,238,0.65)')  // previews and charts use the current palette
   // Flooded area still counts from 0.03 m; both sheet classes (2 mm to 3 cm) are reported apart, also over time.
   assert.deepEqual([dg2Summary(seven, null).floodedHa, dg2Summary(seven, null).thinSheetHa], [12 * 900 / 1e4, 70 * 900 / 1e4])
   assert.deepEqual([sevenChart.evolution.wetAreaHa, sevenChart.evolution.sheetAreaHa], [[9 * 900 / 1e4], [70 * 900 / 1e4]])
@@ -219,7 +235,7 @@ test('depth classes of a run: new runs chart the 2-10 mm sheet class, older six-
     maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [50, 8, 4, 0, 0, 0] } } }
   const chart = dg2ChartData(fresh, null)
   assert.deepEqual(chart.distribution.labels, ['0.01–0.03', '0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
-  assert.deepEqual(chart.distribution.colors, ['rgb(222,235,247)', 'rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
+  assert.deepEqual(chart.distribution.colors, ['rgba(6,182,212,0.82)', 'rgb(107,174,214)', 'rgb(66,146,198)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
   // Flooded area still counts from 0.03 m; the 1-3 cm sheet is reported apart.
   assert.deepEqual(chart.evolution.wetAreaHa, [9 * 900 / 1e4])
   const summary = dg2Summary(fresh, null)
@@ -228,7 +244,7 @@ test('depth classes of a run: new runs chart the 2-10 mm sheet class, older six-
     frames: [{ frame_index: 0, scheduled_time_s: 0, stats: { max_m: .2, valid_cells: 100, depth_class_cells: [6, 3, 0, 0, 0] } }],
     maximum: { stats: { max_m: .2, valid_cells: 100, depth_class_cells: [8, 4, 0, 0, 0] } } }
   assert.deepEqual(dg2ChartData(old, null).distribution.labels, ['0.03–0.15', '0.15–0.5', '0.5–1', '1–2', '≥ 2'])
-  assert.deepEqual(dg2ChartData(old, null).distribution.colors, ['rgb(198,219,239)', 'rgb(107,174,214)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
+  assert.deepEqual(dg2ChartData(old, null).distribution.colors, ['rgb(107,174,214)', 'rgb(66,146,198)', 'rgb(33,113,181)', 'rgb(8,81,156)', 'rgb(8,48,107)'])
   assert.deepEqual([dg2Summary(old, null).floodedHa, dg2Summary(old, null).thinSheetHa], [12 * 900 / 1e4, null])
   assert.deepEqual(dg2ChartData(old, null).evolution.wetAreaHa, [9 * 900 / 1e4])
   assert.equal(dg2ChartData(old, null).evolution.sheetAreaHa, null)  // five-class runs have no sheet classes
@@ -617,9 +633,41 @@ test('rain effect: gross intensity at a simulated time from the segments, streng
   assert.equal(rainIntensityAt(null, 0), null)  // runs without a recorded hyetograph
   assert.equal(rainEffect(0), null)
   assert.equal(rainEffect(null), null)
+  // Drops per 10 000 px² of the rained area and the rain-curtain tint grow with sqrt(mm/h / 100), saturating at 100 mm/h.
   const light = rainEffect(1), heavy = rainEffect(25), violent = rainEffect(100)
-  assert.deepEqual([light.drops, heavy.drops, violent.drops, rainEffect(400).drops], [66, 170, 300, 300])
+  assert.deepEqual([light.density, heavy.density, violent.density, rainEffect(400).density], [5.6, 12, 20, 20])
+  assert.deepEqual([light.tint, heavy.tint, violent.tint, rainEffect(400).tint], [.11, .17, .24, .24])
   assert.ok(light.speed < heavy.speed && heavy.speed < violent.speed && violent.speed === rainEffect(400).speed)
+})
+
+test('rain presence: rain fallen so far at a simulated time, drops for the rained area and the domain on screen', async () => {
+  const { rainAccumulatedAt, rainDrops, rainAreaBox, liveRain } = await import('../src/utils/floodDg2.ts')
+  const segments = [{start_s: 0, end_s: 600, intensity_mm_h: 10}, {start_s: 600, end_s: 1200, intensity_mm_h: 60}]
+  // 10 mm/h for 600 s = 1.667 mm, then 60 mm/h for 300 s = 5 mm; the whole storm is 1.667 + 10 mm.
+  const at900 = rainAccumulatedAt(segments, 900)
+  assert.ok(Math.abs(at900.mm - (10 * 600 / 3600 + 60 * 300 / 3600)) < 1e-9 && Math.abs(at900.totalMm - (10 * 600 / 3600 + 60 * 600 / 3600)) < 1e-9)
+  assert.deepEqual([rainAccumulatedAt(segments, 0).mm, rainAccumulatedAt(segments, 5000).mm], [0, rainAccumulatedAt(segments, 5000).totalMm])
+  assert.equal(rainAccumulatedAt(null, 10), null)  // runs without a recorded hyetograph
+  // Drops: density per 10 000 px² of the rained box, at least 12 and at most 1500.
+  assert.deepEqual([rainDrops(12, 600, 400), rainDrops(12, 10, 10), rainDrops(20, 4000, 3000)], [288, 12, 1500])
+  // The domain corners projected on the map, clamped to the map; null (whole map) without corners, 'offscreen' outside.
+  const box = rainAreaBox([[100, 50], [700, 50], [700, 450], [100, 450]], 960, 640)
+  assert.deepEqual(box, {left: 100, top: 50, width: 600, height: 400, clipPath: 'polygon(0px 0px, 600px 0px, 600px 400px, 0px 400px)'})
+  assert.deepEqual(rainAreaBox([[-200, -100], [1200, -100], [1200, 900], [-200, 900]], 960, 640),
+    {left: 0, top: 0, width: 960, height: 640, clipPath: 'polygon(-200px -100px, 1200px -100px, 1200px 900px, -200px 900px)'})
+  assert.equal(rainAreaBox([[2000, 50], [2600, 50], [2600, 450], [2000, 450]], 960, 640), 'offscreen')
+  assert.equal(rainAreaBox(null, 960, 640), null)
+  // The badge sits centred just above the domain (inside its top edge when there is no room), kept off the map edges.
+  const { rainBadgePosition } = await import('../src/utils/floodDg2.ts')
+  assert.deepEqual(rainBadgePosition(box, 960), {left: 400, top: 16})
+  assert.deepEqual(rainBadgePosition({left: 0, top: 10, width: 200, height: 100, clipPath: ''}, 960), {left: 170, top: 18})
+  assert.deepEqual(rainBadgePosition({left: 800, top: 300, width: 160, height: 100, clipPath: ''}, 960), {left: 790, top: 266})
+  assert.equal(rainBadgePosition(null, 960), null)
+  assert.equal(rainBadgePosition('offscreen', 960), null)
+  // A run in progress: the server reports the rain so far and in total (older servers omit them).
+  assert.deepEqual(liveRain({rain_mm_h: 22.7, rain_accumulated_mm: 31.2, rain_total_mm: 56}), {mmPerHour: 22.7, soFarMm: 31.2, totalMm: 56})
+  assert.deepEqual(liveRain({rain_mm_h: 22.7}), {mmPerHour: 22.7, soFarMm: null, totalMm: null})
+  assert.deepEqual(liveRain(null), {mmPerHour: null, soFarMm: null, totalMm: null})
 })
 
 test('water budget view: parts of the bar and their shares; older runs show the final water unsplit', async () => {

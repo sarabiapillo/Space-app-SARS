@@ -232,7 +232,8 @@ export function formStepStatus(form: FloodDg2Form, roi: Polygon | null) {
   }
 }
 
-/** Lower bound (m) from which a cell counts as flooded; the 0.002–0.01 m and 0.01–0.03 m classes are sheets of water. */
+/** Lower bound (m) from which a cell counts as flooded; the thinner classes (0.0005–0.002 m wet surface, 0.002–0.01 m
+ * runoff and 0.01–0.03 m thin sheet in new runs) are sheets of water. */
 export const FLOODED_MIN_DEPTH_M = .03
 
 /** Cells of the classes at or above FLOODED_MIN_DEPTH_M and of the thinner classes, using the run's own bounds
@@ -247,8 +248,8 @@ function splitDepthCells(stats: FloodRoiStats | undefined, bounds: number[] | nu
 
 /** Headline numbers of the selected frame (or the maximum when `frameIndex` is null) for the result cards.
  * Flooded area counts the depth classes from 0.03 m, as the area chart does; `thinSheetHa` adds the classes below
- * 0.03 m (0.002–0.03 m in new runs, 0.01–0.03 m in earlier ones; null for runs without them); null where older runs
- * lack inputs. */
+ * 0.03 m (0.0005–0.03 m in new runs, 0.002–0.03 m or 0.01–0.03 m in earlier ones; null for runs without them); null
+ * where older runs lack inputs. */
 export function dg2Summary(result: Pick<FloodRoiResult, 'frames' | 'maximum' | 'grid' | 'mass_balance' | 'froude' | 'time_of_concentration' | 'roads'> & Partial<Pick<FloodRoiResult, 'depth_classes_m'>>, frameIndex: number | null | undefined) {
   const stats = frameIndex == null ? result.maximum.stats : result.frames.find(f => f.frame_index === frameIndex)?.stats
   const split = splitDepthCells(stats, result.depth_classes_m)
@@ -425,14 +426,17 @@ export function flowArrowFeatures(result: Pick<FloodRoiResult, 'flow'>, frameInd
   return {type:'FeatureCollection',features:frame.arrows.map(([lon,lat,speed,bearing])=>({type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{speed,bearing}}))}
 }
 
-/** Depth classes of the preview PNG, light to dark blue (ColorBrewer Blues). Kept in sync with _DEPTH_CLASSES and
- * _DEPTH_CLASS_ALPHA in backend/analyses/roi_flood_runs.py by a test. Below 0.002 m the image is transparent;
- * 0.002–0.01 m is the runoff sheet during the rain (semi-transparent, `alpha` 0–1) and 0.01–0.03 m a thin sheet. */
+/** Depth classes of the preview PNG. Kept in sync with _DEPTH_CLASSES and _DEPTH_CLASS_ALPHA in
+ * backend/analyses/roi_flood_runs.py by a test. Below 0.0005 m the image is transparent. Sheets thinner than 3 cm are
+ * semi-transparent cyan (`alpha` 0–1), more opaque the thicker they are: the 0.0005–0.002 m wet surface the rain leaves
+ * over most of the area, the 0.002–0.01 m runoff sheet and the 0.01–0.03 m thin sheet. Ponded water (≥ 0.03 m, the
+ * flooded area) is opaque ColorBrewer Blues, light to dark, so it stays stronger than any sheet on a satellite map. */
 export const DEPTH_CLASSES: ReadonlyArray<{min: number; max: number | null; rgb: [number, number, number]; alpha?: number}> = [
-  {min:.002,max:.01,rgb:[236,245,253],alpha:140/255},
-  {min:.01,max:.03,rgb:[222,235,247]},
-  {min:.03,max:.15,rgb:[198,219,239]},
-  {min:.15,max:.5,rgb:[107,174,214]},
+  {min:.0005,max:.002,rgb:[103,232,249],alpha:115/255},
+  {min:.002,max:.01,rgb:[34,211,238],alpha:165/255},
+  {min:.01,max:.03,rgb:[6,182,212],alpha:210/255},
+  {min:.03,max:.15,rgb:[107,174,214]},
+  {min:.15,max:.5,rgb:[66,146,198]},
   {min:.5,max:1,rgb:[33,113,181]},
   {min:1,max:2,rgb:[8,81,156]},
   {min:2,max:null,rgb:[8,48,107]},
@@ -525,12 +529,72 @@ export function rainIntensityAt(segments: Segment[] | null | undefined, seconds:
   return segments.find(s => s.start_s <= seconds && seconds < s.end_s)?.intensity_mm_h ?? 0
 }
 
-/** Strength of the rain drawn on the map for a gross intensity: number of drops and a fall-speed factor, both growing
- * with mm/h and saturating at 100 mm/h; null when it does not rain. Illustrative, not a radar picture. */
+/** Strength of the rain drawn on the map for a gross intensity, growing with mm/h and saturating at 100 mm/h: drops per
+ * 10 000 px² of the rained area, a fall-speed factor and the opacity of the rain-curtain tint over the domain; null
+ * when it does not rain. Illustrative, not a radar picture. */
 export function rainEffect(mmPerHour: number | null | undefined) {
   if (mmPerHour == null || !Number.isFinite(mmPerHour) || mmPerHour <= 0) return null
   const strength = Math.min(1, Math.sqrt(mmPerHour / 100))
-  return {drops: Math.round(40 + 260 * strength), speed: .8 + .7 * Math.min(1, mmPerHour / 100)}
+  return {density: Math.round((4 + 16 * strength) * 10) / 10, speed: .8 + .7 * Math.min(1, mmPerHour / 100), tint: Math.round((.1 + .14 * strength) * 100) / 100}
+}
+
+/** Drops drawn on a rained box of `width` × `height` px: `density` per 10 000 px², at least 12 and at most 1500. */
+export function rainDrops(density: number, width: number, height: number) {
+  return Math.min(1500, Math.max(12, Math.round(density * Math.max(0, width) * Math.max(0, height) / 1e4)))
+}
+
+/** Gross rain (mm) fallen from the start of the hyetograph to `seconds`, and in the whole storm; null without segments. */
+export function rainAccumulatedAt(segments: Segment[] | null | undefined, seconds: number) {
+  if (!segments?.length || !Number.isFinite(seconds)) return null
+  const fallen = (until: number) => segments.reduce((sum, s) => sum + s.intensity_mm_h * Math.max(0, Math.min(until, s.end_s) - s.start_s) / 3600, 0)
+  return {mm: fallen(seconds), totalMm: fallen(Infinity)}
+}
+
+/** Rain of a run in progress from its status: gross mm/h at the simulated time, and the rain fallen so far and in the
+ * whole storm (mm); servers that predate the last two omit them (null). */
+export function liveRain(progress: Pick<FloodRunProgress, 'rain_mm_h' | 'rain_accumulated_mm' | 'rain_total_mm'> | null | undefined) {
+  const finite = (v: number | null | undefined) => v != null && Number.isFinite(v) ? v : null
+  return {mmPerHour: finite(progress?.rain_mm_h), soFarMm: finite(progress?.rain_accumulated_mm), totalMm: finite(progress?.rain_total_mm)}
+}
+
+/** Box of the map (px) where the rain is drawn: the domain corners projected on the map, clamped to the map size, with
+ * a clip path (relative to the box) that follows the corners. null without corners (the rain covers the whole map);
+ * 'offscreen' when the domain is outside the map view. */
+export function rainAreaBox(points: ReadonlyArray<readonly [number, number]> | null | undefined, width: number, height: number) {
+  if (!points || points.length < 3 || points.some(p => !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return null
+  const xs = points.map(p => p[0]), ys = points.map(p => p[1])
+  const left = Math.max(0, Math.min(...xs)), top = Math.max(0, Math.min(...ys))
+  const right = Math.min(width, Math.max(...xs)), bottom = Math.min(height, Math.max(...ys))
+  if (!(right - left >= 1 && bottom - top >= 1)) return 'offscreen' as const
+  const px = (v: number) => `${Math.round(v * 10) / 10}px`
+  return {left, top, width: right - left, height: bottom - top, clipPath: `polygon(${points.map(([x, y]) => `${px(x - left)} ${px(y - top)}`).join(', ')})`}
+}
+
+/** Where the rain badge goes (px, its centre and top): centred just above the rained box, or inside its top edge when
+ * there is no room above, with the centre kept 170 px off the map edges; null without a box on screen (the badge then
+ * keeps its default place at the bottom of the map). */
+export function rainBadgePosition(box: ReturnType<typeof rainAreaBox>, mapWidth: number) {
+  if (!box || box === 'offscreen') return null
+  const centre = box.left + box.width / 2
+  const left = mapWidth >= 340 ? Math.min(Math.max(centre, 170), mapWidth - 170) : centre
+  return {left: Math.round(left), top: Math.round(box.top >= 42 ? box.top - 34 : box.top + 8)}
+}
+
+/** Text of the rain badge on the map: gross intensity and, when known, the rain fallen so far of the whole storm
+ * (amounts below 10 mm with one decimal, larger ones rounded). */
+export function rainBadgeText(rain: {mmPerHour: number; soFarMm?: number | null; totalMm?: number | null}, t: Translate, locale?: string) {
+  const rate = rain.mmPerHour.toLocaleString(locale, {maximumFractionDigits: 1})
+  const amount = (mm: number) => mm.toLocaleString(locale, {maximumFractionDigits: Math.abs(mm) < 10 ? 1 : 0})
+  if (rain.soFarMm == null || rain.totalMm == null) return t(`Lloviendo ${rate} mm/h`, `Raining ${rate} mm/h`)
+  return t(`Lloviendo ${rate} mm/h · acumulado ${amount(rain.soFarMm)} mm de ${amount(rain.totalMm)} mm`,
+    `Raining ${rate} mm/h · ${amount(rain.soFarMm)} mm of ${amount(rain.totalMm)} mm so far`)
+}
+
+/** Rain fallen so far of the whole storm for a text next to the intensity (" · acumulado 12 mm de 56 mm"); '' when unknown. */
+export function rainSoFarSuffix(soFarMm: number | null | undefined, totalMm: number | null | undefined, t: Translate, locale?: string) {
+  if (soFarMm == null || totalMm == null) return ''
+  const amount = (mm: number) => mm.toLocaleString(locale, {maximumFractionDigits: Math.abs(mm) < 10 ? 1 : 0})
+  return t(` · acumulado ${amount(soFarMm)} mm de ${amount(totalMm)} mm`, ` · ${amount(soFarMm)} mm of ${amount(totalMm)} mm so far`)
 }
 
 /** Identity colours of the water-budget parts (validated as a categorical set on the panel surface: CVD ΔE ≥ 9,
@@ -590,6 +654,9 @@ export interface FloodMapAnimation {
   flowArrows: FlowArrowCollection | null
   /** Gross rain (mm/h) at the simulated time shown; 0 when it does not rain, null when the run has no hyetograph. */
   rainMmH: number | null
+  /** Gross rain (mm) fallen up to the simulated time shown and in the whole storm; null when unknown. */
+  rainSoFarMm: number | null
+  rainTotalMm: number | null
   showRain: boolean
   /** Frames of a run still in progress (shown before the results exist); the newest one is the frame shown. */
   live?: boolean

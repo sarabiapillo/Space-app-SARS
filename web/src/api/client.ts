@@ -488,6 +488,7 @@ export interface FloodRunProgress {
   simulated_s: number; duration_s: number; fraction: number; source: 'mass' | 'frames' | null
   frames_available: number; latest_frame_index: number | null; latest_frame_time_s: number | null
   latest_frame_url: string | null; rain_mm_h: number | null
+  rain_accumulated_mm?: number | null; rain_total_mm?: number | null
 }
 /** Water budget of a run (m³): gross rain, infiltrated (gross − net), net rain the solver received, water at the
  * start and at the end, the last frame's sheets (< ponded_min_depth_m) and ponded water, and the boundaries. */

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { FloodRoiResult } from '../../api/client'
 import {
   animationAvailable, animationFrames, flowArrowFeatures, playbackFadeMs, playbackIntervalMs, playbackStep, preloadFramePreviews,
-  rainIntensityAt, type AnimationFrame, type FloodMapAnimation, type PlaybackState,
+  rainAccumulatedAt, rainIntensityAt, type AnimationFrame, type FloodMapAnimation, type PlaybackState,
 } from '../../utils/floodDg2'
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
@@ -92,15 +92,18 @@ export function useFloodPlayback({ runId, result, preview }: Options) {
   const current = active && frames ? frames[Math.min(state.index, frames.length - 1)] : null
   const segments = result?.rainfall_gross_segments ?? result?.rainfall_segments
   const rainMmH = current ? rainIntensityAt(segments, current.scheduledTimeS ?? 0) : null
+  // Gross rain fallen up to the frame shown and in the whole storm (null without a hyetograph).
+  const fallen = current ? rainAccumulatedAt(segments, current.scheduledTimeS ?? 0) : null
+  const rainSoFarMm = fallen?.mm ?? null, rainTotalMm = fallen?.totalMm ?? null
   const fadeMs = playbackFadeMs(speed, reducedMotion)
 
   // What the map draws (null while the animation is off): every frame once, the one shown, its arrows and the rain.
   const animation = useMemo<FloodMapAnimation | null>(() => (!current || !frames || !result ? null
-    : { frames, index: frames.indexOf(current), fadeMs, flowArrows: flowArrowFeatures(result, current.frameIndex), rainMmH, showRain }),
-  [current, frames, result, fadeMs, rainMmH, showRain])
+    : { frames, index: frames.indexOf(current), fadeMs, flowArrows: flowArrowFeatures(result, current.frameIndex), rainMmH, rainSoFarMm, rainTotalMm, showRain }),
+  [current, frames, result, fadeMs, rainMmH, rainSoFarMm, rainTotalMm, showRain])
 
   return {
-    animation, available, status, progress, total: artifacts.length, frames, current, active, error, speed, showRain, reducedMotion, rainMmH,
+    animation, available, status, progress, total: artifacts.length, frames, current, active, error, speed, showRain, reducedMotion, rainMmH, rainSoFarMm, rainTotalMm,
     index: state.index, playing: active && state.playing, loop: state.loop,
     /** Starts (preloading the first time) from the frame at `startAt`, or resumes. */
     play: (startAt = state.index) => { if (frames) { setActive(true); setState(s => ({ ...s, index: s.index >= frames.length - 1 && !s.loop ? 0 : s.index, playing: true })) } else void load(startAt) },

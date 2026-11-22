@@ -416,6 +416,10 @@ export function MapCanvas({
   // Live frames of a run in progress are shown before any result exists for the ROI (the panel scopes them to it).
   const floodAnimating = Boolean(floodAnimation && (hasCurrentFloodResult || floodAnimation.live))
   const floodAnimationLayers = useRef<{ layers: Array<{ id: string; url: string }>; shown: number | null; opacity: number; visible: boolean } | null>(null)
+  // Corners of the animated domain projected on the map (px), keyed by its bounds: the rain is drawn inside them.
+  const floodAnimationBoundsKey = floodAnimating ? floodAnimation!.frames[floodAnimation!.index]?.bounds.join(',') ?? '' : ''
+  const [floodRainArea, setFloodRainArea] = useState<{ key: string; points: Array<[number, number]> } | null>(null)
+  const floodRainPoints = floodRainArea && floodRainArea.key === floodAnimationBoundsKey ? floodRainArea.points : null
   const [sceneManifestT1, setSceneManifestT1] = useState<ExploreWebManifest | null>(null)
   const [sceneManifestT2, setSceneManifestT2] = useState<ExploreWebManifest | null>(null)
 
@@ -1300,6 +1304,22 @@ export function MapCanvas({
     update()
     return () => { map.off('move', update); map.off('resize', update) }
   }, [croppedRegion, mapReady])
+
+  // Rain over the animated domain: project its corners (with bearing and pitch) on every move so the tint and the drops
+  // follow the domain on screen.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady || !floodAnimationBoundsKey) return
+    const [w, s, e, n] = floodAnimationBoundsKey.split(',').map(Number)
+    const update = () => setFloodRainArea({ key: floodAnimationBoundsKey, points: ([[w, n], [e, n], [e, s], [w, s]] as Array<[number, number]>).map((corner) => {
+      const projected = map.project(corner)
+      return [projected.x, projected.y]
+    }) })
+    map.on('move', update)
+    map.on('resize', update)
+    update()
+    return () => { map.off('move', update); map.off('resize', update) }
+  }, [floodAnimationBoundsKey, mapReady])
 
   // Sincronizar fuente GeoJSON `crop-mask-source`
   useEffect(() => {
@@ -2827,9 +2847,10 @@ export function MapCanvas({
           </div>
         )}
 
-        {/* Lluvia animada (o insignia estática con movimiento reducido) mientras la animación DG2 muestra un instante con lluvia */}
+        {/* Lluvia sobre el dominio (tinte, gotas y insignia con lo acumulado; sin gotas con movimiento reducido) mientras la animación DG2 muestra un instante con lluvia */}
         {floodAnimating && floodAnimation!.showRain && activeFlood.showRasterOnMap !== false && !activeFlood.compareMode && activeDockWindow?.kind !== 'sismo' && (
-          <RainOverlay mmPerHour={floodAnimation!.rainMmH} />
+          <RainOverlay mmPerHour={floodAnimation!.rainMmH} soFarMm={floodAnimation!.rainSoFarMm} totalMm={floodAnimation!.rainTotalMm}
+            area={floodRainPoints} mapSize={[viewport.width, viewport.height]} />
         )}
 
         {/* Leyenda de profundidad DG2: las mismas clases que el PNG de vista previa */}

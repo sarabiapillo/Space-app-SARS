@@ -63,18 +63,20 @@ def test_mass_balance_adds_back_rain_missing_from_swe_verror(tmp_path):
 
 
 def test_frames_count_cells_per_depth_class_for_charts(tmp_path):
-    # A 2-10 mm class shows the runoff sheets during the rain and a 1-3 cm class the thin sheets of water:
-    # [0.002, 0.01), [0.01, 0.03), [0.03, 0.15), ... and >= 2 m.
+    # A 0.5-2 mm "wet surface" class shows that it rained on the whole area, a 2-10 mm class the runoff sheets during
+    # the rain and a 1-3 cm class the thin sheets of water: [0.0005, 0.002), [0.002, 0.01), [0.01, 0.03), ... >= 2 m.
     ascii_grid(tmp_path / 'a-0000.wd', '0 .1\n.6 2.5\n')
     ascii_grid(tmp_path / 'a.max', '.02 .15\n1 2\n')
     result = summarize_results(tmp_path, save_interval_s=1)
-    assert result['depth_classes_m'] == [.002, .01, .03, .15, .5, 1, 2]
-    assert result['frames'][0]['stats']['depth_class_cells'] == [0, 0, 1, 0, 1, 0, 1]
-    assert result['maximum']['stats']['depth_class_cells'] == [0, 1, 0, 1, 0, 1, 1]
+    assert result['depth_classes_m'] == [.0005, .002, .01, .03, .15, .5, 1, 2]
+    assert result['frames'][0]['stats']['depth_class_cells'] == [0, 0, 0, 1, 0, 1, 0, 1]
+    assert result['maximum']['stats']['depth_class_cells'] == [0, 0, 1, 0, 1, 0, 1, 1]
     ascii_grid(tmp_path / 'a-0000.wd', '.009 .01\n.0299 .03\n')  # bounds are inclusive below, exclusive above
-    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [1, 2, 1, 0, 0, 0, 0]
-    ascii_grid(tmp_path / 'a-0000.wd', '.0019 .002\n.005 0\n')  # a sheet of 2 mm or more is counted, thinner is not
-    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [2, 0, 0, 0, 0, 0, 0]
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [0, 1, 2, 1, 0, 0, 0, 0]
+    ascii_grid(tmp_path / 'a-0000.wd', '.0019 .002\n.005 0\n')  # 1.9 mm is a wet surface, 2 mm a runoff sheet
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [1, 2, 0, 0, 0, 0, 0, 0]
+    ascii_grid(tmp_path / 'a-0000.wd', '.0004 .0005\n.001 0\n')  # a film of 0.5 mm or more is wet, thinner is not
+    assert summarize_results(tmp_path, save_interval_s=1)['frames'][0]['stats']['depth_class_cells'] == [2, 0, 0, 0, 0, 0, 0, 0]
 
 
 def test_frames_split_their_water_into_sheets_and_ponded_volume(tmp_path):
