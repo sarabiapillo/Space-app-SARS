@@ -1,0 +1,21 @@
+# Solar image is built from source and locks only. Never send local datasets or secrets to Docker.
+**
+!backend/
+!backend/**
+!pipeline/
+!pipeline/**
+!infra/
+!infra/solar/
+!infra/solar/**
+# Exclude generated Python files, even inside the allowlisted trees.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.env
+**/.env.*
+**/.netrc
+**/*.pem
+**/*.key
+**/*.sqlite3
+**/data/
+**/media/
